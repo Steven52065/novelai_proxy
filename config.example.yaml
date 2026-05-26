@@ -1,35 +1,98 @@
+# NovelAI Proxy 配置模板。
+# 使用方式：复制为 config.yaml，并填写真实 NovelAI API Key、管理后台密码等本地配置。
+# 注意：config.yaml 已被 .gitignore 忽略，不要把真实密钥、密码或运行数据库提交到 Git。
+
+# 管理后台登录配置。
+# 管理后台地址通常是 http://127.0.0.1:8080/admin 。
 admin:
+  # 管理后台用户名。
   username: admin
+  # 管理后台密码。生产或公网环境必须修改为强密码。
   password: change-me
+
+# FastAPI 服务监听配置。
 server:
+  # 监听地址。
+  # 0.0.0.0 表示监听所有网卡，局域网或反向代理可访问。
+  # 如果只允许本机访问，可改为 127.0.0.1。
   host: 0.0.0.0
+  # 监听端口。
   port: 8080
+
+# 上游 NovelAI 请求队列配置。
+# 项目会把用户请求先放入本地队列，再串行或限量转发到 NovelAI 上游，
+# 用于避免多个用户同时打到同一个上游账号。
 queue:
+  # 预留配置项：上游并发数。
+  # 当前队列 worker 仍按单 worker 处理；如后续扩展多 worker，可用此项控制并发。
   max_concurrent_upstream: 1
+  # 本地等待队列最大长度。超过后新请求会返回 503。
   max_queue_size: 50
+
+# NovelAI 上游账号配置。
 novelai:
+  # NovelAI API Key。必须只写在本地 config.yaml 中，不要提交。
   api_key: ""
+  # NovelAI 账号等级，用于估算图片生成 anlas 成本。
+  # 3 通常表示 Opus；其他等级按 NovelAI SDK 的成本计算逻辑处理。
   account_tier: 3
+  # upscale 接口的固定 anlas 成本。
+  # NovelAI SDK 当前无法像普通生图一样自动估算 upscale 成本时，可用此值控制扣费。
   upscale_anlas_cost: 0
+
+# SQLite 数据库配置。
 database:
+  # 运行数据库路径。默认会在项目根目录生成 novelai_proxy.db。
+  # 该文件以及对应的 .db-shm / .db-wal 已被忽略，不要提交。
   path: novelai_proxy.db
+
+# 兼容旧配置的日志级别字段。
+# 如果没有配置下面的 logging.level，程序会使用该值初始化日志级别。
+# 建议新配置优先使用 logging.level。
 log_level: INFO
+
+# 应用日志和调试归档配置。
 logging:
+  # 日志级别，可选 DEBUG、INFO、ERROR。
+  # DEBUG 会记录完整请求参数，便于排查问题；生产环境可使用 INFO。
   level: INFO
+  # 日志和生成图片归档的根目录。默认 logs/ 已被 .gitignore 忽略。
   directory: logs
+  # 应用文本日志文件名，最终路径为 logs/novelai_proxy.log。
   request_log_file: novelai_proxy.log
+  # 是否把成功生成接口返回的 zip 内容解包保存到本地，便于 debug。
   save_generated_images: true
+  # 生成图片归档目录名，最终路径为 logs/generated_images/{request_id}/。
   generated_images_dir: generated_images
+
+# 浏览器跨域 CORS 配置。
+# 当前项目主要使用 Authorization: Bearer <proxy_api_key> 鉴权；
+# 这种模式通常可以使用 allow_origins: ["*"] 且 allow_credentials: false。
 cors:
+  # 是否启用 CORS 响应头和 OPTIONS 预检处理。
   enabled: true
+  # 允许访问代理 API 的网页来源。
+  # 开发时可以使用 "*"；生产环境建议改成明确域名，例如：
+  # - "https://your-web.example.com"
+  # - "http://localhost:3000"
   allow_origins:
     - "*"
+  # 可选：用正则匹配允许的来源。
+  # 为空表示不使用正则；如果配置正则，仍可同时保留 allow_origins。
   allow_origin_regex:
+  # 允许的 HTTP 方法。"*" 表示允许常见方法。
   allow_methods:
     - "*"
+  # 允许的请求头。
+  # 前端带 Authorization 和 Content-Type 时需要允许这些头；"*" 表示全部允许。
   allow_headers:
     - "*"
+  # 允许浏览器 JavaScript 读取的响应头。
+  # Content-Disposition 用于前端读取 zip 下载文件名。
   expose_headers:
     - Content-Disposition
+  # 是否允许浏览器携带 cookie、HTTP Basic 等凭证。
+  # 如果改为 true，allow_origins 不能使用 "*"，必须写明确来源。
   allow_credentials: false
+  # CORS 预检请求缓存时间，单位秒。
   max_age: 600

@@ -19,7 +19,7 @@ from .admin.routes import router as admin_router
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .database import Database
-from .logging_utils import configure_logging
+from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .proxy.routes import router as proxy_router
 from .queue_manager import ProxyQueue
 from .quota_manager import QuotaManager
@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)
 app.add_middleware(ConfigurableCORSMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 static_dir = repo_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -67,12 +68,12 @@ app.include_router(admin_router)
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    del request
+    logger.warning("http exception path=%s status=%s detail=%s", request.url.path, exc.status_code, exc.detail)
     content = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
     return JSONResponse(status_code=exc.status_code, content=content, headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    del request
+    logger.error("request validation failed path=%s errors=%s", request.url.path, json_dumps(exc.errors()))
     return JSONResponse(status_code=400, content={"message": "Invalid request", "details": exc.errors()})

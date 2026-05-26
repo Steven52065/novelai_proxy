@@ -83,7 +83,8 @@ cors:
 
 
 def test_health_admin_create_user_and_subscription(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
     try:
         from app.main import app
 
@@ -104,6 +105,10 @@ def test_health_admin_create_user_and_subscription(tmp_path: Path, monkeypatch):
             body = sub_resp.json()
             assert body["proxyQuota"]["total"] == 100
             assert body["proxyQuota"]["available"] == 100
+
+        log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
+        assert "http request completed method=GET path=/health status=200" in log_text
+        assert "http request details method=GET path=/health" in log_text
     finally:
         monkeypatch.delenv("NOVELAI_PROXY_CONFIG", raising=False)
 
@@ -116,6 +121,30 @@ def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
         resp = client.post("/ai/generate-image", json=PAYLOAD)
         assert resp.status_code == 401
         assert resp.json()["message"] == "Invalid or missing API Key"
+
+
+def test_validation_error_is_logged(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "invalid-payload", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post(
+            "/ai/generate-image",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"bad": "payload"},
+        )
+
+        assert resp.status_code == 400
+
+    log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
+    assert "request validation failed path=/ai/generate-image" in log_text
 
 
 def test_cors_preflight_uses_configured_origin(tmp_path: Path, monkeypatch):
