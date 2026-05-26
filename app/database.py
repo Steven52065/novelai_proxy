@@ -106,3 +106,7 @@ class Database:
     def query_all(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
             return self.conn.execute(sql, params).fetchall()
+
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()

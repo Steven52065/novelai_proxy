@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await proxy_queue.stop()
+        db.close()
 
 
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)
