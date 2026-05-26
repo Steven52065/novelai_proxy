@@ -13,6 +13,7 @@ from novelai_python.sdk.ai.upscale import Upscale
 
 from ..auth import UserContext, get_current_user
 from ..database import Database, utc_now_iso
+from ..logging_utils import dump_model_payload, json_dumps, logger
 from ..queue_manager import ProxyQueue, QueueFull
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
@@ -45,6 +46,7 @@ async def generate_image(
         user=user,
         action=str(req.action),
         metadata=_generate_metadata(req),
+        request_payload=dump_model_payload(req),
         estimated_cost=estimated_cost,
         handler=lambda: request.app.state.upstream.generate_image_zip(req),
     )
@@ -67,6 +69,7 @@ async def upscale(
             "steps": None,
             "n_samples": 1,
         },
+        request_payload=dump_model_payload(req),
         estimated_cost=request.app.state.config.novelai.upscale_anlas_cost,
         handler=lambda: request.app.state.upstream.upscale_zip(req),
     )
@@ -94,6 +97,7 @@ async def augment_image(
             "steps": 28,
             "n_samples": 1,
         },
+        request_payload=dump_model_payload(req),
         estimated_cost=estimated_cost,
         handler=lambda: request.app.state.upstream.augment_image_zip(req),
     )
@@ -105,6 +109,7 @@ async def _submit_zip_task(
     user: UserContext,
     action: str,
     metadata: dict[str, Any],
+    request_payload: dict[str, Any],
     estimated_cost: int,
     handler: Callable[[], Awaitable[bytes]],
 ):
@@ -113,10 +118,30 @@ async def _submit_zip_task(
     quota_manager: QuotaManager = request.app.state.quota_manager
     proxy_queue: ProxyQueue = request.app.state.proxy_queue
     request_id = uuid.uuid4().hex
+    logger.debug(
+        "proxy request received request_id=%s user_id=%s action=%s payload=%s",
+        request_id,
+        user.id,
+        action,
+        json_dumps(request_payload),
+    )
 
     rate = rate_limiter.check(user.id)
     if not rate.allowed:
-        _insert_usage_log(db, request_id, user.id, action, metadata, 0, "rejected", "rate_limited", rate.message)
+        _insert_usage_log(
+            db,
+            request_id,
+            user.id,
+            action,
+            metadata,
+            request_payload,
+            0,
+            "rejected",
+            "rate_limited",
+            rate.message,
+            "INFO",
+        )
+        logger.info("proxy request rate limited request_id=%s user_id=%s", request_id, user.id)
         return JSONResponse(
             status_code=429,
             content={"message": rate.message, "retry_after": rate.retry_after},
@@ -130,11 +155,14 @@ async def _submit_zip_task(
             user.id,
             action,
             metadata,
+            request_payload,
             estimated_cost,
             "rejected",
             "unsupported_cost",
             "Request exceeds supported cost bounds",
+            "ERROR",
         )
+        logger.error("proxy request has unsupported cost request_id=%s estimated_cost=%s", request_id, estimated_cost)
         return JSONResponse(status_code=400, content={"message": "Request exceeds supported cost bounds"})
 
     try:
@@ -146,23 +174,41 @@ async def _submit_zip_task(
             user.id,
             action,
             metadata,
+            request_payload,
             estimated_cost,
             "rejected",
             "insufficient_anlas",
             str(exc),
+            "INFO",
         )
+        logger.info("proxy request rejected for quota request_id=%s user_id=%s need=%s have=%s", request_id, user.id, exc.need, exc.have)
         return JSONResponse(
             status_code=402,
             content={"message": str(exc), "need": exc.need, "have": exc.have},
         )
 
-    _insert_usage_log(db, request_id, user.id, action, metadata, estimated_cost, "queued", None, None)
+    _insert_usage_log(
+        db,
+        request_id,
+        user.id,
+        action,
+        metadata,
+        request_payload,
+        estimated_cost,
+        "queued",
+        None,
+        None,
+        "INFO",
+    )
+    logger.info("proxy request queued request_id=%s user_id=%s action=%s estimated_cost=%s", request_id, user.id, action, estimated_cost)
 
     try:
         zip_payload = await proxy_queue.submit(
             request_id=request_id,
             user_id=user.id,
             tier=user.tier,
+            action=action,
+            logging_config=request.app.state.config.logging,
             estimated_cost=estimated_cost,
             handler=handler,
         )
@@ -174,19 +220,23 @@ async def _submit_zip_task(
             SET status = 'rejected',
                 error_code = 'queue_full',
                 error_message = 'Queue full, please retry later',
+                log_level = 'ERROR',
                 completed_at = ?
             WHERE request_id = ?
             """,
             (utc_now_iso(), request_id),
         )
+        logger.error("proxy queue full request_id=%s user_id=%s", request_id, user.id)
         return JSONResponse(status_code=503, content={"message": "Queue full, please retry later"})
     except APIError as exc:
         status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
+        logger.error("upstream API error request_id=%s code=%s message=%s", request_id, exc.code, exc.message)
         return JSONResponse(
             status_code=status_code,
             content=exc.response if isinstance(exc.response, dict) else {"message": exc.message},
         )
     except Exception as exc:
+        logger.exception("proxy request failed request_id=%s", request_id)
         return JSONResponse(status_code=502, content={"message": str(exc)})
 
     return Response(
@@ -269,18 +319,20 @@ def _insert_usage_log(
     user_id: int,
     action: str,
     metadata: dict[str, Any],
+    request_payload: dict[str, Any],
     estimated_cost: int,
     status: str,
     error_code: str | None,
     error_message: str | None,
+    log_level: str,
 ) -> None:
     db.execute(
         """
         INSERT INTO usage_logs (
             request_id, user_id, action, model, width, height, steps, n_samples,
-            estimated_anlas_cost, status, error_code, error_message, created_at
+            estimated_anlas_cost, status, error_code, error_message, log_level, request_payload, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             request_id,
@@ -295,6 +347,8 @@ def _insert_usage_log(
             status,
             error_code,
             error_message,
+            log_level,
+            json_dumps(request_payload),
             utc_now_iso(),
         ),
     )

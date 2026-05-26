@@ -32,13 +32,27 @@ class DatabaseConfig(BaseModel):
     path: str = "novelai_proxy.db"
 
 
+class LoggingConfig(BaseModel):
+    level: Literal["DEBUG", "INFO", "ERROR"] = "INFO"
+    directory: str = "logs"
+    request_log_file: str = "novelai_proxy.log"
+    save_generated_images: bool = True
+    generated_images_dir: str = "generated_images"
+
+
 class AppConfig(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
     novelai: NovelAIConfig = Field(default_factory=NovelAIConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    def model_post_init(self, __context) -> None:
+        if "log_level" in self.model_fields_set and "logging" not in self.model_fields_set:
+            if self.log_level in {"DEBUG", "INFO", "ERROR"}:
+                self.logging.level = self.log_level
 
 
 def load_config(path: str | Path = "config.yaml") -> AppConfig:

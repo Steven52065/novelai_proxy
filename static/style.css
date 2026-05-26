@@ -71,6 +71,38 @@ code {
   padding: 2px 4px;
   border-radius: 4px;
 }
+pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.level {
+  display: inline-block;
+  min-width: 56px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+.level-info { background: #dbeafe; color: #1e40af; }
+.level-debug { background: #e5e7eb; color: #374151; }
+.level-error { background: #fee2e2; color: #991b1b; }
+.log-detail-row td {
+  padding-top: 0;
+  background: #fafafa;
+}
+.file-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+.muted { color: #64748b; }
 .login-page { display: grid; min-height: 100vh; place-items: center; }
 .login-panel { width: min(420px, calc(100vw - 32px)); }
 .error { color: #b91c1c; margin: 0 0 14px; }

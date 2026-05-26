@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -198,7 +199,7 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100):
             """,
             (user_id, limit),
         )
-    return {"logs": [_row_to_dict(row) for row in rows]}
+    return {"logs": [_usage_log_to_dict(row) for row in rows]}
 
 
 @web_router.get("", response_class=HTMLResponse)
@@ -453,6 +454,32 @@ def _today_utc_prefix() -> str:
 
 def _row_to_dict(row):
     return {key: row[key] for key in row.keys()}
+
+
+def _usage_log_to_dict(row):
+    data = _row_to_dict(row)
+    data["request_payload"] = _json_or_none(data.get("request_payload"))
+    data["output_files"] = _json_or_empty_list(data.get("output_files"))
+    return data
+
+
+def _json_or_none(value):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _json_or_empty_list(value):
+    if not value:
+        return []
+    try:
+        loaded = json.loads(value)
+    except json.JSONDecodeError:
+        return [value]
+    return loaded if isinstance(loaded, list) else [loaded]
 
 
 router.include_router(api_router)

@@ -8,7 +8,9 @@ from typing import Awaitable, Callable
 
 from novelai_python._exceptions import APIError
 
+from .config import LoggingConfig
 from .database import Database, utc_now_iso
+from .logging_utils import archive_zip_images, json_dumps, logger
 from .quota_manager import QuotaManager
 
 
@@ -19,7 +21,9 @@ class QueueItem:
     enqueued_at: float = field(compare=False)
     request_id: str = field(compare=False)
     user_id: int = field(compare=False)
+    action: str = field(compare=False)
     estimated_cost: int = field(compare=False)
+    logging_config: LoggingConfig = field(compare=False)
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
 
@@ -59,6 +63,8 @@ class ProxyQueue:
         request_id: str,
         user_id: int,
         tier: str,
+        action: str,
+        logging_config: LoggingConfig,
         estimated_cost: int,
         handler: Callable[[], Awaitable[bytes]],
     ) -> bytes:
@@ -71,7 +77,9 @@ class ProxyQueue:
             enqueued_at=time.monotonic(),
             request_id=request_id,
             user_id=user_id,
+            action=action,
             estimated_cost=estimated_cost,
+            logging_config=logging_config,
             handler=handler,
             future=future,
         )
@@ -94,6 +102,7 @@ class ProxyQueue:
                     """,
                     (queued_ms, item.request_id),
                 )
+                logger.info("proxy request running request_id=%s queued_ms=%s", item.request_id, queued_ms)
                 payload = await item.handler()
             except Exception as exc:
                 self.quota_manager.release(item.user_id, item.estimated_cost)
@@ -105,14 +114,26 @@ class ProxyQueue:
                         queued_ms = COALESCE(queued_ms, ?),
                         error_code = ?,
                         error_message = ?,
+                        log_level = 'ERROR',
                         completed_at = ?
                     WHERE request_id = ?
                     """,
                     (queued_ms, code, message[:500], utc_now_iso(), item.request_id),
                 )
+                logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
                 if not item.future.done():
                     item.future.set_exception(exc)
             else:
+                try:
+                    saved_files = archive_zip_images(
+                        zip_payload=payload,
+                        request_id=item.request_id,
+                        action=item.action,
+                        config=item.logging_config,
+                    )
+                except Exception:
+                    logger.exception("failed to archive generated images request_id=%s", item.request_id)
+                    saved_files = []
                 self.quota_manager.confirm(item.user_id, item.estimated_cost)
                 self.db.execute(
                     """
@@ -120,10 +141,17 @@ class ProxyQueue:
                     SET status = 'success',
                         queued_ms = COALESCE(queued_ms, ?),
                         final_anlas_cost = ?,
+                        output_files = ?,
                         completed_at = ?
                     WHERE request_id = ?
                     """,
-                    (queued_ms, item.estimated_cost, utc_now_iso(), item.request_id),
+                    (queued_ms, item.estimated_cost, json_dumps(saved_files), utc_now_iso(), item.request_id),
+                )
+                logger.info(
+                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s",
+                    item.request_id,
+                    item.estimated_cost,
+                    len(saved_files),
                 )
                 if not item.future.done():
                     item.future.set_result(payload)

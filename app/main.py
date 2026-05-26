@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from .admin.routes import router as admin_router
 from .config import load_config
 from .database import Database
+from .logging_utils import configure_logging
 from .proxy.routes import router as proxy_router
 from .queue_manager import ProxyQueue
 from .quota_manager import QuotaManager
@@ -28,6 +29,7 @@ from .upstream import UpstreamClient
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config(environ.get("NOVELAI_PROXY_CONFIG", "config.yaml"))
+    configure_logging(config.logging)
     db = Database(config.database.path)
     db.init_schema()
     quota_manager = QuotaManager(db)

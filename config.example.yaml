@@ -14,3 +14,9 @@ novelai:
 database:
   path: novelai_proxy.db
 log_level: INFO
+logging:
+  level: INFO
+  directory: logs
+  request_log_file: novelai_proxy.log
+  save_generated_images: true
+  generated_images_dir: generated_images

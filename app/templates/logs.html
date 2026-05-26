@@ -14,12 +14,13 @@
   </form>
   <table>
     <thead>
-      <tr><th>ID</th><th>用户</th><th>动作</th><th>模型</th><th>尺寸</th><th>预估/实际</th><th>状态</th><th>时间</th></tr>
+      <tr><th>ID</th><th>级别</th><th>用户</th><th>动作</th><th>模型</th><th>尺寸</th><th>预估/实际</th><th>状态</th><th>时间</th></tr>
     </thead>
     <tbody>
       {% for log in logs %}
       <tr>
         <td>{{ log.request_id[:8] }}</td>
+        <td><span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span></td>
         <td>{{ log.user_name }}</td>
         <td>{{ log.action }}</td>
         <td>{{ log.model or "" }}</td>
@@ -27,6 +28,26 @@
         <td>{{ log.estimated_anlas_cost }}/{{ log.final_anlas_cost if log.final_anlas_cost is not none else "" }}</td>
         <td>{{ log.status }}</td>
         <td>{{ log.created_at }}</td>
+      </tr>
+      <tr class="log-detail-row">
+        <td colspan="9">
+          <details>
+            <summary>请求参数和输出文件</summary>
+            {% if log.error_message %}
+            <p class="error">{{ log.error_code }}：{{ log.error_message }}</p>
+            {% endif %}
+            <pre>{{ log.request_payload | tojson(indent=2) }}</pre>
+            {% if log.output_files %}
+            <ul class="file-list">
+              {% for path in log.output_files %}
+              <li><code>{{ path }}</code></li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted">无本地输出文件</p>
+            {% endif %}
+          </details>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

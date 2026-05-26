@@ -72,6 +72,9 @@ class Database:
                     status TEXT NOT NULL,
                     error_code TEXT,
                     error_message TEXT,
+                    log_level TEXT NOT NULL DEFAULT 'INFO',
+                    request_payload TEXT,
+                    output_files TEXT,
                     created_at TEXT NOT NULL,
                     completed_at TEXT
                 );
@@ -82,6 +85,9 @@ class Database:
                     ON usage_logs(status);
                 """
             )
+            self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
+            self._add_column_if_missing("usage_logs", "request_payload", "TEXT")
+            self._add_column_if_missing("usage_logs", "output_files", "TEXT")
 
     @contextmanager
     def transaction(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:
@@ -110,3 +116,8 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self.conn.close()
+
+    def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
+        existing = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in existing:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

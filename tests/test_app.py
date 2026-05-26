@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import os
+import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -27,7 +29,10 @@ PAYLOAD = {
 
 class FakeUpstream:
     async def generate_image_zip(self, req):
-        return b"fake-zip"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode="w") as zip_file:
+            zip_file.writestr("image.png", b"fake-image")
+        return buffer.getvalue()
 
     async def upscale_zip(self, req):
         return b"fake-upscale-zip"
@@ -58,6 +63,9 @@ novelai:
   account_tier: 3
 database:
   path: "{db_path.as_posix()}"
+logging:
+  level: DEBUG
+  directory: "{(tmp_path / "logs").as_posix()}"
 """,
         encoding="utf-8",
     )
@@ -125,6 +133,13 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert first.status_code == 201
         assert second.status_code == 429
         assert second.headers["retry-after"] == "60"
+
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert success_log["request_payload"]["input"] == "1girl"
+        assert success_log["request_payload"]["parameters"]["sampler"] == "k_euler_ancestral"
+        assert len(success_log["output_files"]) == 1
+        assert Path(success_log["output_files"][0]).read_bytes() == b"fake-image"
 
 
 def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeypatch):
