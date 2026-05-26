@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NovelAI Proxy Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/admin">NovelAI Proxy</a>
+    <nav>
+      <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/admin">仪表盘</a>
+      <a class="{{ 'active' if active == 'users' else '' }}" href="/admin/users">用户</a>
+      <a class="{{ 'active' if active == 'logs' else '' }}" href="/admin/logs">日志</a>
+    </nav>
+    <form method="post" action="/admin/logout">
+      <button class="link-button" type="submit">退出</button>
+    </form>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

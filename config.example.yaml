@@ -1,0 +1,16 @@
+admin:
+  username: admin
+  password: change-me
+server:
+  host: 0.0.0.0
+  port: 8080
+queue:
+  max_concurrent_upstream: 1
+  max_queue_size: 50
+novelai:
+  api_key: ""
+  account_tier: 3
+  upscale_anlas_cost: 0
+database:
+  path: novelai_proxy.db
+log_level: INFO

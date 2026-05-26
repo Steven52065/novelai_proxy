@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>仪表盘</h1>
+<section class="metrics">
+  <div><span>用户数</span><strong>{{ stats.total_users }}</strong></div>
+  <div><span>今日请求</span><strong>{{ stats.today_requests }}</strong></div>
+  <div><span>总 Anlas 消耗</span><strong>{{ stats.total_anlas }}</strong></div>
+  <div><span>队列长度</span><strong>{{ stats.queue_size }}</strong></div>
+</section>
+{% endblock %}

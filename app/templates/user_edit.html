@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>编辑用户 #{{ user.id }}</h1>
+  <a href="/admin/users">返回列表</a>
+</div>
+<section class="panel">
+  <form method="post" action="/admin/users/{{ user.id }}" class="form-grid">
+    <label>备注名<input name="name" value="{{ user.name }}" required></label>
+    <label>等级
+      <select name="tier">
+        <option value="normal" {{ "selected" if user.tier == "normal" else "" }}>normal</option>
+        <option value="vip" {{ "selected" if user.tier == "vip" else "" }}>vip</option>
+      </select>
+    </label>
+    <label class="check"><input name="is_active" type="checkbox" {{ "checked" if user.is_active else "" }}> 启用</label>
+    <label>Anlas 总额度<input name="anlas_total" type="number" min="0" value="{{ user.anlas_total or 0 }}"></label>
+    <label>重置周期
+      <select name="reset_period">
+        {% for period in ["month", "week", "day", "never"] %}
+        <option value="{{ period }}" {{ "selected" if user.reset_period == period else "" }}>{{ period }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>重置日<input name="reset_day" type="number" min="0" max="28" value="{{ user.reset_day or 0 }}"></label>
+    <button type="submit">保存</button>
+  </form>
+  <div class="actions">
+    <form method="post" action="/admin/users/{{ user.id }}/reset-quota"><button type="submit">重置额度</button></form>
+    <form method="post" action="/admin/users/{{ user.id }}/delete"><button class="danger" type="submit">删除用户</button></form>
+  </div>
+</section>
+<section class="panel">
+  <h2>限频规则</h2>
+  <form method="post" action="/admin/users/{{ user.id }}/rate-limit-rules" class="inline-form">
+    <select name="period">
+      <option value="minute">minute</option>
+      <option value="hour">hour</option>
+      <option value="day">day</option>
+      <option value="month">month</option>
+    </select>
+    <input name="max_requests" type="number" min="1" placeholder="次数上限" required>
+    <button type="submit">添加规则</button>
+  </form>
+  <table>
+    <thead><tr><th>ID</th><th>周期</th><th>上限</th><th>状态</th><th></th></tr></thead>
+    <tbody>
+      {% for rule in rules %}
+      <tr>
+        <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}">
+        <td>{{ rule.id }}<input type="hidden" name="user_id" value="{{ user.id }}"></td>
+        <td>
+          <select name="period">
+            {% for period in ["minute", "hour", "day", "month"] %}
+            <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td><input name="max_requests" type="number" min="1" value="{{ rule.max_requests }}"></td>
+        <td><label class="check"><input name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }}> 启用</label></td>
+        <td><button type="submit">保存</button></td>
+        </form>
+        <td>
+          <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}/delete">
+            <input type="hidden" name="user_id" value="{{ user.id }}">
+            <button type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

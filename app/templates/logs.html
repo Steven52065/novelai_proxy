@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>使用日志</h1>
+<section class="panel">
+  <form method="get" action="/admin/logs" class="inline-form">
+    <select name="user_id">
+      <option value="">全部用户</option>
+      {% for user in users %}
+      <option value="{{ user.id }}" {{ "selected" if selected_user_id == user.id else "" }}>{{ user.name }}</option>
+      {% endfor %}
+    </select>
+    <input name="limit" type="number" min="1" max="500" value="{{ limit }}">
+    <button type="submit">筛选</button>
+  </form>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>用户</th><th>动作</th><th>模型</th><th>尺寸</th><th>预估/实际</th><th>状态</th><th>时间</th></tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td>{{ log.request_id[:8] }}</td>
+        <td>{{ log.user_name }}</td>
+        <td>{{ log.action }}</td>
+        <td>{{ log.model or "" }}</td>
+        <td>{{ log.width or "" }}x{{ log.height or "" }}</td>
+        <td>{{ log.estimated_anlas_cost }}/{{ log.final_anlas_cost if log.final_anlas_cost is not none else "" }}</td>
+        <td>{{ log.status }}</td>
+        <td>{{ log.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

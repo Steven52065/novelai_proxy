@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>用户</h1>
+</div>
+{% if request.query_params.get('api_key') %}
+<section class="notice">
+  新 API Key：<code>{{ request.query_params.get('api_key') }}</code>
+</section>
+{% endif %}
+<section class="panel">
+  <h2>创建用户</h2>
+  <form method="post" action="/admin/users" class="form-grid">
+    <label>备注名<input name="name" required></label>
+    <label>等级
+      <select name="tier">
+        <option value="normal">normal</option>
+        <option value="vip">vip</option>
+      </select>
+    </label>
+    <label>Anlas 总额度<input name="anlas_total" type="number" min="0" value="0"></label>
+    <label>重置周期
+      <select name="reset_period">
+        <option value="month">month</option>
+        <option value="week">week</option>
+        <option value="day">day</option>
+        <option value="never">never</option>
+      </select>
+    </label>
+    <label>重置日<input name="reset_day" type="number" min="0" max="28"></label>
+    <button type="submit">创建</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>用户列表</h2>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>备注名</th><th>等级</th><th>状态</th><th>Anlas</th><th>重置</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr>
+        <td>{{ user.id }}</td>
+        <td>{{ user.name }}</td>
+        <td>{{ user.tier }}</td>
+        <td>{{ "启用" if user.is_active else "禁用" }}</td>
+        <td>{{ user.anlas_used }} + {{ user.anlas_reserved }} / {{ user.anlas_total }}</td>
+        <td>{{ user.reset_period }} {{ user.reset_day }}</td>
+        <td><a href="/admin/users/{{ user.id }}">编辑</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
