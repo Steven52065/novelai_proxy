@@ -10,9 +10,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, UnidentifiedImageError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .config import LoggingConfig
+from .config import ImageConversionConfig, LoggingConfig
 
 
 LOGGER_NAME = "novelai_proxy"
@@ -141,6 +142,63 @@ def archive_zip_images(
         saved_files.append(str(path))
 
     return saved_files
+
+
+def convert_zip_images(zip_payload: bytes, config: ImageConversionConfig) -> bytes:
+    if not config.enabled:
+        return zip_payload
+
+    try:
+        with zipfile.ZipFile(BytesIO(zip_payload)) as source_zip:
+            output = BytesIO()
+            with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for member in source_zip.infolist():
+                    data = source_zip.read(member)
+                    if member.is_dir():
+                        target_zip.writestr(member, data)
+                        continue
+                    converted = _convert_image_bytes(data, config)
+                    if converted is None:
+                        target_zip.writestr(member, data)
+                        continue
+                    target_zip.writestr(_converted_filename(member.filename, config.format), converted)
+            return output.getvalue()
+    except zipfile.BadZipFile:
+        converted = _convert_image_bytes(zip_payload, config)
+        return converted if converted is not None else zip_payload
+
+
+def _convert_image_bytes(data: bytes, config: ImageConversionConfig) -> bytes | None:
+    try:
+        with Image.open(BytesIO(data)) as image:
+            output = BytesIO()
+            save_kwargs: dict[str, Any] = {"quality": config.quality, "optimize": True}
+            if config.format == "jpeg":
+                converted_image = _flatten_for_jpeg(image)
+                converted_image.save(output, format="JPEG", **save_kwargs)
+            else:
+                converted_image = image.copy()
+                converted_image.save(output, format="WEBP", **save_kwargs)
+            return output.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+
+
+def _flatten_for_jpeg(image: Image.Image) -> Image.Image:
+    if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    return image.convert("RGB")
+
+
+def _converted_filename(filename: str, target_format: str) -> str:
+    suffix = ".jpg" if target_format == "jpeg" else ".webp"
+    path = Path(filename)
+    stem = path.name[: -len(path.suffix)] if path.suffix else path.name
+    converted_name = f"{stem}{suffix}"
+    return str(path.with_name(converted_name)).replace("\\", "/")
 
 
 def _safe_suffix(filename: str) -> str:

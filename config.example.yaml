@@ -65,6 +65,18 @@ logging:
   # 生成图片归档目录名，最终路径为 logs/generated_images/{request_id}/。
   generated_images_dir: generated_images
 
+# 上游图片响应格式转换配置。
+# 默认关闭，关闭时会原样返回 NovelAI 上游 zip。
+# 开启后会把 zip 内可识别的图片转换为 jpeg 或 webp，再返回给调用方并用于本地归档，
+# 可减少带宽和存储占用；非图片文件会原样保留。
+image_conversion:
+  # 是否启用图片格式转换。
+  enabled: false
+  # 目标格式，可选 jpeg、webp。
+  format: webp
+  # 输出质量，1-100。数值越高体积通常越大。
+  quality: 85
+
 # 浏览器跨域 CORS 配置。
 # 当前项目主要使用 Authorization: Bearer <proxy_api_key> 鉴权；
 # 这种模式通常可以使用 allow_origins: ["*"] 且 allow_credentials: false。

@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 
 PAYLOAD = {
@@ -44,6 +45,52 @@ class FakeUpstream:
         return {"tags": []}
 
 
+class FakeImageUpstream:
+    async def generate_image_zip(self, req):
+        image_buffer = io.BytesIO()
+        Image.new("RGBA", (8, 8), (255, 0, 0, 128)).save(image_buffer, format="PNG")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode="w") as zip_file:
+            zip_file.writestr("image.png", image_buffer.getvalue())
+            zip_file.writestr("metadata.txt", b"keep-me")
+        return buffer.getvalue()
+
+
+class FakeQueueSnapshot:
+    def qsize(self):
+        return 1
+
+    def snapshot(self):
+        return {
+            "queue_size": 1,
+            "running": {
+                "request_id": "running-request",
+                "user_id": 1,
+                "action": "generate",
+                "tier": "normal",
+                "estimated_anlas_cost": 0,
+                "priority": 10,
+                "position": 0,
+                "status": "running",
+                "queued_seconds": 3,
+                "running_seconds": 1,
+            },
+            "queued": [
+                {
+                    "request_id": "queued-request",
+                    "user_id": 1,
+                    "action": "generate",
+                    "tier": "vip",
+                    "estimated_anlas_cost": 5,
+                    "priority": 0,
+                    "position": 1,
+                    "status": "queued",
+                    "queued_seconds": 8,
+                }
+            ],
+        }
+
+
 def write_test_config(tmp_path: Path) -> Path:
     db_path = tmp_path / "test.db"
     config_path = tmp_path / "config.yaml"
@@ -79,6 +126,20 @@ cors:
 """,
         encoding="utf-8",
     )
+    return config_path
+
+
+def write_test_config_with_image_conversion(tmp_path: Path, image_format: str = "webp") -> Path:
+    config_path = write_test_config(tmp_path)
+    with config_path.open("a", encoding="utf-8") as f:
+        f.write(
+            f"""
+image_conversion:
+  enabled: true
+  format: {image_format}
+  quality: 80
+"""
+        )
     return config_path
 
 
@@ -144,7 +205,35 @@ def test_validation_error_is_logged(tmp_path: Path, monkeypatch):
         assert resp.status_code == 400
 
     log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
-    assert "request validation failed path=/ai/generate-image" in log_text
+    assert "generate-image payload validation failed after normalization" in log_text
+
+
+def test_generate_normalizes_official_payload_variants(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    payload = PAYLOAD | {
+        "parameters": PAYLOAD["parameters"] | {
+            "skip_cfg_above_sigma": 59.04722600415217,
+            "seed": 6816488388,
+        }
+    }
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "official-payload", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 201
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert success_log["request_payload"]["parameters"]["skip_cfg_above_sigma"] == 60
+        assert 0 < success_log["request_payload"]["parameters"]["seed"] <= 4294967288
 
 
 def test_cors_preflight_uses_configured_origin(tmp_path: Path, monkeypatch):
@@ -198,6 +287,32 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert success_log["request_payload"]["parameters"]["sampler"] == "k_euler_ancestral"
         assert len(success_log["output_files"]) == 1
         assert Path(success_log["output_files"][0]).read_bytes() == b"fake-image"
+
+
+def test_generate_can_convert_response_images_to_webp(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_image_conversion(tmp_path, "webp")))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeImageUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "webp-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 201
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zip_file:
+            assert "image.webp" in zip_file.namelist()
+            assert "metadata.txt" in zip_file.namelist()
+            with Image.open(io.BytesIO(zip_file.read("image.webp"))) as image:
+                assert image.format == "WEBP"
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert success_log["output_files"][0].endswith(".webp")
 
 
 def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeypatch):
@@ -266,3 +381,48 @@ def test_admin_login_page(tmp_path: Path, monkeypatch):
         dashboard = client.get("/admin")
         assert dashboard.status_code == 200
         assert "仪表盘" in dashboard.text
+
+
+def test_admin_queue_status_includes_live_items(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "queue-user", "tier": "vip", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        app.state.proxy_queue = FakeQueueSnapshot()
+        now = "2026-05-27T00:00:00+00:00"
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, status, log_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("running-request", user_id, "generate", "nai-diffusion-3", 512, 768, 1, 1, 0, "running", "INFO", now),
+        )
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, status, log_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("queued-request", user_id, "generate", "nai-diffusion-3", 1024, 1024, 28, 1, 5, "queued", "INFO", now),
+        )
+
+        resp = client.get("/admin/api/queue", auth=("admin", "admin123"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["queue_size"] == 1
+        assert body["running"]["user_name"] == "queue-user"
+        assert body["running"]["width"] == 512
+        assert body["queued"][0]["position"] == 1
+        assert body["queued"][0]["estimated_anlas_cost"] == 5

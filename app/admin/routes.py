@@ -19,6 +19,7 @@ router = APIRouter(tags=["admin"])
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin")
 security = HTTPBasic()
+optional_security = HTTPBasic(auto_error=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 SESSION_COOKIE = "novelai_proxy_admin"
 
@@ -52,6 +53,17 @@ def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(
     valid_password = constant_time_equal(credentials.password, config.admin.password)
     if not (valid_user and valid_password):
         raise HTTPException(status_code=401, detail={"message": "Invalid admin credentials"})
+
+
+def require_admin_or_session(
+    request: Request,
+    credentials: HTTPBasicCredentials | None = Depends(optional_security),
+) -> None:
+    if _has_admin_session(request):
+        return
+    if credentials is None:
+        raise HTTPException(status_code=401, detail={"message": "Invalid admin credentials"})
+    require_admin(request, credentials)
 
 
 @api_router.get("/users", dependencies=[Depends(require_admin)])
@@ -202,6 +214,25 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100):
     return {"logs": [_usage_log_to_dict(row) for row in rows]}
 
 
+@api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
+async def queue_status(request: Request):
+    return _queue_status_payload(request)
+
+
+def _queue_status_payload(request: Request):
+    db: Database = request.app.state.db
+    snapshot = request.app.state.proxy_queue.snapshot()
+    request_ids = [
+        item["request_id"]
+        for item in ([snapshot["running"]] if snapshot["running"] else []) + snapshot["queued"]
+    ]
+    log_details = _queue_log_details(db, request_ids)
+    if snapshot["running"]:
+        snapshot["running"] = _merge_queue_log_details(snapshot["running"], log_details)
+    snapshot["queued"] = [_merge_queue_log_details(item, log_details) for item in snapshot["queued"]]
+    return snapshot
+
+
 @web_router.get("", response_class=HTMLResponse)
 async def dashboard_alias(request: Request):
     return await dashboard(request)
@@ -227,6 +258,7 @@ async def dashboard(request: Request):
                 "total_anlas": total_anlas,
                 "queue_size": request.app.state.proxy_queue.qsize(),
             },
+            "queue": _queue_status_payload(request),
         },
     )
 
@@ -461,6 +493,29 @@ def _usage_log_to_dict(row):
     data["request_payload"] = _json_or_none(data.get("request_payload"))
     data["output_files"] = _json_or_empty_list(data.get("output_files"))
     return data
+
+
+def _queue_log_details(db: Database, request_ids: list[str]) -> dict[str, dict]:
+    if not request_ids:
+        return {}
+    placeholders = ",".join("?" for _ in request_ids)
+    rows = db.query_all(
+        f"""
+        SELECT l.request_id, l.model, l.width, l.height, l.steps, l.n_samples,
+               l.created_at, u.name AS user_name
+        FROM usage_logs l
+        JOIN users u ON u.id = l.user_id
+        WHERE l.request_id IN ({placeholders})
+        """,
+        tuple(request_ids),
+    )
+    return {row["request_id"]: _row_to_dict(row) for row in rows}
+
+
+def _merge_queue_log_details(item: dict, details: dict[str, dict]) -> dict:
+    merged = dict(item)
+    merged.update(details.get(item["request_id"], {}))
+    return merged
 
 
 def _json_or_none(value):

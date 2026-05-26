@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -32,13 +33,20 @@ async def health(request: Request):
 
 @router.post("/ai/generate-image")
 async def generate_image(
-    req: GenerateImageInfer,
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
+    payload = await request.json()
+    normalized_payload = _normalize_generate_image_payload(payload)
+    try:
+        req = GenerateImageInfer.model_validate(normalized_payload)
+    except Exception as exc:
+        logger.error("generate-image payload validation failed after normalization errors=%s", str(exc))
+        return JSONResponse(status_code=400, content={"message": "Invalid request", "details": str(exc)})
+
     try:
         estimated_cost = int(req.calculate_cost(is_opus=request.app.state.config.novelai.account_tier >= 3))
-    except Exception as exc:
+    except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 
     return await _submit_zip_task(
@@ -209,6 +217,7 @@ async def _submit_zip_task(
             tier=user.tier,
             action=action,
             logging_config=request.app.state.config.logging,
+            image_conversion_config=request.app.state.config.image_conversion,
             estimated_cost=estimated_cost,
             handler=handler,
         )
@@ -363,6 +372,47 @@ def _generate_metadata(req: GenerateImageInfer) -> dict[str, Any]:
         "steps": params.steps,
         "n_samples": params.n_samples,
     }
+
+
+def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail={"message": "Invalid request"})
+
+    normalized = dict(payload)
+    parameters = normalized.get("parameters")
+    if not isinstance(parameters, dict):
+        return normalized
+
+    normalized_parameters = dict(parameters)
+    _normalize_int_ceiling(normalized_parameters, "skip_cfg_above_sigma")
+    _normalize_seed(normalized_parameters, "seed")
+    _normalize_seed(normalized_parameters, "extra_noise_seed")
+    normalized["parameters"] = normalized_parameters
+    return normalized
+
+
+def _normalize_int_ceiling(parameters: dict[str, Any], key: str) -> None:
+    value = parameters.get(key)
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        parameters[key] = math.ceil(value)
+
+
+def _normalize_seed(parameters: dict[str, Any], key: str) -> None:
+    value = parameters.get(key)
+    if value is None or isinstance(value, bool):
+        return
+    try:
+        seed = int(value)
+    except (TypeError, ValueError):
+        return
+    max_seed = 4294967295 - 7
+    if seed <= 0 or seed > max_seed:
+        seed = seed % max_seed
+        if seed == 0:
+            seed = max_seed
+    parameters[key] = seed
 
 
 def _optional_int(value: Any) -> int | None:

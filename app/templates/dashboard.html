@@ -5,6 +5,124 @@
   <div><span>用户数</span><strong>{{ stats.total_users }}</strong></div>
   <div><span>今日请求</span><strong>{{ stats.today_requests }}</strong></div>
   <div><span>总 Anlas 消耗</span><strong>{{ stats.total_anlas }}</strong></div>
-  <div><span>队列长度</span><strong>{{ stats.queue_size }}</strong></div>
+  <div><span>队列长度</span><strong id="queue-size">{{ stats.queue_size }}</strong></div>
 </section>
+<section class="panel queue-panel">
+  <div class="section-head">
+    <div>
+      <h2>生成队列</h2>
+      <p class="muted" id="queue-updated">正在同步...</p>
+    </div>
+    <span class="status-pill" id="queue-running-state">空闲</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>位置</th>
+          <th>用户</th>
+          <th>动作</th>
+          <th>规格</th>
+          <th>Anlas</th>
+          <th>等待</th>
+          <th>请求 ID</th>
+        </tr>
+      </thead>
+      <tbody id="queue-body">
+        <tr><td colspan="8" class="muted">暂无生成请求</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<script id="initial-queue" type="application/json">{{ queue | tojson }}</script>
+<script>
+(() => {
+  const queueSize = document.getElementById("queue-size");
+  const queueBody = document.getElementById("queue-body");
+  const queueUpdated = document.getElementById("queue-updated");
+  const runningState = document.getElementById("queue-running-state");
+  const initialQueue = document.getElementById("initial-queue");
+
+  function formatSeconds(seconds) {
+    const value = Number(seconds || 0);
+    if (value < 60) return `${value}s`;
+    const minutes = Math.floor(value / 60);
+    const rest = value % 60;
+    return `${minutes}m ${rest}s`;
+  }
+
+  function requestLabel(requestId) {
+    if (!requestId) return "-";
+    return requestId.length > 12 ? `${requestId.slice(0, 12)}...` : requestId;
+  }
+
+  function specLabel(item) {
+    const size = item.width && item.height ? `${item.width}x${item.height}` : "-";
+    const steps = item.steps ? `${item.steps}步` : null;
+    const samples = item.n_samples ? `${item.n_samples}张` : null;
+    return [item.model, size, steps, samples].filter(Boolean).join(" / ");
+  }
+
+  function statusText(status) {
+    return status === "running" ? "执行中" : "排队中";
+  }
+
+  function appendCell(row, text, className) {
+    const cell = document.createElement("td");
+    cell.textContent = text;
+    if (className) cell.className = className;
+    row.appendChild(cell);
+  }
+
+  function renderQueue(data) {
+    const rows = [];
+    if (data.running) rows.push(data.running);
+    rows.push(...(data.queued || []));
+    queueSize.textContent = data.queue_size || 0;
+    runningState.textContent = data.running ? "执行中" : "空闲";
+    runningState.className = data.running ? "status-pill status-running" : "status-pill";
+    queueUpdated.textContent = `最后更新 ${new Date().toLocaleTimeString()}`;
+    queueBody.replaceChildren();
+    if (rows.length === 0) {
+      const row = document.createElement("tr");
+      appendCell(row, "暂无生成请求", "muted");
+      row.firstChild.colSpan = 8;
+      queueBody.appendChild(row);
+      return;
+    }
+    for (const item of rows) {
+      const row = document.createElement("tr");
+      appendCell(row, statusText(item.status));
+      appendCell(row, item.status === "running" ? "-" : String(item.position || "-"));
+      appendCell(row, item.user_name || `用户 #${item.user_id}`);
+      appendCell(row, item.action || "-");
+      appendCell(row, specLabel(item));
+      appendCell(row, String(item.estimated_anlas_cost || 0));
+      appendCell(row, formatSeconds(item.queued_seconds));
+      appendCell(row, requestLabel(item.request_id), "mono");
+      queueBody.appendChild(row);
+    }
+  }
+
+  async function refreshQueue() {
+    try {
+      const response = await fetch("/admin/api/queue", {headers: {"Accept": "application/json"}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      renderQueue(await response.json());
+    } catch (error) {
+      queueUpdated.textContent = "同步失败";
+      runningState.textContent = "异常";
+      runningState.className = "status-pill status-error";
+    }
+  }
+
+  try {
+    renderQueue(JSON.parse(initialQueue.textContent));
+  } catch (error) {
+    refreshQueue();
+  }
+  setInterval(refreshQueue, 2000);
+})();
+</script>
 {% endblock %}
