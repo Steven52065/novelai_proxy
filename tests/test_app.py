@@ -66,6 +66,16 @@ database:
 logging:
   level: DEBUG
   directory: "{(tmp_path / "logs").as_posix()}"
+cors:
+  enabled: true
+  allow_origins:
+    - "https://client.example"
+  allow_methods:
+    - "*"
+  allow_headers:
+    - "*"
+  expose_headers:
+    - Content-Disposition
 """,
         encoding="utf-8",
     )
@@ -106,6 +116,25 @@ def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
         resp = client.post("/ai/generate-image", json=PAYLOAD)
         assert resp.status_code == 401
         assert resp.json()["message"] == "Invalid or missing API Key"
+
+
+def test_cors_preflight_uses_configured_origin(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        resp = client.options(
+            "/ai/generate-image",
+            headers={
+                "Origin": "https://client.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["access-control-allow-origin"] == "https://client.example"
+        assert "authorization" in resp.headers["access-control-allow-headers"].lower()
 
 
 def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):

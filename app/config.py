@@ -40,6 +40,17 @@ class LoggingConfig(BaseModel):
     generated_images_dir: str = "generated_images"
 
 
+class CorsConfig(BaseModel):
+    enabled: bool = True
+    allow_origins: list[str] = Field(default_factory=lambda: ["*"])
+    allow_origin_regex: str | None = None
+    allow_methods: list[str] = Field(default_factory=lambda: ["*"])
+    allow_headers: list[str] = Field(default_factory=lambda: ["*"])
+    expose_headers: list[str] = Field(default_factory=lambda: ["Content-Disposition"])
+    allow_credentials: bool = False
+    max_age: int = Field(default=600, ge=0)
+
+
 class AppConfig(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -47,6 +58,7 @@ class AppConfig(BaseModel):
     novelai: NovelAIConfig = Field(default_factory=NovelAIConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     def model_post_init(self, __context) -> None:

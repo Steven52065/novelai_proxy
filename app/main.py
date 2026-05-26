@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .admin.routes import router as admin_router
 from .config import load_config
+from .cors import ConfigurableCORSMiddleware
 from .database import Database
 from .logging_utils import configure_logging
 from .proxy.routes import router as proxy_router
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)
+app.add_middleware(ConfigurableCORSMiddleware)
 static_dir = repo_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
