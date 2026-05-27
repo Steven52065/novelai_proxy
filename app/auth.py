@@ -20,6 +20,7 @@ class UserContext:
     tier: str
     is_active: bool
     free_small_only: bool
+    allowed_endpoints: frozenset[str]
 
 
 def _extract_bearer(value: str | None) -> str | None:
@@ -42,7 +43,11 @@ async def get_current_user(
     db: Database = request.app.state.db
     api_key_hash = hash_api_key(api_key)
     row = db.query_one(
-        "SELECT id, api_key_hash, name, tier, is_active, free_small_only FROM users WHERE api_key_hash = ?",
+        """
+        SELECT id, api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints
+        FROM users
+        WHERE api_key_hash = ?
+        """,
         (api_key_hash,),
     )
     if row is None or not secrets.compare_digest(row["api_key_hash"], api_key_hash):
@@ -55,4 +60,12 @@ async def get_current_user(
         tier=str(row["tier"]),
         is_active=bool(row["is_active"]),
         free_small_only=bool(row["free_small_only"]),
+        allowed_endpoints=_parse_allowed_endpoints(row["allowed_endpoints"]),
     )
+
+
+def _parse_allowed_endpoints(value: str | None) -> frozenset[str]:
+    if not value:
+        return frozenset({"generate-image"})
+    endpoints = {item.strip() for item in value.split(",") if item.strip()}
+    return frozenset(endpoints or {"generate-image"})

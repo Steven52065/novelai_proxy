@@ -222,16 +222,20 @@ def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
         users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
         created = next(row for row in users if row["id"] == user_id)
         assert created["free_small_only"] == 1
+        assert created["allowed_endpoints"] == "generate-image"
+        assert created["allowed_endpoints_list"] == ["generate-image"]
 
         update_resp = client.patch(
             f"/admin/api/users/{user_id}",
             auth=("admin", "admin123"),
-            json={"free_small_only": False},
+            json={"free_small_only": False, "allowed_endpoints": ["generate-image", "upscale"]},
         )
         assert update_resp.status_code == 200
         users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
         updated = next(row for row in users if row["id"] == user_id)
         assert updated["free_small_only"] == 0
+        assert updated["allowed_endpoints"] == "generate-image,upscale"
+        assert updated["allowed_endpoints_list"] == ["generate-image", "upscale"]
 
 
 def test_admin_can_copy_and_reset_user_key(tmp_path: Path, monkeypatch):
@@ -480,6 +484,55 @@ def test_free_small_only_rejects_unknown_sampler_even_if_cost_is_zero(tmp_path: 
         assert resp.status_code == 403
 
 
+def test_free_small_only_rejects_img2img_unknown_model_and_unknown_parameters(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-strict", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        img2img_payload = PAYLOAD | {"action": "img2img", "parameters": PAYLOAD["parameters"] | {"image": "aW1n"}}
+        unknown_model_payload = PAYLOAD | {"model": "future-official-model"}
+        unknown_parameter_payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"future_paid_parameter": True}}
+
+        assert client.post("/ai/generate-image", headers=headers, json=img2img_payload).status_code == 403
+        assert client.post("/ai/generate-image", headers=headers, json=unknown_model_payload).status_code == 403
+        assert client.post("/ai/generate-image", headers=headers, json=unknown_parameter_payload).status_code == 403
+
+
+def test_default_user_is_limited_to_generate_image_endpoint(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "endpoint-limited", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        generate = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        upscale = client.post(
+            "/ai/upscale",
+            headers=headers,
+            json={"image": "aW1n", "width": 64, "height": 64, "scale": 2},
+        )
+
+        assert generate.status_code == 201
+        assert upscale.status_code == 403
+        assert upscale.json()["message"] == "User is not allowed to access endpoint: upscale"
+
+
 def test_encode_vibe_is_queued_and_charged(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -489,7 +542,7 @@ def test_encode_vibe_is_queued_and_charged(tmp_path: Path, monkeypatch):
         create_resp = client.post(
             "/admin/api/users",
             auth=("admin", "admin123"),
-            json={"name": "vibe-user", "tier": "normal", "anlas_total": 100},
+            json={"name": "vibe-user", "tier": "normal", "anlas_total": 100, "allowed_endpoints": ["generate-image", "encode-vibe"]},
         )
         api_key = create_resp.json()["api_key"]
 
@@ -517,7 +570,13 @@ def test_free_small_only_rejects_vibe_upscale_and_augment(tmp_path: Path, monkey
         create_resp = client.post(
             "/admin/api/users",
             auth=("admin", "admin123"),
-            json={"name": "free-only-tools", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+            json={
+                "name": "free-only-tools",
+                "tier": "normal",
+                "anlas_total": 100,
+                "free_small_only": True,
+                "allowed_endpoints": ["generate-image", "encode-vibe", "upscale", "augment-image"],
+            },
         )
         api_key = create_resp.json()["api_key"]
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -700,7 +759,7 @@ def test_upscale_and_augment_are_queued_and_logged(tmp_path: Path, monkeypatch):
         create_resp = client.post(
             "/admin/api/users",
             auth=("admin", "admin123"),
-            json={"name": "carol", "tier": "vip", "anlas_total": 100},
+            json={"name": "carol", "tier": "vip", "anlas_total": 100, "allowed_endpoints": ["generate-image", "upscale", "augment-image"]},
         )
         api_key = create_resp.json()["api_key"]
         headers = {"Authorization": f"Bearer {api_key}"}

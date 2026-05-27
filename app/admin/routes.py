@@ -24,12 +24,21 @@ optional_security = HTTPBasic(auto_error=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 SESSION_COOKIE = "novelai_proxy_admin"
 DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
+ALLOWED_ENDPOINT_CHOICES = {
+    "generate-image": "图像生成",
+    "suggest-tags": "标签建议",
+    "upscale": "图片放大",
+    "augment-image": "图像增强",
+    "encode-vibe": "Vibe 编码",
+}
+DEFAULT_ALLOWED_ENDPOINTS = "generate-image"
 
 
 class CreateUserRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     tier: str = Field(default="normal", pattern="^(normal|vip)$")
     free_small_only: bool = False
+    allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     anlas_total: int = Field(default=0, ge=0)
     reset_period: str = Field(default="month", pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -40,6 +49,7 @@ class UpdateUserRequest(BaseModel):
     tier: str | None = Field(default=None, pattern="^(normal|vip)$")
     is_active: bool | None = None
     free_small_only: bool | None = None
+    allowed_endpoints: list[str] | None = None
     anlas_total: int | None = Field(default=None, ge=0)
     reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -75,7 +85,7 @@ async def list_users(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.created_at,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.created_at,
                u.api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -85,7 +95,7 @@ async def list_users(request: Request):
         ORDER BY u.id DESC
         """
     )
-    return {"users": [_row_to_dict(row) for row in rows]}
+    return {"users": [_user_row_to_dict(row) for row in rows]}
 
 
 @api_router.post("/users", dependencies=[Depends(require_admin)])
@@ -97,10 +107,18 @@ async def create_user(payload: CreateUserRequest, request: Request):
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (api_key_hash, api_key, name, tier, is_active, free_small_only, created_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?)
+            INSERT INTO users (api_key_hash, api_key, name, tier, is_active, free_small_only, allowed_endpoints, created_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
             """,
-            (hash_api_key(api_key), api_key, payload.name, payload.tier, 1 if payload.free_small_only else 0, now),
+            (
+                hash_api_key(api_key),
+                api_key,
+                payload.name,
+                payload.tier,
+                1 if payload.free_small_only else 0,
+                _serialize_allowed_endpoints(payload.allowed_endpoints),
+                now,
+            ),
         )
         user_id = int(cursor.lastrowid)
     quota_manager.create_or_update(user_id, payload.anlas_total, payload.reset_period, payload.reset_day)
@@ -124,6 +142,9 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
     if payload.free_small_only is not None:
         fields.append("free_small_only = ?")
         params.append(1 if payload.free_small_only else 0)
+    if payload.allowed_endpoints is not None:
+        fields.append("allowed_endpoints = ?")
+        params.append(_serialize_allowed_endpoints(payload.allowed_endpoints))
     if fields:
         params.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
@@ -313,7 +334,7 @@ async def users_page(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.created_at,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.created_at,
                u.api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -325,7 +346,15 @@ async def users_page(request: Request):
         ORDER BY u.id DESC
         """
     )
-    return templates.TemplateResponse(request, "users.html", {"active": "users", "users": [_row_to_dict(row) for row in rows]})
+    return templates.TemplateResponse(
+        request,
+        "users.html",
+        {
+            "active": "users",
+            "users": [_user_row_to_dict(row) for row in rows],
+            "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
+        },
+    )
 
 
 @web_router.post("/users")
@@ -337,6 +366,7 @@ async def create_user_form(
     reset_period: str = Form("month"),
     reset_day: int | None = Form(None),
     free_small_only: str | None = Form(None),
+    allowed_endpoints: list[str] | None = Form(None),
 ):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -348,6 +378,7 @@ async def create_user_form(
             reset_period=reset_period,
             reset_day=reset_day,
             free_small_only=free_small_only == "on",
+            allowed_endpoints=allowed_endpoints or [DEFAULT_ALLOWED_ENDPOINTS],
         ),
         request,
     )
@@ -361,7 +392,7 @@ async def user_edit_page(user_id: int, request: Request):
     db: Database = request.app.state.db
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.api_key,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
@@ -381,8 +412,9 @@ async def user_edit_page(user_id: int, request: Request):
         "user_edit.html",
         {
             "active": "users",
-            "user": _row_to_dict(user),
+            "user": _user_row_to_dict(user),
             "rules": [_row_to_dict(row) for row in rules],
+            "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
         },
     )
 
@@ -398,6 +430,7 @@ async def update_user_form(
     reset_period: str = Form("month"),
     reset_day: int = Form(1),
     free_small_only: str | None = Form(None),
+    allowed_endpoints: list[str] | None = Form(None),
 ):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -411,6 +444,7 @@ async def update_user_form(
             anlas_total=anlas_total,
             reset_period=reset_period,
             reset_day=reset_day,
+            allowed_endpoints=allowed_endpoints or [DEFAULT_ALLOWED_ENDPOINTS],
         ),
         request,
     )
@@ -520,6 +554,33 @@ def _today_utc_prefix() -> str:
 
 def _row_to_dict(row):
     return {key: row[key] for key in row.keys()}
+
+
+def _user_row_to_dict(row):
+    data = _row_to_dict(row)
+    data["allowed_endpoints_list"] = _parse_allowed_endpoints(data.get("allowed_endpoints"))
+    data["allowed_endpoint_labels"] = [
+        ALLOWED_ENDPOINT_CHOICES.get(endpoint, endpoint)
+        for endpoint in data["allowed_endpoints_list"]
+    ]
+    return data
+
+
+def _parse_allowed_endpoints(value: str | None) -> list[str]:
+    if not value:
+        return [DEFAULT_ALLOWED_ENDPOINTS]
+    endpoints = [item.strip() for item in value.split(",") if item.strip()]
+    return endpoints or [DEFAULT_ALLOWED_ENDPOINTS]
+
+
+def _serialize_allowed_endpoints(value: list[str] | None) -> str:
+    if not value:
+        return DEFAULT_ALLOWED_ENDPOINTS
+    valid = []
+    for endpoint in value:
+        if endpoint in ALLOWED_ENDPOINT_CHOICES and endpoint not in valid:
+            valid.append(endpoint)
+    return ",".join(valid or [DEFAULT_ALLOWED_ENDPOINTS])
 
 
 def _usage_log_to_dict(row):

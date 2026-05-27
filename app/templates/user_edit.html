@@ -186,6 +186,18 @@
           </label>
         </div>
 
+        <div style="padding: 6px 0;">
+          <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许访问的接口</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+            {% for endpoint, label in endpoint_choices.items() %}
+            <label class="check" style="color: #cbd5e1; font-weight: 500;">
+              <input name="allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint in user.allowed_endpoints_list else "" }}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
         <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
           <button type="submit" style="min-height: 42px; padding: 0 24px;">
             <i data-lucide="save" style="width: 16px; height: 16px;"></i>

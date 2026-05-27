@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from novelai_python._exceptions import APIError
 from novelai_python.sdk.ai._cost import CostCalculator
-from novelai_python.sdk.ai._enum import Sampler
+from novelai_python.sdk.ai._enum import Action, Model, Sampler
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
@@ -27,6 +27,62 @@ IMAGE_ANLAS_PER_PRECISE_REFERENCE = 5
 IMAGE_ANLAS_PER_VIBE_ENCODING = 2
 FREE_VIBE_REFERENCES_PER_GENERATION = 4
 IMAGE_ANLAS_PER_EXTRA_VIBE_REFERENCE = 2
+ENDPOINT_GENERATE_IMAGE = "generate-image"
+ENDPOINT_UPSCALE = "upscale"
+ENDPOINT_AUGMENT_IMAGE = "augment-image"
+ENDPOINT_ENCODE_VIBE = "encode-vibe"
+ENDPOINT_SUGGEST_TAGS = "suggest-tags"
+FREE_SMALL_ONLY_ALLOWED_PARAMETERS = {
+    "width",
+    "height",
+    "scale",
+    "sampler",
+    "steps",
+    "n_samples",
+    "ucPreset",
+    "qualityToggle",
+    "sm",
+    "sm_dyn",
+    "seed",
+    "negative_prompt",
+    "noise_schedule",
+    "cfg_rescale",
+    "dynamic_thresholding",
+    "controlnet_strength",
+    "legacy",
+    "legacy_v3_extend",
+    "uncond_scale",
+    "deliberate_euler_ancestral_bug",
+    "prefer_brownian",
+    "image_format",
+    "skip_cfg_above_sigma",
+    "characterPrompts",
+    "v4_prompt",
+    "v4_negative_prompt",
+    "use_coords",
+    "legacy_uc",
+    "add_original_image",
+    "autoSmea",
+    "params_version",
+}
+FREE_SMALL_ONLY_FORBIDDEN_PARAMETERS = {
+    "image",
+    "mask",
+    "strength",
+    "noise",
+    "extra_noise_seed",
+    "reference_image",
+    "reference_image_multiple",
+    "reference_strength_multiple",
+    "reference_information_extracted_multiple",
+    "director_reference_images",
+    "director_reference_descriptions",
+    "director_reference_strength_values",
+    "director_reference_secondary_strength_values",
+    "director_reference_information_extracted",
+    "controlnet_condition",
+    "controlnet_model",
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +100,7 @@ class GenerateCostInputs:
     image: bool
     strength: float | None
     reference_cost: int
+    free_small_only_parameters_safe: bool
 
 
 @router.get("/health")
@@ -59,6 +116,10 @@ async def generate_image(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
+    endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_GENERATE_IMAGE)
+    if endpoint_denied is not None:
+        return endpoint_denied
+
     payload = await request.json()
     try:
         request_payload = _normalize_generate_image_payload(payload)
@@ -94,6 +155,10 @@ async def upscale(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
+    endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_UPSCALE)
+    if endpoint_denied is not None:
+        return endpoint_denied
+
     return await _submit_zip_task(
         request=request,
         user=user,
@@ -117,6 +182,10 @@ async def augment_image(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
+    endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_AUGMENT_IMAGE)
+    if endpoint_denied is not None:
+        return endpoint_denied
+
     try:
         estimated_cost = int(req.calculate_cost(is_opus=request.app.state.config.novelai.account_tier >= 3))
     except Exception:
@@ -144,6 +213,10 @@ async def encode_vibe(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
+    endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_ENCODE_VIBE)
+    if endpoint_denied is not None:
+        return endpoint_denied
+
     payload = await request.json()
     if not isinstance(payload, dict):
         return JSONResponse(status_code=400, content={"message": "Invalid request"})
@@ -376,6 +449,10 @@ async def suggest_tags(
     lang: str = "en",
     user: UserContext = Depends(get_current_user),
 ):
+    endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_SUGGEST_TAGS)
+    if endpoint_denied is not None:
+        return endpoint_denied
+
     del user
     try:
         return await request.app.state.upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
@@ -508,10 +585,14 @@ def _calculate_generate_cost(params: GenerateCostInputs, *, is_opus: bool) -> tu
         and total_cost == 0
         and base_cost == 0
         and params.reference_cost == 0
+        and _is_known_text_to_image_model(params.model)
+        and params.action == Action.GENERATE.value
+        and params.free_small_only_parameters_safe
         and params.n_samples == 1
         and params.steps <= 28
         and params.width * params.height <= 1048576
         and params.sampler_was_known
+        and not params.image
     )
     return total_cost, is_certainly_free
 
@@ -543,7 +624,52 @@ def _extract_generate_cost_inputs(payload: dict[str, Any]) -> GenerateCostInputs
         image=bool(parameters.get("image")),
         strength=_optional_float(parameters.get("strength")),
         reference_cost=_reference_anlas_cost(parameters),
+        free_small_only_parameters_safe=_free_small_only_parameters_are_safe(parameters),
     )
+
+
+def _reject_disallowed_endpoint(user: UserContext, endpoint: str) -> JSONResponse | None:
+    if endpoint in user.allowed_endpoints:
+        return None
+    return JSONResponse(
+        status_code=403,
+        content={"message": f"User is not allowed to access endpoint: {endpoint}"},
+    )
+
+
+def _is_known_text_to_image_model(model: str) -> bool:
+    try:
+        parsed = Model(model)
+    except ValueError:
+        return False
+    return parsed not in {
+        Model.NAI_DIFFUSION_4_5_FULL_INPAINTING,
+        Model.NAI_DIFFUSION_4_5_CURATED_INPAINTING,
+        Model.NAI_DIFFUSION_4_FULL_INPAINTING,
+        Model.NAI_DIFFUSION_4_CURATED_INPAINTING,
+        Model.NAI_DIFFUSION_3_INPAINTING,
+        Model.NAI_DIFFUSION_FURRY_3_INPAINTING,
+        Model.NAI_DIFFUSION_INPAINTING,
+        Model.SAFE_DIFFUSION_INPAINTING,
+        Model.FURRY_DIFFUSION_INPAINTING,
+    }
+
+
+def _free_small_only_parameters_are_safe(parameters: dict[str, Any]) -> bool:
+    unknown_keys = set(parameters) - FREE_SMALL_ONLY_ALLOWED_PARAMETERS - FREE_SMALL_ONLY_FORBIDDEN_PARAMETERS
+    if unknown_keys:
+        return False
+    return not any(_parameter_has_value(parameters.get(key)) for key in FREE_SMALL_ONLY_FORBIDDEN_PARAMETERS)
+
+
+def _parameter_has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if value is False:
+        return False
+    if isinstance(value, (str, bytes, list, dict, tuple, set)):
+        return len(value) > 0
+    return True
 
 
 def _reference_anlas_cost(parameters: dict[str, Any]) -> int:

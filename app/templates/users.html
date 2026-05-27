@@ -71,6 +71,18 @@
         </label>
       </div>
 
+      <div style="padding: 6px 0;">
+        <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许访问的接口</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+          {% for endpoint, label in endpoint_choices.items() %}
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint == "generate-image" else "" }}>
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
       <button type="submit" style="width: 100%; margin-top: 14px;">
         <i data-lucide="check" style="width: 18px; height: 18px;"></i>
         确认创建用户
@@ -148,6 +160,11 @@
             {% else %}
             <span class="badge" style="background: rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:#34d399;">不限图规格</span>
             {% endif %}
+            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+              {% for label in user.allowed_endpoint_labels %}
+              <span class="badge" style="background: rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.18); color:#93c5fd;">{{ label }}</span>
+              {% endfor %}
+            </div>
           </td>
           <td>
             {% if user.api_key %}
