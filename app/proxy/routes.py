@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import math
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from novelai_python._exceptions import APIError
+from novelai_python.sdk.ai._cost import CostCalculator
+from novelai_python.sdk.ai._enum import Sampler
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
-from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
 from ..auth import UserContext, get_current_user
@@ -28,6 +29,23 @@ FREE_VIBE_REFERENCES_PER_GENERATION = 4
 IMAGE_ANLAS_PER_EXTRA_VIBE_REFERENCE = 2
 
 
+@dataclass(frozen=True)
+class GenerateCostInputs:
+    model: str
+    action: str
+    width: int
+    height: int
+    steps: int
+    n_samples: int
+    sampler: Sampler | None
+    sampler_was_known: bool
+    sm: bool
+    sm_dyn: bool
+    image: bool
+    strength: float | None
+    reference_cost: int
+
+
 @router.get("/health")
 async def health(request: Request):
     return {
@@ -42,29 +60,30 @@ async def generate_image(
     user: UserContext = Depends(get_current_user),
 ):
     payload = await request.json()
-    normalized_payload = _normalize_generate_image_payload(payload)
     try:
-        req = GenerateImageInfer.model_validate(normalized_payload)
+        request_payload = _normalize_generate_image_payload(payload)
+        cost_inputs = _extract_generate_cost_inputs(request_payload)
     except Exception as exc:
-        logger.error("generate-image payload validation failed after normalization errors=%s", str(exc))
+        logger.error("generate-image payload validation failed errors=%s", str(exc))
         return JSONResponse(status_code=400, content={"message": "Invalid request", "details": str(exc)})
 
-    request_payload = _merge_generate_payload(dump_model_payload(req), normalized_payload)
     _apply_image_format_policy(request_payload, request.app.state.config.image_format)
     try:
-        estimated_cost = _calculate_generate_cost(
-            req,
-            request_payload,
+        estimated_cost, cost_is_certainly_free = _calculate_generate_cost(
+            cost_inputs,
             is_opus=request.app.state.config.novelai.account_tier >= 3,
         )
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 
+    if user.free_small_only and not cost_is_certainly_free:
+        return _reject_free_small_only(request, user, request_payload, cost_inputs, estimated_cost)
+
     return await _submit_zip_task(
         request=request,
         user=user,
-        action=str(req.action),
-        metadata=_generate_metadata(req),
+        action=cost_inputs.action,
+        metadata=_generate_metadata(cost_inputs),
         request_payload=request_payload,
         estimated_cost=estimated_cost,
         handler=lambda: request.app.state.upstream.generate_image_payload_zip(request_payload),
@@ -429,10 +448,9 @@ def _insert_usage_log(
     )
 
 
-def _generate_metadata(req: GenerateImageInfer) -> dict[str, Any]:
-    params = req.parameters
+def _generate_metadata(params: GenerateCostInputs) -> dict[str, Any]:
     return {
-        "model": str(req.model),
+        "model": params.model,
         "width": params.width,
         "height": params.height,
         "steps": params.steps,
@@ -440,10 +458,65 @@ def _generate_metadata(req: GenerateImageInfer) -> dict[str, Any]:
     }
 
 
-def _calculate_generate_cost(req: GenerateImageInfer, payload: dict[str, Any], *, is_opus: bool) -> int:
-    base_cost = int(req.calculate_cost(is_opus=is_opus))
-    params = _payload_parameters(payload)
-    return base_cost + _reference_anlas_cost(params)
+def _calculate_generate_cost(params: GenerateCostInputs, *, is_opus: bool) -> tuple[int, bool]:
+    base_cost = int(
+        CostCalculator.calculate(
+            width=params.width,
+            height=params.height,
+            steps=params.steps,
+            model=params.model,
+            image=params.image,
+            n_samples=params.n_samples,
+            account_tier=3 if is_opus else 1,
+            strength=params.strength,
+            sampler=params.sampler,
+            is_sm_enabled=params.sm,
+            is_sm_dynamic=params.sm_dyn,
+            is_account_active=True,
+        )
+    )
+    total_cost = base_cost + params.reference_cost
+    is_certainly_free = (
+        is_opus
+        and total_cost == 0
+        and base_cost == 0
+        and params.reference_cost == 0
+        and params.n_samples == 1
+        and params.steps <= 28
+        and params.width * params.height <= 1048576
+        and params.sampler_was_known
+    )
+    return total_cost, is_certainly_free
+
+
+def _extract_generate_cost_inputs(payload: dict[str, Any]) -> GenerateCostInputs:
+    model = payload.get("model")
+    action = payload.get("action", "generate")
+    parameters = payload.get("parameters")
+    if not isinstance(model, str) or not model:
+        raise ValueError("model is required")
+    if not isinstance(action, str) or not action:
+        raise ValueError("action is required")
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters is required")
+
+    sampler_value = parameters.get("sampler")
+    sampler, sampler_was_known = _optional_sampler(sampler_value)
+    return GenerateCostInputs(
+        model=model,
+        action=action,
+        width=_required_int(parameters, "width", minimum=64),
+        height=_required_int(parameters, "height", minimum=64),
+        steps=_required_int(parameters, "steps", minimum=1),
+        n_samples=_required_int(parameters, "n_samples", minimum=1),
+        sampler=sampler,
+        sampler_was_known=sampler_was_known,
+        sm=_optional_bool(parameters.get("sm")),
+        sm_dyn=_optional_bool(parameters.get("sm_dyn")),
+        image=bool(parameters.get("image")),
+        strength=_optional_float(parameters.get("strength")),
+        reference_cost=_reference_anlas_cost(parameters),
+    )
 
 
 def _reference_anlas_cost(parameters: dict[str, Any]) -> int:
@@ -467,21 +540,76 @@ def _reference_count(parameters: dict[str, Any], key: str) -> int:
     return 0
 
 
-def _merge_generate_payload(validated_payload: dict[str, Any], original_payload: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(validated_payload)
-    for key, value in original_payload.items():
-        if key == "parameters":
-            continue
-        if key not in payload:
-            payload[key] = value
+def _required_int(parameters: dict[str, Any], key: str, *, minimum: int) -> int:
+    value = parameters.get(key)
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"parameters.{key} is required")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"parameters.{key} must be an integer") from exc
+    if number < minimum:
+        raise ValueError(f"parameters.{key} must be >= {minimum}")
+    return number
 
-    merged_parameters = dict(validated_payload.get("parameters") or {})
-    original_parameters = _payload_parameters(original_payload)
-    for key, value in original_parameters.items():
-        if key not in merged_parameters:
-            merged_parameters[key] = value
-    payload["parameters"] = merged_parameters
-    return payload
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _optional_sampler(value: Any) -> tuple[Sampler | None, bool]:
+    if value is None:
+        return None, False
+    try:
+        return Sampler(value), True
+    except ValueError:
+        return None, False
+
+
+def _reject_free_small_only(
+    request: Request,
+    user: UserContext,
+    request_payload: dict[str, Any],
+    cost_inputs: GenerateCostInputs,
+    estimated_cost: int,
+) -> JSONResponse:
+    request_id = uuid.uuid4().hex
+    _insert_usage_log(
+        request.app.state.db,
+        request_id,
+        user.id,
+        cost_inputs.action,
+        _generate_metadata(cost_inputs),
+        request_payload,
+        estimated_cost,
+        "rejected",
+        "free_small_only_blocked",
+        "User is limited to definitely free small image generations",
+        "INFO",
+    )
+    logger.info(
+        "proxy request rejected by free small only request_id=%s user_id=%s estimated_cost=%s",
+        request_id,
+        user.id,
+        estimated_cost,
+    )
+    return JSONResponse(
+        status_code=403,
+        content={"message": "User is limited to definitely free small image generations"},
+    )
 
 
 def _payload_parameters(payload: dict[str, Any]) -> dict[str, Any]:
@@ -505,47 +633,8 @@ def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:
     parameters = normalized.get("parameters")
     if not isinstance(parameters, dict):
         return normalized
-
-    normalized_parameters = dict(parameters)
-    _normalize_img2img_parameters(normalized_parameters)
-    _normalize_int_ceiling(normalized_parameters, "skip_cfg_above_sigma")
-    _normalize_seed(normalized_parameters, "seed")
-    _normalize_seed(normalized_parameters, "extra_noise_seed")
-    normalized["parameters"] = normalized_parameters
+    normalized["parameters"] = dict(parameters)
     return normalized
-
-
-def _normalize_img2img_parameters(parameters: dict[str, Any]) -> None:
-    img2img = parameters.get("img2img")
-    if not isinstance(img2img, dict):
-        return
-    for key in ("strength", "noise", "extra_noise_seed", "color_correct"):
-        if key not in parameters and key in img2img:
-            parameters[key] = img2img[key]
-
-
-def _normalize_int_ceiling(parameters: dict[str, Any], key: str) -> None:
-    value = parameters.get(key)
-    if value is None or isinstance(value, bool):
-        return
-    if isinstance(value, float):
-        parameters[key] = math.ceil(value)
-
-
-def _normalize_seed(parameters: dict[str, Any], key: str) -> None:
-    value = parameters.get(key)
-    if value is None or isinstance(value, bool):
-        return
-    try:
-        seed = int(value)
-    except (TypeError, ValueError):
-        return
-    max_seed = 4294967295 - 7
-    if seed <= 0 or seed > max_seed:
-        seed = seed % max_seed
-        if seed == 0:
-            seed = max_seed
-    parameters[key] = seed
 
 
 def _optional_int(value: Any) -> int | None:

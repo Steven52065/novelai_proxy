@@ -28,6 +28,7 @@
       </select>
     </label>
     <label>重置日<input name="reset_day" type="number" min="0" max="28"></label>
+    <label class="check"><input name="free_small_only" type="checkbox"> 仅限免费小图</label>
     <button type="submit">创建</button>
   </form>
 </section>
@@ -35,7 +36,7 @@
   <h2>用户列表</h2>
   <table>
     <thead>
-      <tr><th>ID</th><th>备注名</th><th>等级</th><th>状态</th><th>Anlas</th><th>重置</th><th></th></tr>
+      <tr><th>ID</th><th>备注名</th><th>等级</th><th>状态</th><th>限制</th><th>Anlas</th><th>重置</th><th></th></tr>
     </thead>
     <tbody>
       {% for user in users %}
@@ -44,6 +45,7 @@
         <td>{{ user.name }}</td>
         <td>{{ user.tier }}</td>
         <td>{{ "启用" if user.is_active else "禁用" }}</td>
+        <td>{{ "仅免费" if user.free_small_only else "不限" }}</td>
         <td>{{ user.anlas_used }} + {{ user.anlas_reserved }} / {{ user.anlas_total }}</td>
         <td>{{ user.reset_period }} {{ user.reset_day }}</td>
         <td><a href="/admin/users/{{ user.id }}">编辑</a></td>

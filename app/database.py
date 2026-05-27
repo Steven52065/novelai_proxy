@@ -32,6 +32,7 @@ class Database:
                     name TEXT NOT NULL,
                     tier TEXT NOT NULL DEFAULT 'normal',
                     is_active INTEGER NOT NULL DEFAULT 1,
+                    free_small_only INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
 
@@ -88,6 +89,7 @@ class Database:
             self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
             self._add_column_if_missing("usage_logs", "request_payload", "TEXT")
             self._add_column_if_missing("usage_logs", "output_files", "TEXT")
+            self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager
     def transaction(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:

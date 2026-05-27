@@ -27,6 +27,7 @@ SESSION_COOKIE = "novelai_proxy_admin"
 class CreateUserRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     tier: str = Field(default="normal", pattern="^(normal|vip)$")
+    free_small_only: bool = False
     anlas_total: int = Field(default=0, ge=0)
     reset_period: str = Field(default="month", pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -36,6 +37,7 @@ class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     tier: str | None = Field(default=None, pattern="^(normal|vip)$")
     is_active: bool | None = None
+    free_small_only: bool | None = None
     anlas_total: int | None = Field(default=None, ge=0)
     reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -71,7 +73,7 @@ async def list_users(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.created_at,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.created_at,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
                COALESCE(q.reserved, 0) AS anlas_reserved
@@ -92,10 +94,10 @@ async def create_user(payload: CreateUserRequest, request: Request):
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (api_key_hash, name, tier, is_active, created_at)
-            VALUES (?, ?, ?, 1, ?)
+            INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, created_at)
+            VALUES (?, ?, ?, 1, ?, ?)
             """,
-            (hash_api_key(api_key), payload.name, payload.tier, now),
+            (hash_api_key(api_key), payload.name, payload.tier, 1 if payload.free_small_only else 0, now),
         )
         user_id = int(cursor.lastrowid)
     quota_manager.create_or_update(user_id, payload.anlas_total, payload.reset_period, payload.reset_day)
@@ -116,6 +118,9 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
     if payload.is_active is not None:
         fields.append("is_active = ?")
         params.append(1 if payload.is_active else 0)
+    if payload.free_small_only is not None:
+        fields.append("free_small_only = ?")
+        params.append(1 if payload.free_small_only else 0)
     if fields:
         params.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
@@ -292,7 +297,7 @@ async def users_page(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.created_at,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.created_at,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
                COALESCE(q.reserved, 0) AS anlas_reserved,
@@ -314,6 +319,7 @@ async def create_user_form(
     anlas_total: int = Form(0),
     reset_period: str = Form("month"),
     reset_day: int | None = Form(None),
+    free_small_only: str | None = Form(None),
 ):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -324,6 +330,7 @@ async def create_user_form(
             anlas_total=anlas_total,
             reset_period=reset_period,
             reset_day=reset_day,
+            free_small_only=free_small_only == "on",
         ),
         request,
     )
@@ -337,7 +344,7 @@ async def user_edit_page(user_id: int, request: Request):
     db: Database = request.app.state.db
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.tier, u.is_active,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
@@ -373,6 +380,7 @@ async def update_user_form(
     anlas_total: int = Form(0),
     reset_period: str = Form("month"),
     reset_day: int = Form(1),
+    free_small_only: str | None = Form(None),
 ):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -382,6 +390,7 @@ async def update_user_form(
             name=name,
             tier=tier,
             is_active=is_active == "on",
+            free_small_only=free_small_only == "on",
             anlas_total=anlas_total,
             reset_period=reset_period,
             reset_day=reset_day,

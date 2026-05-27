@@ -14,6 +14,7 @@
       </select>
     </label>
     <label class="check"><input name="is_active" type="checkbox" {{ "checked" if user.is_active else "" }}> 启用</label>
+    <label class="check"><input name="free_small_only" type="checkbox" {{ "checked" if user.free_small_only else "" }}> 仅限免费小图</label>
     <label>Anlas 总额度<input name="anlas_total" type="number" min="0" value="{{ user.anlas_total or 0 }}"></label>
     <label>重置周期
       <select name="reset_period">

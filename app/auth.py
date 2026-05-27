@@ -19,6 +19,7 @@ class UserContext:
     name: str
     tier: str
     is_active: bool
+    free_small_only: bool
 
 
 def _extract_bearer(value: str | None) -> str | None:
@@ -41,7 +42,7 @@ async def get_current_user(
     db: Database = request.app.state.db
     api_key_hash = hash_api_key(api_key)
     row = db.query_one(
-        "SELECT id, api_key_hash, name, tier, is_active FROM users WHERE api_key_hash = ?",
+        "SELECT id, api_key_hash, name, tier, is_active, free_small_only FROM users WHERE api_key_hash = ?",
         (api_key_hash,),
     )
     if row is None or not secrets.compare_digest(row["api_key_hash"], api_key_hash):
@@ -53,4 +54,5 @@ async def get_current_user(
         name=str(row["name"]),
         tier=str(row["tier"]),
         is_active=bool(row["is_active"]),
+        free_small_only=bool(row["free_small_only"]),
     )

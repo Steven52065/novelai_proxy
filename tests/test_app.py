@@ -6,7 +6,6 @@ import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from PIL import Image
 
 from app.upstream import UpstreamClient
 
@@ -55,20 +54,6 @@ class FakeUpstream:
 
     async def suggest_tags(self, model: str, prompt: str, lang: str = "en"):
         return {"tags": []}
-
-
-class FakeImageUpstream:
-    async def generate_image_zip(self, req):
-        image_buffer = io.BytesIO()
-        Image.new("RGBA", (8, 8), (255, 0, 0, 128)).save(image_buffer, format="PNG")
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, mode="w") as zip_file:
-            zip_file.writestr("image.png", image_buffer.getvalue())
-            zip_file.writestr("metadata.txt", b"keep-me")
-        return buffer.getvalue()
-
-    async def generate_image_payload_zip(self, payload):
-        return await self.generate_image_zip(payload)
 
 
 class FakeQueueSnapshot:
@@ -221,6 +206,34 @@ def test_health_admin_create_user_and_subscription(tmp_path: Path, monkeypatch):
         monkeypatch.delenv("NOVELAI_PROXY_CONFIG", raising=False)
 
 
+def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "limited", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        assert create_resp.status_code == 200
+        user_id = create_resp.json()["user_id"]
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        created = next(row for row in users if row["id"] == user_id)
+        assert created["free_small_only"] == 1
+
+        update_resp = client.patch(
+            f"/admin/api/users/{user_id}",
+            auth=("admin", "admin123"),
+            json={"free_small_only": False},
+        )
+        assert update_resp.status_code == 200
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        updated = next(row for row in users if row["id"] == user_id)
+        assert updated["free_small_only"] == 0
+
+
 def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -252,10 +265,10 @@ def test_validation_error_is_logged(tmp_path: Path, monkeypatch):
         assert resp.status_code == 400
 
     log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
-    assert "generate-image payload validation failed after normalization" in log_text
+    assert "generate-image payload validation failed errors=" in log_text
 
 
-def test_generate_normalizes_official_payload_variants(tmp_path: Path, monkeypatch):
+def test_generate_preserves_non_cost_official_payload_fields(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 
@@ -279,8 +292,60 @@ def test_generate_normalizes_official_payload_variants(tmp_path: Path, monkeypat
         assert resp.status_code == 201
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         success_log = next(row for row in logs if row["status"] == "success")
-        assert success_log["request_payload"]["parameters"]["skip_cfg_above_sigma"] == 60
-        assert 0 < success_log["request_payload"]["parameters"]["seed"] <= 4294967288
+        assert success_log["request_payload"]["parameters"]["skip_cfg_above_sigma"] == 59.04722600415217
+        assert success_log["request_payload"]["parameters"]["seed"] == 6816488388
+
+
+def test_generate_passes_unknown_official_fields_without_sdk_validation(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    payload = PAYLOAD | {
+        "model": "future-official-model",
+        "parameters": PAYLOAD["parameters"] | {
+            "director_reference_descriptions": [{"caption": {"base_caption": "ref"}}],
+            "prompt": "official parameter prompt",
+            "stream": "sse",
+        },
+    }
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "future-model-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 201
+        assert fake_upstream.last_generate_payload["model"] == "future-official-model"
+        params = fake_upstream.last_generate_payload["parameters"]
+        assert params["director_reference_descriptions"] == [{"caption": {"base_caption": "ref"}}]
+        assert params["prompt"] == "official parameter prompt"
+        assert params["stream"] == "sse"
+
+
+def test_generate_rejects_missing_cost_fields(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    payload = PAYLOAD | {"parameters": {"width": 832, "height": 1216, "steps": 23}}
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "missing-cost-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 400
+        assert "n_samples" in resp.json()["details"]
 
 
 def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: Path, monkeypatch):
@@ -316,6 +381,68 @@ def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: P
         assert params["director_reference_images"] == ["ref-a", "ref-b"]
         assert params["reference_image_multiple"] == ["v1", "v2", "v3", "v4", "v5"]
         assert success_log["estimated_anlas_cost"] == 12
+
+
+def test_free_small_only_allows_definite_free_opus_small(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-user", "tier": "normal", "anlas_total": 0, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 201
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert success_log["estimated_anlas_cost"] == 0
+
+
+def test_free_small_only_rejects_paid_or_uncertain_request(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-blocked", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        paid_payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"steps": 29}}
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=paid_payload)
+
+        assert resp.status_code == 403
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        rejected_log = next(row for row in logs if row["status"] == "rejected")
+        assert rejected_log["error_code"] == "free_small_only_blocked"
+
+
+def test_free_small_only_rejects_unknown_sampler_even_if_cost_is_zero(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-unknown", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"sampler": "future_sampler"}}
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 403
 
 
 def test_encode_vibe_is_queued_and_charged(tmp_path: Path, monkeypatch):
