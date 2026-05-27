@@ -29,6 +29,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     api_key_hash TEXT NOT NULL UNIQUE,
+                    api_key TEXT,
                     name TEXT NOT NULL,
                     tier TEXT NOT NULL DEFAULT 'normal',
                     is_active INTEGER NOT NULL DEFAULT 1,
@@ -89,6 +90,7 @@ class Database:
             self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
             self._add_column_if_missing("usage_logs", "request_payload", "TEXT")
             self._add_column_if_missing("usage_logs", "output_files", "TEXT")
+            self._add_column_if_missing("users", "api_key", "TEXT")
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager

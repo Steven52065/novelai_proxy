@@ -4,7 +4,31 @@
   <h1>编辑用户 #{{ user.id }}</h1>
   <a href="/admin/users">返回列表</a>
 </div>
+{% if request.query_params.get('api_key') %}
+<section class="notice">
+  新 API Key：<code id="new-api-key">{{ request.query_params.get('api_key') }}</code>
+  <button class="secondary copy-button" type="button" data-copy-target="new-api-key">复制</button>
+</section>
+{% endif %}
 <section class="panel">
+  <div class="key-row">
+    <div>
+      <h2>API Key</h2>
+      {% if user.api_key %}
+      <code id="user-api-key">{{ user.api_key }}</code>
+      {% else %}
+      <p class="muted">此用户是在保存明文 key 前创建的，需重置后才能复制。</p>
+      {% endif %}
+    </div>
+    <div class="actions">
+      {% if user.api_key %}
+      <button class="secondary copy-button" type="button" data-copy-target="user-api-key">复制 Key</button>
+      {% endif %}
+      <form method="post" action="/admin/users/{{ user.id }}/reset-key">
+        <button class="danger" type="submit">重置 Key</button>
+      </form>
+    </div>
+  </div>
   <form method="post" action="/admin/users/{{ user.id }}" class="form-grid">
     <label>备注名<input name="name" value="{{ user.name }}" required></label>
     <label>等级
@@ -72,4 +96,15 @@
     </tbody>
   </table>
 </section>
+<script>
+  document.querySelectorAll(".copy-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const text = document.getElementById(button.dataset.copyTarget).textContent;
+      await navigator.clipboard.writeText(text);
+      const original = button.textContent;
+      button.textContent = "已复制";
+      window.setTimeout(() => { button.textContent = original; }, 1200);
+    });
+  });
+</script>
 {% endblock %}

@@ -234,6 +234,41 @@ def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
         assert updated["free_small_only"] == 0
 
 
+def test_admin_can_copy_and_reset_user_key(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "key-user", "tier": "normal", "anlas_total": 100},
+        )
+        assert create_resp.status_code == 200
+        user_id = create_resp.json()["user_id"]
+        old_key = create_resp.json()["api_key"]
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        created = next(row for row in users if row["id"] == user_id)
+        assert created["api_key"] == old_key
+
+        reset_resp = client.post(f"/admin/api/users/{user_id}/reset-key", auth=("admin", "admin123"))
+        assert reset_resp.status_code == 200
+        new_key = reset_resp.json()["api_key"]
+        assert new_key.startswith("nai_proxy_")
+        assert new_key != old_key
+
+        old_sub = client.get("/user/subscription", headers={"Authorization": f"Bearer {old_key}"})
+        assert old_sub.status_code == 401
+
+        new_sub = client.get("/user/subscription", headers={"Authorization": f"Bearer {new_key}"})
+        assert new_sub.status_code == 200
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        updated = next(row for row in users if row["id"] == user_id)
+        assert updated["api_key"] == new_key
+
+
 def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

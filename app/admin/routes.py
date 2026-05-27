@@ -74,6 +74,7 @@ async def list_users(request: Request):
     rows = db.query_all(
         """
         SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.created_at,
+               u.api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
                COALESCE(q.reserved, 0) AS anlas_reserved
@@ -94,10 +95,10 @@ async def create_user(payload: CreateUserRequest, request: Request):
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, created_at)
-            VALUES (?, ?, ?, 1, ?, ?)
+            INSERT INTO users (api_key_hash, api_key, name, tier, is_active, free_small_only, created_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
             """,
-            (hash_api_key(api_key), payload.name, payload.tier, 1 if payload.free_small_only else 0, now),
+            (hash_api_key(api_key), api_key, payload.name, payload.tier, 1 if payload.free_small_only else 0, now),
         )
         user_id = int(cursor.lastrowid)
     quota_manager.create_or_update(user_id, payload.anlas_total, payload.reset_period, payload.reset_day)
@@ -152,6 +153,19 @@ async def delete_user(user_id: int, request: Request):
 async def reset_user_quota(user_id: int, request: Request):
     request.app.state.quota_manager.reset_usage(user_id)
     return {"ok": True}
+
+
+@api_router.post("/users/{user_id}/reset-key", dependencies=[Depends(require_admin)])
+async def reset_user_key(user_id: int, request: Request):
+    db: Database = request.app.state.db
+    if db.query_one("SELECT id FROM users WHERE id = ?", (user_id,)) is None:
+        raise HTTPException(status_code=404, detail={"message": "User not found"})
+    api_key = generate_api_key()
+    db.execute(
+        "UPDATE users SET api_key_hash = ?, api_key = ? WHERE id = ?",
+        (hash_api_key(api_key), api_key, user_id),
+    )
+    return {"user_id": user_id, "api_key": api_key}
 
 
 @api_router.post("/users/{user_id}/rate-limit-rules", dependencies=[Depends(require_admin)])
@@ -298,6 +312,7 @@ async def users_page(request: Request):
     rows = db.query_all(
         """
         SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.created_at,
+               u.api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
                COALESCE(q.reserved, 0) AS anlas_reserved,
@@ -344,7 +359,7 @@ async def user_edit_page(user_id: int, request: Request):
     db: Database = request.app.state.db
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
@@ -414,6 +429,14 @@ async def reset_quota_form(user_id: int, request: Request):
         return RedirectResponse("/admin/login", status_code=303)
     await reset_user_quota(user_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+@web_router.post("/users/{user_id}/reset-key")
+async def reset_key_form(user_id: int, request: Request):
+    if not _has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    result = await reset_user_key(user_id, request)
+    return RedirectResponse(f"/admin/users/{user_id}?api_key={result['api_key']}", status_code=303)
 
 
 @web_router.post("/users/{user_id}/rate-limit-rules")
