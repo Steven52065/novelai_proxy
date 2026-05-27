@@ -40,10 +40,9 @@ class LoggingConfig(BaseModel):
     generated_images_dir: str = "generated_images"
 
 
-class ImageConversionConfig(BaseModel):
-    enabled: bool = False
-    format: Literal["jpeg", "webp"] = "webp"
-    quality: int = Field(default=85, ge=1, le=100)
+class ImageFormatConfig(BaseModel):
+    mode: Literal["request", "force"] = "request"
+    format: Literal["png", "jpeg", "webp"] = "webp"
 
 
 class CorsConfig(BaseModel):
@@ -64,7 +63,7 @@ class AppConfig(BaseModel):
     novelai: NovelAIConfig = Field(default_factory=NovelAIConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    image_conversion: ImageConversionConfig = Field(default_factory=ImageConversionConfig)
+    image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 

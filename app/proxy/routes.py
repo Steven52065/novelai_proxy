@@ -50,6 +50,7 @@ async def generate_image(
         return JSONResponse(status_code=400, content={"message": "Invalid request", "details": str(exc)})
 
     request_payload = _merge_generate_payload(dump_model_payload(req), normalized_payload)
+    _apply_image_format_policy(request_payload, request.app.state.config.image_format)
     try:
         estimated_cost = _calculate_generate_cost(
             req,
@@ -282,7 +283,6 @@ async def _submit_binary_task(
             tier=user.tier,
             action=action,
             logging_config=request.app.state.config.logging,
-            image_conversion_config=request.app.state.config.image_conversion,
             estimated_cost=estimated_cost,
             handler=handler,
             process_zip_response=process_zip_response,
@@ -487,6 +487,14 @@ def _merge_generate_payload(validated_payload: dict[str, Any], original_payload:
 def _payload_parameters(payload: dict[str, Any]) -> dict[str, Any]:
     parameters = payload.get("parameters")
     return parameters if isinstance(parameters, dict) else {}
+
+
+def _apply_image_format_policy(payload: dict[str, Any], config) -> None:
+    parameters = payload.get("parameters")
+    if not isinstance(parameters, dict):
+        return
+    if config.mode == "force":
+        parameters["image_format"] = config.format
 
 
 def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:

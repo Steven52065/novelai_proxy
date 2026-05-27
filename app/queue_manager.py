@@ -8,9 +8,9 @@ from typing import Awaitable, Callable
 
 from novelai_python._exceptions import APIError
 
-from .config import ImageConversionConfig, LoggingConfig
+from .config import LoggingConfig
 from .database import Database, utc_now_iso
-from .logging_utils import archive_zip_images, convert_zip_images, json_dumps, logger
+from .logging_utils import archive_zip_images, json_dumps, logger
 from .quota_manager import QuotaManager
 
 
@@ -25,7 +25,6 @@ class QueueItem:
     tier: str = field(compare=False)
     estimated_cost: int = field(compare=False)
     logging_config: LoggingConfig = field(compare=False)
-    image_conversion_config: ImageConversionConfig = field(compare=False)
     process_zip_response: bool = field(compare=False)
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
@@ -87,7 +86,6 @@ class ProxyQueue:
         tier: str,
         action: str,
         logging_config: LoggingConfig,
-        image_conversion_config: ImageConversionConfig,
         estimated_cost: int,
         handler: Callable[[], Awaitable[bytes]],
         process_zip_response: bool = True,
@@ -105,7 +103,6 @@ class ProxyQueue:
             tier=tier,
             estimated_cost=estimated_cost,
             logging_config=logging_config,
-            image_conversion_config=image_conversion_config,
             process_zip_response=process_zip_response,
             handler=handler,
             future=future,
@@ -133,8 +130,6 @@ class ProxyQueue:
                 )
                 logger.info("proxy request running request_id=%s queued_ms=%s", item.request_id, queued_ms)
                 payload = await item.handler()
-                if item.process_zip_response:
-                    payload = convert_zip_images(payload, item.image_conversion_config)
             except Exception as exc:
                 self.quota_manager.release(item.user_id, item.estimated_cost)
                 code, message = self._error_details(exc)

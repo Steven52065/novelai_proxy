@@ -31,6 +31,9 @@ PAYLOAD = {
 
 
 class FakeUpstream:
+    def __init__(self):
+        self.last_generate_payload = None
+
     async def generate_image_zip(self, req):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, mode="w") as zip_file:
@@ -38,6 +41,7 @@ class FakeUpstream:
         return buffer.getvalue()
 
     async def generate_image_payload_zip(self, payload):
+        self.last_generate_payload = payload
         return await self.generate_image_zip(payload)
 
     async def encode_vibe_binary(self, payload):
@@ -140,15 +144,14 @@ cors:
     return config_path
 
 
-def write_test_config_with_image_conversion(tmp_path: Path, image_format: str = "webp") -> Path:
+def write_test_config_with_image_format_policy(tmp_path: Path, mode: str = "request", image_format: str = "webp") -> Path:
     config_path = write_test_config(tmp_path)
     with config_path.open("a", encoding="utf-8") as f:
         f.write(
             f"""
-image_conversion:
-  enabled: true
+image_format:
+  mode: {mode}
   format: {image_format}
-  quality: 80
 """
         )
     return config_path
@@ -396,30 +399,72 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert Path(success_log["output_files"][0]).read_bytes() == b"fake-image"
 
 
-def test_generate_can_convert_response_images_to_webp(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_image_conversion(tmp_path, "webp")))
+def test_generate_respects_requested_official_image_format(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_image_format_policy(tmp_path, "request")))
     from app.main import app
 
     with TestClient(app) as client:
-        app.state.upstream = FakeImageUpstream()
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
         create_resp = client.post(
             "/admin/api/users",
             auth=("admin", "admin123"),
-            json={"name": "webp-user", "tier": "normal", "anlas_total": 100},
+            json={"name": "format-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"image_format": "jpeg"}}
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 201
+        assert fake_upstream.last_generate_payload["parameters"]["image_format"] == "jpeg"
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert success_log["request_payload"]["parameters"]["image_format"] == "jpeg"
+
+
+def test_generate_does_not_inject_image_format_in_request_mode(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_image_format_policy(tmp_path, "request")))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "format-default-user", "tier": "normal", "anlas_total": 100},
         )
         api_key = create_resp.json()["api_key"]
 
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
 
         assert resp.status_code == 201
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zip_file:
-            assert "image.webp" in zip_file.namelist()
-            assert "metadata.txt" in zip_file.namelist()
-            with Image.open(io.BytesIO(zip_file.read("image.webp"))) as image:
-                assert image.format == "WEBP"
+        assert "image_format" not in fake_upstream.last_generate_payload["parameters"]
+
+
+def test_generate_can_force_official_image_format(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_image_format_policy(tmp_path, "force", "webp")))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "format-force-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"image_format": "png"}}
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 201
+        assert fake_upstream.last_generate_payload["parameters"]["image_format"] == "webp"
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         success_log = next(row for row in logs if row["status"] == "success")
-        assert success_log["output_files"][0].endswith(".webp")
+        assert success_log["request_payload"]["parameters"]["image_format"] == "webp"
 
 
 def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeypatch):
