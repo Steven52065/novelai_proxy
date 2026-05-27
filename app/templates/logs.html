@@ -97,7 +97,7 @@
             <span class="status-pill">{{ log.status }}</span>
             {% endif %}
           </td>
-          <td style="font-size: 13px; color: var(--text-muted);">{{ log.created_at }}</td>
+          <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
         </tr>
         <tr class="log-detail-row">
           <td colspan="9">

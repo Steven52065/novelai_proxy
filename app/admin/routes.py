@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -22,6 +23,7 @@ security = HTTPBasic()
 optional_security = HTTPBasic(auto_error=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 SESSION_COOKIE = "novelai_proxy_admin"
+DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
 
 
 class CreateUserRequest(BaseModel):
@@ -522,9 +524,23 @@ def _row_to_dict(row):
 
 def _usage_log_to_dict(row):
     data = _row_to_dict(row)
+    data["created_at_display"] = _format_display_time(data.get("created_at"))
+    data["completed_at_display"] = _format_display_time(data.get("completed_at"))
     data["request_payload"] = _json_or_none(data.get("request_payload"))
     data["output_files"] = _json_or_empty_list(data.get("output_files"))
     return data
+
+
+def _format_display_time(value: str | None) -> str:
+    if not value:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(DISPLAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S UTC+8")
 
 
 def _queue_log_details(db: Database, request_ids: list[str]) -> dict[str, dict]:

@@ -736,6 +736,40 @@ def test_admin_login_page(tmp_path: Path, monkeypatch):
         assert "仪表盘" in dashboard.text
 
 
+def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "log-time-user", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, status, log_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("display-time-request", user_id, "generate", "nai-diffusion-3", 512, 768, 1, 1, 0, "success", "INFO", "2026-05-27T00:00:00+00:00"),
+        )
+
+        api_body = client.get("/admin/api/logs", auth=("admin", "admin123")).json()
+        log = next(row for row in api_body["logs"] if row["request_id"] == "display-time-request")
+        assert log["created_at"] == "2026-05-27T00:00:00+00:00"
+        assert log["created_at_display"] == "2026-05-27 08:00:00 UTC+8"
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        logs_page = client.get("/admin/logs")
+        assert logs_page.status_code == 200
+        assert "2026-05-27 08:00:00 UTC+8" in logs_page.text
+
+
 def test_admin_queue_status_includes_live_items(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
