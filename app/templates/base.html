@@ -3,23 +3,96 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NovelAI Proxy Admin</title>
+  <title>NovelAI Proxy Admin Panel</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/admin">NovelAI Proxy</a>
+    <a class="brand" href="/admin">
+      <i data-lucide="sparkles" style="width: 22px; height: 22px; stroke: #a5b4fc;"></i>
+      NovelAI Proxy
+    </a>
     <nav>
-      <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/admin">仪表盘</a>
-      <a class="{{ 'active' if active == 'users' else '' }}" href="/admin/users">用户</a>
-      <a class="{{ 'active' if active == 'logs' else '' }}" href="/admin/logs">日志</a>
+      <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/admin">
+        <i data-lucide="layout-dashboard" style="width: 16px; height: 16px;"></i>仪表盘
+      </a>
+      <a class="{{ 'active' if active == 'users' else '' }}" href="/admin/users">
+        <i data-lucide="users" style="width: 16px; height: 16px;"></i>用户管理
+      </a>
+      <a class="{{ 'active' if active == 'logs' else '' }}" href="/admin/logs">
+        <i data-lucide="history" style="width: 16px; height: 16px;"></i>使用日志
+      </a>
     </nav>
     <form method="post" action="/admin/logout">
-      <button class="link-button" type="submit">退出</button>
+      <button class="link-button" type="submit">
+        <i data-lucide="log-out" style="width: 16px; height: 16px;"></i>退出登录
+      </button>
     </form>
   </header>
+  
   <main class="page">
     {% block content %}{% endblock %}
   </main>
+
+  <!-- Global Lightbox for Image Previews -->
+  <div id="global-lightbox" class="lightbox">
+    <div class="lightbox-content">
+      <span class="lightbox-close"><i data-lucide="x" style="width: 20px; height: 20px;"></i></span>
+      <img id="global-lightbox-img" src="" alt="Base64 Preview">
+    </div>
+  </div>
+
+  <!-- Lucide Icons Library -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    // Global Toast Notification
+    function showToast(message) {
+      let toast = document.getElementById('global-toast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'global-toast';
+        toast.className = 'toast-msg';
+        toast.innerHTML = '<i data-lucide="info" style="width: 18px; height: 18px; stroke: #8b5cf6;"></i><span class="toast-text"></span>';
+        document.body.appendChild(toast);
+      }
+      toast.querySelector('.toast-text').textContent = message;
+      toast.classList.add('show');
+      
+      // Dynamic Lucide update for injected markup
+      lucide.createIcons();
+      
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2500);
+    }
+
+    // Lightbox for Base64 Preview Setup
+    const lightbox = document.getElementById('global-lightbox');
+    const lightboxClose = document.querySelector('#global-lightbox .lightbox-close');
+    
+    if (lightboxClose) {
+      lightboxClose.addEventListener('click', () => {
+        lightbox.classList.remove('show');
+      });
+    }
+    
+    if (lightbox) {
+      lightbox.addEventListener('click', (e) => {
+        if (e.target.id === 'global-lightbox') {
+          lightbox.classList.remove('show');
+        }
+      });
+    }
+
+    function previewBase64Image(base64Data) {
+      const img = document.getElementById('global-lightbox-img');
+      img.src = base64Data;
+      lightbox.classList.add('show');
+    }
+  </script>
 </body>
 </html>

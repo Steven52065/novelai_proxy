@@ -1,56 +1,338 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>使用日志</h1>
-<section class="panel">
-  <form method="get" action="/admin/logs" class="inline-form">
-    <select name="user_id">
-      <option value="">全部用户</option>
-      {% for user in users %}
-      <option value="{{ user.id }}" {{ "selected" if selected_user_id == user.id else "" }}>{{ user.name }}</option>
-      {% endfor %}
-    </select>
-    <input name="limit" type="number" min="1" max="500" value="{{ limit }}">
-    <button type="submit">筛选</button>
+<div class="page-head">
+  <h1>
+    <i data-lucide="history" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    使用日志审计
+  </h1>
+</div>
+
+<section class="panel" style="padding: 20px 24px; margin-bottom: 24px;">
+  <form method="get" action="/admin/logs" class="inline-form" style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
+    <label style="flex: 1; min-width: 200px; gap: 6px;">
+      筛选发起用户
+      <select name="user_id">
+        <option value="">全部用户账号</option>
+        {% for user in users %}
+        <option value="{{ user.id }}" {{ "selected" if selected_user_id == user.id else "" }}>{{ user.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    
+    <label style="width: 140px; gap: 6px;">
+      展示日志条数
+      <input name="limit" type="number" min="1" max="500" value="{{ limit }}" placeholder="条数上限">
+    </label>
+    
+    <button type="submit" style="min-height: 44px; padding: 0 24px;">
+      <i data-lucide="search" style="width: 16px; height: 16px;"></i>
+      执行筛选
+    </button>
   </form>
-  <table>
-    <thead>
-      <tr><th>ID</th><th>级别</th><th>用户</th><th>动作</th><th>模型</th><th>尺寸</th><th>预估/实际</th><th>状态</th><th>时间</th></tr>
-    </thead>
-    <tbody>
-      {% for log in logs %}
-      <tr>
-        <td>{{ log.request_id[:8] }}</td>
-        <td><span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span></td>
-        <td>{{ log.user_name }}</td>
-        <td>{{ log.action }}</td>
-        <td>{{ log.model or "" }}</td>
-        <td>{{ log.width or "" }}x{{ log.height or "" }}</td>
-        <td>{{ log.estimated_anlas_cost }}/{{ log.final_anlas_cost if log.final_anlas_cost is not none else "" }}</td>
-        <td>{{ log.status }}</td>
-        <td>{{ log.created_at }}</td>
-      </tr>
-      <tr class="log-detail-row">
-        <td colspan="9">
-          <details>
-            <summary>请求参数和输出文件</summary>
-            {% if log.error_message %}
-            <p class="error">{{ log.error_code }}：{{ log.error_message }}</p>
-            {% endif %}
-            <pre>{{ log.request_payload | tojson(indent=2) }}</pre>
-            {% if log.output_files %}
-            <ul class="file-list">
-              {% for path in log.output_files %}
-              <li><code>{{ path }}</code></li>
-              {% endfor %}
-            </ul>
-            {% else %}
-            <p class="muted">无本地输出文件</p>
-            {% endif %}
-          </details>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
 </section>
+
+<section class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>日志 ID</th>
+          <th>记录级别</th>
+          <th>操作用户</th>
+          <th>API动作</th>
+          <th>使用模型</th>
+          <th>图像尺寸</th>
+          <th>Anlas (预估/实际)</th>
+          <th>运行状态</th>
+          <th>创建时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not logs %}
+        <tr class="empty-row">
+          <td colspan="9" style="text-align: center; padding: 48px 0;">
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
+              <i data-lucide="info" style="width:32px; height:32px; stroke:#64748b;"></i>
+              <span class="muted">当前没有任何符合条件的日志记录</span>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+        
+        {% for log in logs %}
+        <tr style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'error' %}var(--danger){% else %}var(--warning){% endif %};">
+          <td class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}</td>
+          <td>
+            <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
+          </td>
+          <td style="font-weight: 700; color: #fff;">{{ log.user_name }}</td>
+          <td>
+            <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">{{ log.action }}</span>
+          </td>
+          <td>
+            {% if log.model %}
+            <span class="badge badge-normal" style="font-size: 11px;">{{ log.model }}</span>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="mono">
+            {% if log.width and log.height %}
+            <code>{{ log.width }}x{{ log.height }}</code>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="mono">
+            <span style="color: #94a3b8;">{{ log.estimated_anlas_cost }}</span>
+            <span style="color: rgba(255,255,255,0.15)">/</span>
+            <span style="color: #34d399; font-weight: 700;">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
+          </td>
+          <td>
+            {% if log.status == 'success' %}
+            <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">成功</span>
+            {% elif log.status == 'error' %}
+            <span class="status-pill status-error">失败</span>
+            {% else %}
+            <span class="status-pill">{{ log.status }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size: 13px; color: var(--text-muted);">{{ log.created_at }}</td>
+        </tr>
+        <tr class="log-detail-row">
+          <td colspan="9">
+            <details class="log-details-block" data-request-id="{{ log.request_id }}">
+              <summary>展开请求参数及输出文件</summary>
+              
+              <div style="margin-top: 16px; display: grid; gap: 16px; animation: slideDown 0.25s ease-out;">
+                {% if log.error_message %}
+                <div class="error" style="margin-bottom: 0;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i>
+                    <strong style="color:#f87171;">错误 {{ log.error_code }}：</strong>
+                    <span>{{ log.error_message }}</span>
+                  </div>
+                </div>
+                {% endif %}
+
+                <!-- Raw JSON payload store hidden -->
+                <script type="application/json" id="raw-payload-{{ log.request_id }}">{{ log.request_payload | tojson }}</script>
+                
+                <div>
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
+                      <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
+                      请求与响应 Payload 数据 (含智能安全截断)
+                    </span>
+                    <button class="secondary btn-copy-raw-payload" data-request-id="{{ log.request_id }}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
+                      <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                      <span>复制完整 JSON</span>
+                    </button>
+                  </div>
+                  <pre id="pretty-payload-{{ log.request_id }}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+                </div>
+
+                <div>
+                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+                    本地生成的图片输出路径：
+                  </span>
+                  {% if log.output_files %}
+                  <ul class="file-list">
+                    {% for path in log.output_files %}
+                    <li style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
+                      <i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i>
+                      <code>{{ path }}</code>
+                    </li>
+                    {% endfor %}
+                  </ul>
+                  {% else %}
+                  <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
+                    <i data-lucide="info" style="width: 14px; height: 14px;"></i>
+                    未留存本地文件 (例如小图直传或非生图请求)
+                  </p>
+                  {% endif %}
+                </div>
+              </div>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Advanced Lazy Loading and Base64 Truncation Engine -->
+<script>
+(() => {
+  // Safe deep clone & scan function to truncate huge Base64 strings in the object tree
+  // Stash large base64 values into a temporary cache map for copier and previewer
+  const base64Cache = new Map();
+  let cacheCounter = 0;
+
+  function truncateBase64(obj) {
+    if (typeof obj === 'string') {
+      if (obj.length > 256) {
+        const isBase64Image = obj.startsWith('data:image/') || obj.length > 5000;
+        
+        if (isBase64Image) {
+          cacheCounter++;
+          const cacheKey = `b64_ref_${cacheCounter}`;
+          base64Cache.set(cacheKey, obj);
+          
+          const kbSize = Math.round(obj.length * 0.75 / 1024);
+          
+          return {
+            __type__: "Base64ImageTruncated",
+            cacheKey: cacheKey,
+            lengthBytes: obj.length,
+            approxSizeKb: kbSize,
+            preview: obj.substring(0, 50) + "..."
+          };
+        }
+      }
+      return obj;
+    }
+    
+    if (Array.isArray(obj)) {
+      return obj.map(truncateBase64);
+    }
+    
+    if (obj !== null && typeof obj === 'object') {
+      const cloned = {};
+      for (const k in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, k)) {
+          cloned[k] = truncateBase64(obj[k]);
+        }
+      }
+      return cloned;
+    }
+    
+    return obj;
+  }
+
+  // Custom Formatter to render JSON with embedded Interactive Buttons for Truncated elements
+  function customJsonFormatter(obj, indent = 2) {
+    const jsonStr = JSON.stringify(obj, null, indent);
+    
+    // Scan and replace our custom Base64ImageTruncated object representations with pretty interactive HTML
+    const pattern = /\{\n\s+"__type__": "Base64ImageTruncated",\n\s+"cacheKey": "([^"]+)",\n\s+"lengthBytes": (\d+),\n\s+"approxSizeKb": (\d+),\n\s+"preview": "([^"]+)"\n\s+\}/g;
+    
+    return jsonStr.replace(pattern, (match, cacheKey, bytes, kbSize, preview) => {
+      let previewLabel = kbSize > 1024 
+        ? `${(kbSize / 1024).toFixed(2)} MB` 
+        : `${kbSize} KB`;
+        
+      return `\n<div class="base64-truncated">
+  <i data-lucide="image-off" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+  <span>[超长 Base64 图像数据 | 大小: ${previewLabel}]</span>
+  <div class="base64-actions">
+    <button class="base64-btn copy-b64-btn" data-cache-key="${cacheKey}" type="button">复制完整数据</button>
+    <button class="base64-btn preview-b64-btn" data-cache-key="${cacheKey}" type="button">预览生成图片</button>
+  </div>
+</div>\n`;
+    });
+  }
+
+  // Bind toggle events to `<details>` blocks for lazy parsing to prevent render delays on load
+  document.querySelectorAll(".log-details-block").forEach((details) => {
+    details.addEventListener("toggle", function onToggle(e) {
+      if (!details.open) return;
+      
+      const requestId = details.dataset.requestId;
+      const prettyContainer = document.getElementById(`pretty-payload-${requestId}`);
+      
+      // If already rendered, do nothing
+      if (prettyContainer && prettyContainer.getAttribute("data-loaded") === "true") {
+        return;
+      }
+      
+      try {
+        const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+        if (!rawJsonEl) {
+          prettyContainer.textContent = "解析失败：找不到原始数据容器。";
+          return;
+        }
+        
+        const rawObj = JSON.parse(rawJsonEl.textContent);
+        const processedObj = truncateBase64(rawObj);
+        
+        // Output styled HTML inside the pre block
+        prettyContainer.innerHTML = customJsonFormatter(processedObj, 2);
+        prettyContainer.setAttribute("data-loaded", "true");
+        
+        // Dynamically initialize Lucide icons for injected buttons
+        lucide.createIcons();
+        
+        // Bind actions to truncated buttons
+        prettyContainer.querySelectorAll(".copy-b64-btn").forEach((btn) => {
+          btn.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            const key = btn.dataset.cacheKey;
+            const fullBase64 = base64Cache.get(key);
+            if (fullBase64) {
+              await navigator.clipboard.writeText(fullBase64);
+              showToast("完整 Base64 图片数据已复制到剪贴板！");
+            }
+          });
+        });
+        
+        prettyContainer.querySelectorAll(".preview-b64-btn").forEach((btn) => {
+          btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            const key = btn.dataset.cacheKey;
+            let fullBase64 = base64Cache.get(key);
+            if (fullBase64) {
+              // Ensure it has standard data URL header
+              if (!fullBase64.startsWith("data:")) {
+                fullBase64 = `data:image/png;base64,${fullBase64}`;
+              }
+              previewBase64Image(fullBase64);
+            }
+          });
+        });
+        
+      } catch (err) {
+        prettyContainer.textContent = `格式化 JSON 失败: ${err.message}`;
+      }
+    });
+  });
+
+  // Global full JSON payload copier
+  document.querySelectorAll(".btn-copy-raw-payload").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const requestId = btn.dataset.requestId;
+      const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+      
+      if (rawJsonEl) {
+        try {
+          await navigator.clipboard.writeText(rawJsonEl.textContent);
+          
+          const labelSpan = btn.querySelector('span');
+          const icon = btn.querySelector('i');
+          const originalText = labelSpan.textContent;
+          const originalIcon = icon.getAttribute('data-lucide');
+          
+          btn.style.borderColor = 'var(--success)';
+          labelSpan.textContent = "已复制";
+          labelSpan.style.color = 'var(--success)';
+          icon.setAttribute('data-lucide', 'check');
+          lucide.createIcons();
+          
+          window.setTimeout(() => {
+            btn.style.borderColor = '';
+            labelSpan.textContent = originalText;
+            labelSpan.style.color = '';
+            icon.setAttribute('data-lucide', originalIcon);
+            lucide.createIcons();
+          }, 1500);
+        } catch (err) {
+          showToast("复制失败，请手动选择复制。");
+        }
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

@@ -1,77 +1,253 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-head">
-  <h1>用户</h1>
+  <h1>
+    <i data-lucide="users" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    用户管理
+  </h1>
+  <!-- Open Drawer Trigger Button -->
+  <button type="button" id="open-drawer-btn">
+    <i data-lucide="user-plus" style="width: 18px; height: 18px;"></i>
+    创建新用户
+  </button>
 </div>
+
+<!-- Slide-over Drawer System -->
+<div class="drawer-container">
+  <div id="user-drawer-overlay" class="drawer-overlay"></div>
+  <div id="user-drawer" class="drawer">
+    <div class="drawer-head">
+      <h2 style="font-size: 18px; margin: 0;">
+        <i data-lucide="user-plus" style="width: 18px; height: 18px; stroke: #8b5cf6;"></i>
+        创建用户账号
+      </h2>
+      <button type="button" id="close-drawer-btn" class="drawer-close" style="background:transparent; border:0; min-height:auto; padding:0; box-shadow:none; cursor:pointer;">
+        <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+      </button>
+    </div>
+    
+    <form method="post" action="/admin/users" class="stack">
+      <label>
+        备注名称
+        <input name="name" placeholder="例如：张三、测试组" required>
+      </label>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <label>
+          用户等级
+          <select name="tier">
+            <option value="normal">normal (普通)</option>
+            <option value="vip">vip (高级)</option>
+          </select>
+        </label>
+        
+        <label>
+          Anlas 总额度
+          <input name="anlas_total" type="number" min="0" value="0">
+        </label>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
+        <label>
+          额度重置周期
+          <select name="reset_period">
+            <option value="month">month (按月)</option>
+            <option value="week">week (按周)</option>
+            <option value="day">day (按天)</option>
+            <option value="never">never (从不重置)</option>
+          </select>
+        </label>
+        
+        <label>
+          重置日期 (日)
+          <input name="reset_day" type="number" min="0" max="28" placeholder="1-28或0">
+        </label>
+      </div>
+
+      <div style="padding: 6px 0;">
+        <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <input name="free_small_only" type="checkbox">
+          仅允许生成免费小图 (不消耗额度)
+        </label>
+      </div>
+
+      <button type="submit" style="width: 100%; margin-top: 14px;">
+        <i data-lucide="check" style="width: 18px; height: 18px;"></i>
+        确认创建用户
+      </button>
+    </form>
+  </div>
+</div>
+
 {% if request.query_params.get('api_key') %}
-<section class="notice">
-  新 API Key：<code id="new-api-key">{{ request.query_params.get('api_key') }}</code>
-  <button class="secondary copy-button" type="button" data-copy-target="new-api-key">复制</button>
+<section class="notice" style="animation: fadeIn 0.4s ease-out;">
+  <div style="display: flex; align-items: center; gap: 10px;">
+    <i data-lucide="key" style="width: 20px; height: 20px; stroke: #3b82f6;"></i>
+    <div>
+      <span style="font-size: 13px; color: #94a3b8; display: block;">成功创建用户！请立即复制并保存您的新 API Key：</span>
+      <code id="new-api-key" style="font-size: 15px; font-weight: 700; color: #fff; background: rgba(59,130,246,0.15);">{{ request.query_params.get('api_key') }}</code>
+    </div>
+  </div>
+  <button class="secondary copy-button" type="button" data-copy-target="new-api-key" style="min-height: 38px; padding: 6px 14px;">
+    <i data-lucide="copy" style="width: 14px; height: 14px;"></i>
+    <span>复制</span>
+  </button>
 </section>
 {% endif %}
-<section class="panel">
-  <h2>创建用户</h2>
-  <form method="post" action="/admin/users" class="form-grid">
-    <label>备注名<input name="name" required></label>
-    <label>等级
-      <select name="tier">
-        <option value="normal">normal</option>
-        <option value="vip">vip</option>
-      </select>
-    </label>
-    <label>Anlas 总额度<input name="anlas_total" type="number" min="0" value="0"></label>
-    <label>重置周期
-      <select name="reset_period">
-        <option value="month">month</option>
-        <option value="week">week</option>
-        <option value="day">day</option>
-        <option value="never">never</option>
-      </select>
-    </label>
-    <label>重置日<input name="reset_day" type="number" min="0" max="28"></label>
-    <label class="check"><input name="free_small_only" type="checkbox"> 仅限免费小图</label>
-    <button type="submit">创建</button>
-  </form>
+
+<section class="panel" style="padding-top: 24px;">
+  <div class="section-head" style="border-bottom: none; margin-bottom: 0; padding-bottom: 8px;">
+    <div>
+      <h2 style="font-size: 18px;">
+        <i data-lucide="list" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        用户列表
+      </h2>
+      <p class="muted" style="margin-top: 4px;">查看当前系统中注册的全部代理用户及其额度和状态</p>
+    </div>
+  </div>
+
+  <div class="table-wrap" style="margin-top: 12px;">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>备注名</th>
+          <th>账号等级</th>
+          <th>状态</th>
+          <th>功能限制</th>
+          <th>API 密钥凭证</th>
+          <th>Anlas 额度 (已用 + 锁定 / 总额)</th>
+          <th>额度重置规则</th>
+          <th>操作选项</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td style="font-weight: 600; color: #64748b;">#{{ user.id }}</td>
+          <td>
+            <div style="font-weight: 700; color: #fff;">{{ user.name }}</div>
+          </td>
+          <td>
+            {% if user.tier == 'vip' %}
+            <span class="badge badge-vip">VIP</span>
+            {% else %}
+            <span class="badge badge-normal">Normal</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if user.is_active %}
+            <span class="badge badge-active">启用中</span>
+            {% else %}
+            <span class="badge badge-inactive">已禁用</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if user.free_small_only %}
+            <span class="badge" style="background: rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); color:#f59e0b;">仅免费小图</span>
+            {% else %}
+            <span class="badge" style="background: rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:#34d399;">不限图规格</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if user.api_key %}
+            <button class="secondary copy-button" type="button" data-copy-value="{{ user.api_key }}" style="min-height: 30px; padding: 4px 10px; font-size: 12px;">
+              <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+              <span>复制 Key</span>
+            </button>
+            {% else %}
+            <span class="muted" style="font-size: 12px; display: inline-flex; align-items: center; gap: 4px;">
+              <i data-lucide="help-circle" style="width: 12px; height: 12px;"></i>需在编辑中重置
+            </span>
+            {% endif %}
+          </td>
+          <td class="mono" style="font-weight: 500;">
+            <span style="color: #fca5a5;">{{ user.anlas_used }}</span> 
+            <span style="color: #94a3b8; font-size: 12px;">+</span> 
+            <span style="color: #fde047;">{{ user.anlas_reserved }}</span> 
+            <span style="color: rgba(255,255,255,0.2);">/</span> 
+            <span style="color: #34d399; font-weight: 700;">{{ user.anlas_total }}</span>
+          </td>
+          <td style="font-size: 13px;">
+            <div style="font-weight: 600; color: #e2e8f0; display: inline-flex; align-items: center; gap: 4px;">
+              <i data-lucide="refresh-cw" style="width: 12px; height: 12px; color: #a5b4fc;"></i>
+              {{ user.reset_period }}
+            </div>
+            {% if user.reset_period != 'never' %}
+            <span class="muted" style="font-size: 12px; display: block; margin-top: 2px;">每月第 {{ user.reset_day }} 天</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/admin/users/{{ user.id }}" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 600;">
+              <i data-lucide="edit" style="width: 14px; height: 14px;"></i>
+              编辑管理
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
-<section class="panel">
-  <h2>用户列表</h2>
-  <table>
-    <thead>
-      <tr><th>ID</th><th>备注名</th><th>等级</th><th>状态</th><th>限制</th><th>API Key</th><th>Anlas</th><th>重置</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for user in users %}
-      <tr>
-        <td>{{ user.id }}</td>
-        <td>{{ user.name }}</td>
-        <td>{{ user.tier }}</td>
-        <td>{{ "启用" if user.is_active else "禁用" }}</td>
-        <td>{{ "仅免费" if user.free_small_only else "不限" }}</td>
-        <td>
-          {% if user.api_key %}
-          <button class="secondary copy-button" type="button" data-copy-value="{{ user.api_key }}">复制</button>
-          {% else %}
-          <span class="muted">需重置</span>
-          {% endif %}
-        </td>
-        <td>{{ user.anlas_used }} + {{ user.anlas_reserved }} / {{ user.anlas_total }}</td>
-        <td>{{ user.reset_period }} {{ user.reset_day }}</td>
-        <td><a href="/admin/users/{{ user.id }}">编辑</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+
 <script>
   document.querySelectorAll(".copy-button").forEach((button) => {
     button.addEventListener("click", async () => {
       const targetId = button.dataset.copyTarget;
       const text = targetId ? document.getElementById(targetId).textContent : button.dataset.copyValue;
-      await navigator.clipboard.writeText(text);
-      const original = button.textContent;
-      button.textContent = "已复制";
-      window.setTimeout(() => { button.textContent = original; }, 1200);
+      
+      try {
+        await navigator.clipboard.writeText(text);
+        
+        // Success animation feedback
+        const originalText = button.querySelector('span').textContent;
+        const icon = button.querySelector('i');
+        const originalIcon = icon.getAttribute('data-lucide');
+        
+        button.style.borderColor = 'var(--success)';
+        button.querySelector('span').textContent = "已复制";
+        button.querySelector('span').style.color = 'var(--success)';
+        icon.setAttribute('data-lucide', 'check');
+        lucide.createIcons();
+        
+        window.setTimeout(() => { 
+          button.style.borderColor = '';
+          button.querySelector('span').textContent = originalText;
+          button.querySelector('span').style.color = '';
+          icon.setAttribute('data-lucide', originalIcon);
+          lucide.createIcons();
+        }, 1500);
+      } catch (err) {
+        showToast("复制失败，请手动选择复制。");
+      }
     });
   });
+
+  // Slide-over Drawer JavaScript Control
+  const openDrawerBtn = document.getElementById("open-drawer-btn");
+  const closeDrawerBtn = document.getElementById("close-drawer-btn");
+  const drawerOverlay = document.getElementById("user-drawer-overlay");
+  const drawer = document.getElementById("user-drawer");
+
+  if (openDrawerBtn && drawer && drawerOverlay) {
+    openDrawerBtn.addEventListener("click", () => {
+      drawer.classList.add("show");
+      drawerOverlay.classList.add("show");
+    });
+  }
+
+  function hideDrawer() {
+    if (drawer && drawerOverlay) {
+      drawer.classList.remove("show");
+      drawerOverlay.classList.remove("show");
+    }
+  }
+
+  if (closeDrawerBtn) {
+    closeDrawerBtn.addEventListener("click", hideDrawer);
+  }
+  if (drawerOverlay) {
+    drawerOverlay.addEventListener("click", hideDrawer);
+  }
 </script>
 {% endblock %}

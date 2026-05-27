@@ -1,109 +1,361 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-head">
-  <h1>编辑用户 #{{ user.id }}</h1>
-  <a href="/admin/users">返回列表</a>
+  <h1>
+    <i data-lucide="user-cog" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    配置用户 #{{ user.id }}
+  </h1>
+  <a href="/admin/users" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+    <i data-lucide="arrow-left" style="width: 16px; height: 16px;"></i>
+    返回列表
+  </a>
 </div>
+
 {% if request.query_params.get('api_key') %}
-<section class="notice">
-  新 API Key：<code id="new-api-key">{{ request.query_params.get('api_key') }}</code>
-  <button class="secondary copy-button" type="button" data-copy-target="new-api-key">复制</button>
+<section class="notice" style="animation: fadeIn 0.4s ease-out;">
+  <div style="display: flex; align-items: center; gap: 10px;">
+    <i data-lucide="key" style="width: 20px; height: 20px; stroke: #3b82f6;"></i>
+    <div>
+      <span style="font-size: 13px; color: #94a3b8; display: block;">成功重置 API Key！请立即保存它，离开此页后将无法再次完整查阅：</span>
+      <code id="new-api-key" style="font-size: 15px; font-weight: 700; color: #fff; background: rgba(59,130,246,0.15);">{{ request.query_params.get('api_key') }}</code>
+    </div>
+  </div>
+  <button class="secondary copy-button" type="button" data-copy-target="new-api-key" style="min-height: 38px; padding: 6px 14px;">
+    <i data-lucide="copy" style="width: 14px; height: 14px;"></i>
+    <span>复制 Key</span>
+  </button>
 </section>
 {% endif %}
-<section class="panel">
-  <div class="key-row">
-    <div>
-      <h2>API Key</h2>
-      {% if user.api_key %}
-      <code id="user-api-key">{{ user.api_key }}</code>
-      {% else %}
-      <p class="muted">此用户是在保存明文 key 前创建的，需重置后才能复制。</p>
-      {% endif %}
-    </div>
-    <div class="actions">
-      {% if user.api_key %}
-      <button class="secondary copy-button" type="button" data-copy-target="user-api-key">复制 Key</button>
-      {% endif %}
-      <form method="post" action="/admin/users/{{ user.id }}/reset-key">
-        <button class="danger" type="submit">重置 Key</button>
-      </form>
-    </div>
-  </div>
-  <form method="post" action="/admin/users/{{ user.id }}" class="form-grid">
-    <label>备注名<input name="name" value="{{ user.name }}" required></label>
-    <label>等级
-      <select name="tier">
-        <option value="normal" {{ "selected" if user.tier == "normal" else "" }}>normal</option>
-        <option value="vip" {{ "selected" if user.tier == "vip" else "" }}>vip</option>
-      </select>
-    </label>
-    <label class="check"><input name="is_active" type="checkbox" {{ "checked" if user.is_active else "" }}> 启用</label>
-    <label class="check"><input name="free_small_only" type="checkbox" {{ "checked" if user.free_small_only else "" }}> 仅限免费小图</label>
-    <label>Anlas 总额度<input name="anlas_total" type="number" min="0" value="{{ user.anlas_total or 0 }}"></label>
-    <label>重置周期
-      <select name="reset_period">
-        {% for period in ["month", "week", "day", "never"] %}
-        <option value="{{ period }}" {{ "selected" if user.reset_period == period else "" }}>{{ period }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>重置日<input name="reset_day" type="number" min="0" max="28" value="{{ user.reset_day or 0 }}"></label>
-    <button type="submit">保存</button>
-  </form>
-  <div class="actions">
-    <form method="post" action="/admin/users/{{ user.id }}/reset-quota"><button type="submit">重置额度</button></form>
-    <form method="post" action="/admin/users/{{ user.id }}/delete"><button class="danger" type="submit">删除用户</button></form>
-  </div>
-</section>
-<section class="panel">
-  <h2>限频规则</h2>
-  <form method="post" action="/admin/users/{{ user.id }}/rate-limit-rules" class="inline-form">
-    <select name="period">
-      <option value="minute">minute</option>
-      <option value="hour">hour</option>
-      <option value="day">day</option>
-      <option value="month">month</option>
-    </select>
-    <input name="max_requests" type="number" min="1" placeholder="次数上限" required>
-    <button type="submit">添加规则</button>
-  </form>
-  <table>
-    <thead><tr><th>ID</th><th>周期</th><th>上限</th><th>状态</th><th></th></tr></thead>
-    <tbody>
-      {% for rule in rules %}
-      <tr>
-        <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}">
-        <td>{{ rule.id }}<input type="hidden" name="user_id" value="{{ user.id }}"></td>
-        <td>
-          <select name="period">
-            {% for period in ["minute", "hour", "day", "month"] %}
-            <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
-            {% endfor %}
-          </select>
-        </td>
-        <td><input name="max_requests" type="number" min="1" value="{{ rule.max_requests }}"></td>
-        <td><label class="check"><input name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }}> 启用</label></td>
-        <td><button type="submit">保存</button></td>
+
+<div class="layout-grid">
+  <!-- Left Column: Base Info, Credentials and Quotas -->
+  <div class="stack">
+    <!-- API Key Card with masking -->
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="shield-check" style="width: 18px; height: 18px; stroke: #8b5cf6;"></i>
+        身份凭证安全卡片
+      </h2>
+      
+      <div class="api-key-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span class="muted" style="font-size: 12px; font-weight: 600;">API Key 访问凭证</span>
+          <span style="font-size: 11px; background: rgba(59,130,246,0.1); color: #60a5fa; padding: 2px 6px; border-radius: 4px;">加密传输</span>
+        </div>
+        
+        {% if user.api_key %}
+        <div class="api-key-wrapper">
+          <!-- Default masked state -->
+          <div id="api-key-display" class="api-key-code masked">••••••••••••••••••••••••••••••••</div>
+          
+          <button id="toggle-key-visibility" class="secondary" type="button" style="min-height: 40px; width: 40px; padding: 0;" title="显示/隐藏密钥">
+            <i data-lucide="eye" style="width: 16px; height: 16px;"></i>
+          </button>
+          
+          <button class="secondary copy-button" type="button" data-copy-value="{{ user.api_key }}" style="min-height: 40px; padding: 0 14px;" title="复制密钥">
+            <i data-lucide="copy" style="width: 16px; height: 16px;"></i>
+            <span>复制</span>
+          </button>
+        </div>
+        {% else %}
+        <p class="muted" style="font-size: 13px; padding: 8px 0; display: inline-flex; align-items: center; gap: 6px;">
+          <i data-lucide="alert-triangle" style="width: 16px; height: 16px; color: #f59e0b;"></i>
+          此用户在保存明文机制上线前创建，需重置密钥后才能查阅复制。
+        </p>
+        {% endif %}
+      </div>
+
+      <div style="display: flex; gap: 12px; margin-top: 14px;">
+        <form method="post" action="/admin/users/{{ user.id }}/reset-key" style="flex: 1;" onsubmit="return confirm('确认要重置此用户的 API Key 吗？重置后原 Key 将立即失效！');">
+          <button class="danger" type="submit" style="width: 100%; min-height: 40px; box-shadow: none;">
+            <i data-lucide="key-round" style="width: 16px; height: 16px;"></i>
+            重置并分发新密钥
+          </button>
         </form>
-        <td>
-          <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}/delete">
-            <input type="hidden" name="user_id" value="{{ user.id }}">
-            <button type="submit">删除</button>
+      </div>
+    </section>
+
+    <!-- Quota Visual Card -->
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="donut-chart" style="width: 18px; height: 18px; stroke: #10b981;"></i>
+        额度使用状态
+      </h2>
+      
+      <!-- Calculate Used Percentage -->
+      {% set total = user.anlas_total or 0 %}
+      {% set used = user.anlas_used or 0 %}
+      {% set reserved = user.anlas_reserved or 0 %}
+      {% set active_used = used + reserved %}
+      {% set percent = (active_used / total * 100) if total > 0 else 0 %}
+      {% set percent_int = percent | int %}
+      
+      <div class="quota-progress-container">
+        <div class="quota-progress-label">
+          <span>
+            <strong style="color: #fff;">{{ active_used }}</strong> 
+            <span style="font-size: 12px;">(已扣除 {{ used }} + 锁定 {{ reserved }})</span>
+          </span>
+          <span style="font-weight: 700;">{{ percent_int }}% / 100%</span>
+        </div>
+        
+        <div class="quota-progress-bar-bg">
+          {% if percent_int >= 90 %}
+            <div class="quota-progress-bar-fill danger" style="width: {{ percent_int if percent_int <= 100 else 100 }}%"></div>
+          {% elif percent_int >= 70 %}
+            <div class="quota-progress-bar-fill warning" style="width: {{ percent_int if percent_int <= 100 else 100 }}%"></div>
+          {% else %}
+            <div class="quota-progress-bar-fill normal" style="width: {{ percent_int if percent_int <= 100 else 100 }}%"></div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; margin-top: 24px; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.02); padding: 14px; border-radius: var(--border-radius-md); border: 1px solid rgba(255,255,255,0.04);">
+        <div>
+          <span class="muted" style="font-size: 12px; display: block;">重置规则</span>
+          <span style="font-weight: 700; color: #fff; font-size: 14px; display: inline-flex; align-items: center; gap: 4px; margin-top: 4px;">
+            <i data-lucide="calendar" style="width: 14px; height: 14px; color: #a5b4fc;"></i>
+            周期：{{ user.reset_period }}
+            {% if user.reset_period != 'never' %}
+            <span class="muted">/ 月度第 {{ user.reset_day }} 天</span>
+            {% endif %}
+          </span>
+        </div>
+        <form method="post" action="/admin/users/{{ user.id }}/reset-quota" onsubmit="return confirm('确认手动重置此用户的 Anlas 消耗统计吗？这将清空已用和锁定额度！');">
+          <button class="secondary" type="submit" style="min-height: 38px; padding: 0 16px;">
+            <i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i>
+            重置已用额度
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Base Profile Settings -->
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 20px;">
+        <i data-lucide="settings" style="width: 18px; height: 18px; stroke: #3b82f6;"></i>
+        修改基本配置信息
+      </h2>
+      
+      <form method="post" action="/admin/users/{{ user.id }}" class="stack">
+        <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
+          <label>
+            备注名称
+            <input name="name" value="{{ user.name }}" placeholder="备注名称" required>
+          </label>
+          
+          <label>
+            等级
+            <select name="tier">
+              <option value="normal" {{ "selected" if user.tier == "normal" else "" }}>normal (普通)</option>
+              <option value="vip" {{ "selected" if user.tier == "vip" else "" }}>vip (高级)</option>
+            </select>
+          </label>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
+          <label>
+            额度重置周期
+            <select name="reset_period">
+              {% for period in ["month", "week", "day", "never"] %}
+              <option value="{{ period }}" {{ "selected" if user.reset_period == period else "" }}>{{ period }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          
+          <label>
+            重置日期 (日)
+            <input name="reset_day" type="number" min="0" max="28" value="{{ user.reset_day or 0 }}">
+          </label>
+        </div>
+
+        <label>
+          Anlas 总额度上限
+          <input name="anlas_total" type="number" min="0" value="{{ user.anlas_total or 0 }}">
+        </label>
+
+        <div style="display: flex; gap: 20px; padding: 6px 0;">
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="is_active" type="checkbox" {{ "checked" if user.is_active else "" }}>
+            启用账号
+          </label>
+          
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="free_small_only" type="checkbox" {{ "checked" if user.free_small_only else "" }}>
+            仅限免费小图
+          </label>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
+          <button type="submit" style="min-height: 42px; padding: 0 24px;">
+            <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+            保存修改配置
+          </button>
+          
+          <form method="post" action="/admin/users/{{ user.id }}/delete" onsubmit="return confirm('警告：确定要彻底删除此用户及其全部频率限制规则吗？此操作不可逆！');" style="display: inline;">
+            <button class="danger" type="submit" style="min-height: 42px; padding: 0 16px;">
+              <i data-lucide="user-x" style="width: 16px; height: 16px;"></i>
+              注销删除用户
+            </button>
           </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <!-- Right Column: Rate Limit Management -->
+  <div class="stack">
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 10px;">
+        <i data-lucide="gauge" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+        频率限制管理
+      </h2>
+      <p class="muted" style="font-size: 13px; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px;">
+        为该用户添加和编辑 API 频率限制（Rate Limits），防止滥用。
+      </p>
+
+      <form method="post" action="/admin/users/{{ user.id }}/rate-limit-rules" class="inline-form" style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: var(--border-radius-md); border:1px solid rgba(255,255,255,0.04); margin-bottom: 24px; display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 12px; align-items: end;">
+        <label style="gap: 4px;">
+          选择周期
+          <select name="period" style="min-height: 38px;">
+            <option value="minute">minute (分钟)</option>
+            <option value="hour">hour (小时)</option>
+            <option value="day">day (天)</option>
+            <option value="month">month (月)</option>
+          </select>
+        </label>
+        
+        <label style="gap: 4px;">
+          请求上限 (次)
+          <input name="max_requests" type="number" min="1" placeholder="例如：10" required style="min-height: 38px;">
+        </label>
+        
+        <button type="submit" style="min-height: 38px; padding: 0 16px;">
+          <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
+          添加
+        </button>
+      </form>
+
+      {% if not rules %}
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 48px 0; gap:8px;">
+        <i data-lucide="sparkles" style="width:32px; height:32px; stroke:#64748b;"></i>
+        <span class="muted" style="font-size: 13px;">暂未配置限频规则（不限频）</span>
+      </div>
+      {% else %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>重置周期</th>
+              <th>最大请求数</th>
+              <th>状态状态</th>
+              <th>保存</th>
+              <th>删除</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rule in rules %}
+            <tr>
+              <!-- Edit form per rule -->
+              <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}">
+                <td style="color:#64748b; font-weight:600;">{{ rule.id }}<input type="hidden" name="user_id" value="{{ user.id }}"></td>
+                <td>
+                  <select name="period" style="min-height:32px; padding: 4px 8px; font-size:13px; background:rgba(0,0,0,0.3);">
+                    {% for period in ["minute", "hour", "day", "month"] %}
+                    <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td>
+                  <input name="max_requests" type="number" min="1" value="{{ rule.max_requests }}" style="min-height:32px; padding: 4px 8px; font-size:13px; width:80px; background:rgba(0,0,0,0.3);">
+                </td>
+                <td>
+                  <label class="check" style="min-height:auto; font-size: 13px; font-weight:500;">
+                    <input name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }} style="width:14px; height:14px;">
+                    激活
+                  </label>
+                </td>
+                <td>
+                  <button type="submit" class="secondary" style="min-height: 32px; padding: 4px 10px; font-size: 12px; border-color: rgba(99,102,241,0.25); background: rgba(99,102,241,0.06); color:#a5b4fc;">
+                    <i data-lucide="save" style="width: 12px; height: 12px;"></i>
+                    <span>保存</span>
+                  </button>
+                </td>
+              </form>
+              <td>
+                <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirm('确认要删除此限制规则吗？');">
+                  <input type="hidden" name="user_id" value="{{ user.id }}">
+                  <button class="danger" type="submit" style="min-height: 32px; padding: 4px 10px; font-size: 12px; border-color:rgba(239,68,68,0.2);">
+                    <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i>
+                    <span>删除</span>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+
 <script>
+  // Dynamic API Key masked switching
+  const apiKeyDisplay = document.getElementById("api-key-display");
+  const toggleKeyBtn = document.getElementById("toggle-key-visibility");
+  
+  if (toggleKeyBtn && apiKeyDisplay) {
+    let isMasked = true;
+    const rawKey = "{{ user.api_key }}";
+    
+    toggleKeyBtn.addEventListener("click", () => {
+      isMasked = !isMasked;
+      if (isMasked) {
+        apiKeyDisplay.textContent = "••••••••••••••••••••••••••••••••";
+        apiKeyDisplay.classList.add("masked");
+        toggleKeyBtn.querySelector("i").setAttribute("data-lucide", "eye");
+      } else {
+        apiKeyDisplay.textContent = rawKey;
+        apiKeyDisplay.classList.remove("masked");
+        toggleKeyBtn.querySelector("i").setAttribute("data-lucide", "eye-off");
+      }
+      lucide.createIcons();
+    });
+  }
+
+  // Copy button dynamic animations
   document.querySelectorAll(".copy-button").forEach((button) => {
     button.addEventListener("click", async () => {
-      const text = document.getElementById(button.dataset.copyTarget).textContent;
-      await navigator.clipboard.writeText(text);
-      const original = button.textContent;
-      button.textContent = "已复制";
-      window.setTimeout(() => { button.textContent = original; }, 1200);
+      const targetId = button.dataset.copyTarget;
+      const text = targetId ? document.getElementById(targetId).textContent : button.dataset.copyValue;
+      
+      try {
+        await navigator.clipboard.writeText(text);
+        
+        // Success animation feedback
+        const originalText = button.querySelector('span').textContent;
+        const icon = button.querySelector('i');
+        const originalIcon = icon.getAttribute('data-lucide');
+        
+        button.style.borderColor = 'var(--success)';
+        button.querySelector('span').textContent = "已复制";
+        button.querySelector('span').style.color = 'var(--success)';
+        icon.setAttribute('data-lucide', 'check');
+        lucide.createIcons();
+        
+        window.setTimeout(() => { 
+          button.style.borderColor = '';
+          button.querySelector('span').textContent = originalText;
+          button.querySelector('span').style.color = '';
+          icon.setAttribute('data-lucide', originalIcon);
+          lucide.createIcons();
+        }, 1500);
+      } catch (err) {
+        showToast("复制失败，请手动选择复制。");
+      }
     });
   });
 </script>

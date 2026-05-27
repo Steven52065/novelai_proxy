@@ -1,40 +1,80 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>仪表盘</h1>
+<div class="page-head">
+  <h1>
+    <i data-lucide="layout-dashboard" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    系统仪表盘
+  </h1>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 99px; background: #10b981; box-shadow: 0 0 10px #10b981; animation: pulse-glow 1.5s infinite alternate;"></span>
+    <span class="muted" id="queue-updated" style="font-size: 13px; font-weight: 500;">数据同步中...</span>
+  </div>
+</div>
+
 <section class="metrics">
-  <div><span>用户数</span><strong>{{ stats.total_users }}</strong></div>
-  <div><span>今日请求</span><strong>{{ stats.today_requests }}</strong></div>
-  <div><span>总 Anlas 消耗</span><strong>{{ stats.total_anlas }}</strong></div>
-  <div><span>队列长度</span><strong id="queue-size">{{ stats.queue_size }}</strong></div>
+  <div>
+    <span>
+      <i data-lucide="users" style="width: 16px; height: 16px; stroke: #6366f1;"></i>
+      用户总数
+    </span>
+    <strong>{{ stats.total_users }}</strong>
+  </div>
+  <div>
+    <span>
+      <i data-lucide="activity" style="width: 16px; height: 16px; stroke: #3b82f6;"></i>
+      今日生成请求
+    </span>
+    <strong>{{ stats.today_requests }}</strong>
+  </div>
+  <div>
+    <span>
+      <i data-lucide="coins" style="width: 16px; height: 16px; stroke: #10b981;"></i>
+      累计消耗 Anlas
+    </span>
+    <strong>{{ stats.total_anlas }}</strong>
+  </div>
+  <div>
+    <span>
+      <i data-lucide="layers" style="width: 16px; height: 16px; stroke: #f59e0b;"></i>
+      当前排队队列
+    </span>
+    <strong id="queue-size">{{ stats.queue_size }}</strong>
+  </div>
 </section>
-<section class="panel queue-panel">
-  <div class="section-head">
+
+<section class="panel">
+  <div class="section-head" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
     <div>
-      <h2>生成队列</h2>
-      <p class="muted" id="queue-updated">正在同步...</p>
+      <h2 style="font-size: 18px; font-weight: 700;">
+        <i data-lucide="list-ordered" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        生成队列状态
+      </h2>
+      <p class="muted" style="margin-top: 4px;">当前上游并发处理队列，自动每 2 秒更新一次</p>
     </div>
     <span class="status-pill" id="queue-running-state">空闲</span>
   </div>
-  <div class="table-wrap">
+
+  <div class="table-wrap" style="margin-top: 20px;">
     <table>
       <thead>
         <tr>
           <th>状态</th>
-          <th>位置</th>
-          <th>用户</th>
-          <th>动作</th>
-          <th>规格</th>
-          <th>Anlas</th>
-          <th>等待</th>
-          <th>请求 ID</th>
+          <th>排队位置</th>
+          <th>发起用户</th>
+          <th>API动作</th>
+          <th>生图规格 / 模型</th>
+          <th>消耗 Anlas</th>
+          <th>已等待时间</th>
+          <th>请求唯一 ID</th>
         </tr>
       </thead>
       <tbody id="queue-body">
-        <tr><td colspan="8" class="muted">暂无生成请求</td></tr>
+        <tr class="empty-row"><td colspan="8" class="muted" style="text-align: center; padding: 32px 0;">正在加载队列数据...</td></tr>
       </tbody>
     </table>
   </div>
 </section>
+
 <script id="initial-queue" type="application/json">{{ queue | tojson }}</script>
 <script>
 (() => {
@@ -46,31 +86,37 @@
 
   function formatSeconds(seconds) {
     const value = Number(seconds || 0);
-    if (value < 60) return `${value}s`;
+    if (value < 60) return `${value} 秒`;
     const minutes = Math.floor(value / 60);
     const rest = value % 60;
-    return `${minutes}m ${rest}s`;
+    return `${minutes} 分 ${rest} 秒`;
   }
 
   function requestLabel(requestId) {
     if (!requestId) return "-";
-    return requestId.length > 12 ? `${requestId.slice(0, 12)}...` : requestId;
+    return requestId.length > 16 ? `${requestId.slice(0, 16)}...` : requestId;
   }
 
   function specLabel(item) {
-    const size = item.width && item.height ? `${item.width}x${item.height}` : "-";
-    const steps = item.steps ? `${item.steps}步` : null;
-    const samples = item.n_samples ? `${item.n_samples}张` : null;
-    return [item.model, size, steps, samples].filter(Boolean).join(" / ");
+    const parts = [];
+    if (item.model) {
+      parts.push(`<span class="badge badge-normal" style="font-size: 11px; padding: 2px 6px;">${item.model}</span>`);
+    }
+    if (item.width && item.height) {
+      parts.push(`<code>${item.width}x${item.height}</code>`);
+    }
+    if (item.steps) {
+      parts.push(`<span style="color:#e2e8f0; font-weight:500;">${item.steps}步</span>`);
+    }
+    if (item.n_samples) {
+      parts.push(`<span style="color:#e2e8f0; font-weight:500;">${item.n_samples}张</span>`);
+    }
+    return parts.length > 0 ? parts.join(" <span style='color:rgba(255,255,255,0.15)'>/</span> ") : "-";
   }
 
-  function statusText(status) {
-    return status === "running" ? "执行中" : "排队中";
-  }
-
-  function appendCell(row, text, className) {
+  function appendCell(row, htmlContent, className) {
     const cell = document.createElement("td");
-    cell.textContent = text;
+    cell.innerHTML = htmlContent;
     if (className) cell.className = className;
     row.appendChild(cell);
   }
@@ -79,30 +125,81 @@
     const rows = [];
     if (data.running) rows.push(data.running);
     rows.push(...(data.queued || []));
+    
     queueSize.textContent = data.queue_size || 0;
-    runningState.textContent = data.running ? "执行中" : "空闲";
-    runningState.className = data.running ? "status-pill status-running" : "status-pill";
-    queueUpdated.textContent = `最后更新 ${new Date().toLocaleTimeString()}`;
+    
+    // Update topbar status pill
+    if (data.running) {
+      runningState.textContent = "执行中";
+      runningState.className = "status-pill status-running";
+    } else {
+      runningState.textContent = "空闲";
+      runningState.className = "status-pill";
+    }
+    
+    queueUpdated.textContent = `最后同步 ${new Date().toLocaleTimeString()}`;
     queueBody.replaceChildren();
+    
     if (rows.length === 0) {
       const row = document.createElement("tr");
-      appendCell(row, "暂无生成请求", "muted");
+      row.className = "empty-row";
+      appendCell(row, `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 24px 0; gap:8px;">
+        <i data-lucide="inbox" style="width:32px; height:32px; stroke:#64748b;"></i>
+        <span class="muted">当前暂无活跃的生成请求</span>
+      </div>`, "muted");
       row.firstChild.colSpan = 8;
+      row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
+      lucide.createIcons();
       return;
     }
+    
     for (const item of rows) {
       const row = document.createElement("tr");
-      appendCell(row, statusText(item.status));
-      appendCell(row, item.status === "running" ? "-" : String(item.position || "-"));
-      appendCell(row, item.user_name || `用户 #${item.user_id}`);
-      appendCell(row, item.action || "-");
+      
+      // Status pill with custom glow
+      const statusHtml = item.status === "running" 
+        ? `<span class="status-pill status-running">执行中</span>`
+        : `<span class="status-pill">排队中</span>`;
+      appendCell(row, statusHtml);
+      
+      // Position
+      const posHtml = item.status === "running" 
+        ? `<span class="muted">-</span>` 
+        : `<span class="badge badge-normal" style="background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.3); color:#f59e0b;"># ${item.position || 1}</span>`;
+      appendCell(row, posHtml);
+      
+      // User name
+      const userName = item.user_name || `用户 #${item.user_id}`;
+      appendCell(row, `<span style="font-weight:600; color:#fff;">${userName}</span>`);
+      
+      // Action
+      const actionHtml = item.action 
+        ? `<span class="badge" style="background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.25); color:#c084fc;">${item.action}</span>` 
+        : `<span class="muted">-</span>`;
+      appendCell(row, actionHtml);
+      
+      // Spec Label
       appendCell(row, specLabel(item));
-      appendCell(row, String(item.estimated_anlas_cost || 0));
-      appendCell(row, formatSeconds(item.queued_seconds));
-      appendCell(row, requestLabel(item.request_id), "mono");
+      
+      // Anlas cost
+      const anlas = Number(item.estimated_anlas_cost || 0);
+      const anlasHtml = anlas > 0 
+        ? `<span style="font-weight:700; color:#34d399;">${anlas}</span>`
+        : `<span class="muted">免费</span>`;
+      appendCell(row, anlasHtml);
+      
+      // Wait time
+      appendCell(row, `<span style="font-weight:500;">${formatSeconds(item.queued_seconds)}</span>`);
+      
+      // Request ID
+      appendCell(row, `<code>${requestLabel(item.request_id)}</code>`, "mono");
+      
       queueBody.appendChild(row);
     }
+    
+    // Rerender icons dynamically for dynamically generated inline icons
+    lucide.createIcons();
   }
 
   async function refreshQueue() {
@@ -111,7 +208,7 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       renderQueue(await response.json());
     } catch (error) {
-      queueUpdated.textContent = "同步失败";
+      queueUpdated.textContent = "同步失败，正在重试...";
       runningState.textContent = "异常";
       runningState.className = "status-pill status-error";
     }
