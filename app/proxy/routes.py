@@ -76,9 +76,6 @@ async def generate_image(
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 
-    if user.free_small_only and not cost_is_certainly_free:
-        return _reject_free_small_only(request, user, request_payload, cost_inputs, estimated_cost)
-
     return await _submit_zip_task(
         request=request,
         user=user,
@@ -86,6 +83,7 @@ async def generate_image(
         metadata=_generate_metadata(cost_inputs),
         request_payload=request_payload,
         estimated_cost=estimated_cost,
+        free_small_only_allowed=cost_is_certainly_free,
         handler=lambda: request.app.state.upstream.generate_image_payload_zip(request_payload),
     )
 
@@ -178,6 +176,7 @@ async def _submit_zip_task(
     request_payload: dict[str, Any],
     estimated_cost: int,
     handler: Callable[[], Awaitable[bytes]],
+    free_small_only_allowed: bool = False,
 ):
     return await _submit_binary_task(
         request=request,
@@ -187,6 +186,7 @@ async def _submit_zip_task(
         request_payload=request_payload,
         estimated_cost=estimated_cost,
         handler=handler,
+        free_small_only_allowed=free_small_only_allowed,
         media_type="application/zip",
         response_headers={"Content-Disposition": "attachment;filename=image.zip"},
         process_zip_response=True,
@@ -203,6 +203,7 @@ async def _submit_binary_task(
     estimated_cost: int,
     handler: Callable[[], Awaitable[bytes]],
     media_type: str,
+    free_small_only_allowed: bool = False,
     response_headers: dict[str, str] | None = None,
     process_zip_response: bool = True,
 ):
@@ -218,6 +219,32 @@ async def _submit_binary_task(
         action,
         json_dumps(request_payload),
     )
+
+    if user.free_small_only and not free_small_only_allowed:
+        _insert_usage_log(
+            db,
+            request_id,
+            user.id,
+            action,
+            metadata,
+            request_payload,
+            estimated_cost,
+            "rejected",
+            "free_small_only_blocked",
+            "User is limited to definitely free small image generations",
+            "INFO",
+        )
+        logger.info(
+            "proxy request rejected by free small only request_id=%s user_id=%s action=%s estimated_cost=%s",
+            request_id,
+            user.id,
+            action,
+            estimated_cost,
+        )
+        return JSONResponse(
+            status_code=403,
+            content={"message": "User is limited to definitely free small image generations"},
+        )
 
     rate = rate_limiter.check(user.id)
     if not rate.allowed:
@@ -577,39 +604,6 @@ def _optional_sampler(value: Any) -> tuple[Sampler | None, bool]:
         return Sampler(value), True
     except ValueError:
         return None, False
-
-
-def _reject_free_small_only(
-    request: Request,
-    user: UserContext,
-    request_payload: dict[str, Any],
-    cost_inputs: GenerateCostInputs,
-    estimated_cost: int,
-) -> JSONResponse:
-    request_id = uuid.uuid4().hex
-    _insert_usage_log(
-        request.app.state.db,
-        request_id,
-        user.id,
-        cost_inputs.action,
-        _generate_metadata(cost_inputs),
-        request_payload,
-        estimated_cost,
-        "rejected",
-        "free_small_only_blocked",
-        "User is limited to definitely free small image generations",
-        "INFO",
-    )
-    logger.info(
-        "proxy request rejected by free small only request_id=%s user_id=%s estimated_cost=%s",
-        request_id,
-        user.id,
-        estimated_cost,
-    )
-    return JSONResponse(
-        status_code=403,
-        content={"message": "User is limited to definitely free small image generations"},
-    )
 
 
 def _payload_parameters(payload: dict[str, Any]) -> dict[str, Any]:

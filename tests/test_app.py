@@ -508,6 +508,45 @@ def test_encode_vibe_is_queued_and_charged(tmp_path: Path, monkeypatch):
         assert success_log["output_files"] == []
 
 
+def test_free_small_only_rejects_vibe_upscale_and_augment(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-tools", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        encode_vibe = client.post(
+            "/ai/encode-vibe",
+            headers=headers,
+            json={"image": "aW1n", "model": "nai-diffusion-4-5-full", "information_extracted": 1},
+        )
+        upscale = client.post(
+            "/ai/upscale",
+            headers=headers,
+            json={"image": "aW1n", "width": 64, "height": 64, "scale": 2},
+        )
+        augment = client.post(
+            "/ai/augment-image",
+            headers=headers,
+            json={"req_type": "sketch", "width": 64, "height": 64, "image": "aW1n", "defry": 0},
+        )
+
+        assert encode_vibe.status_code == 403
+        assert upscale.status_code == 403
+        assert augment.status_code == 403
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        rejected_logs = [row for row in logs if row["status"] == "rejected"]
+        assert {row["action"] for row in rejected_logs} == {"encode-vibe", "upscale", "sketch"}
+        assert {row["error_code"] for row in rejected_logs} == {"free_small_only_blocked"}
+
+
 def test_cors_preflight_uses_configured_origin(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
