@@ -49,6 +49,7 @@ class UpstreamClient:
             response = await sess.post(url, data=json.dumps(payload).encode("utf-8"))
             content_type = response.headers.get("Content-Type", "")
             if response.status_code >= 400 or content_type not in {
+                "application/zip",
                 "binary/octet-stream",
                 "application/binary",
                 "application/octet-stream",
