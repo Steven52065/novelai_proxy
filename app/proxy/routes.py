@@ -22,6 +22,11 @@ from ..rate_limiter import RateLimiter
 
 router = APIRouter()
 
+IMAGE_ANLAS_PER_PRECISE_REFERENCE = 5
+IMAGE_ANLAS_PER_VIBE_ENCODING = 2
+FREE_VIBE_REFERENCES_PER_GENERATION = 4
+IMAGE_ANLAS_PER_EXTRA_VIBE_REFERENCE = 2
+
 
 @router.get("/health")
 async def health(request: Request):
@@ -44,8 +49,13 @@ async def generate_image(
         logger.error("generate-image payload validation failed after normalization errors=%s", str(exc))
         return JSONResponse(status_code=400, content={"message": "Invalid request", "details": str(exc)})
 
+    request_payload = _merge_generate_payload(dump_model_payload(req), normalized_payload)
     try:
-        estimated_cost = int(req.calculate_cost(is_opus=request.app.state.config.novelai.account_tier >= 3))
+        estimated_cost = _calculate_generate_cost(
+            req,
+            request_payload,
+            is_opus=request.app.state.config.novelai.account_tier >= 3,
+        )
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 
@@ -54,9 +64,9 @@ async def generate_image(
         user=user,
         action=str(req.action),
         metadata=_generate_metadata(req),
-        request_payload=dump_model_payload(req),
+        request_payload=request_payload,
         estimated_cost=estimated_cost,
-        handler=lambda: request.app.state.upstream.generate_image_zip(req),
+        handler=lambda: request.app.state.upstream.generate_image_payload_zip(request_payload),
     )
 
 
@@ -111,6 +121,34 @@ async def augment_image(
     )
 
 
+@router.post("/ai/encode-vibe")
+async def encode_vibe(
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+):
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"message": "Invalid request"})
+
+    return await _submit_binary_task(
+        request=request,
+        user=user,
+        action="encode-vibe",
+        metadata={
+            "model": payload.get("model"),
+            "width": None,
+            "height": None,
+            "steps": None,
+            "n_samples": 1,
+        },
+        request_payload=payload,
+        estimated_cost=IMAGE_ANLAS_PER_VIBE_ENCODING,
+        handler=lambda: request.app.state.upstream.encode_vibe_binary(payload),
+        media_type="application/binary",
+        process_zip_response=False,
+    )
+
+
 async def _submit_zip_task(
     *,
     request: Request,
@@ -120,6 +158,33 @@ async def _submit_zip_task(
     request_payload: dict[str, Any],
     estimated_cost: int,
     handler: Callable[[], Awaitable[bytes]],
+):
+    return await _submit_binary_task(
+        request=request,
+        user=user,
+        action=action,
+        metadata=metadata,
+        request_payload=request_payload,
+        estimated_cost=estimated_cost,
+        handler=handler,
+        media_type="application/zip",
+        response_headers={"Content-Disposition": "attachment;filename=image.zip"},
+        process_zip_response=True,
+    )
+
+
+async def _submit_binary_task(
+    *,
+    request: Request,
+    user: UserContext,
+    action: str,
+    metadata: dict[str, Any],
+    request_payload: dict[str, Any],
+    estimated_cost: int,
+    handler: Callable[[], Awaitable[bytes]],
+    media_type: str,
+    response_headers: dict[str, str] | None = None,
+    process_zip_response: bool = True,
 ):
     db: Database = request.app.state.db
     rate_limiter: RateLimiter = request.app.state.rate_limiter
@@ -211,7 +276,7 @@ async def _submit_zip_task(
     logger.info("proxy request queued request_id=%s user_id=%s action=%s estimated_cost=%s", request_id, user.id, action, estimated_cost)
 
     try:
-        zip_payload = await proxy_queue.submit(
+        binary_payload = await proxy_queue.submit(
             request_id=request_id,
             user_id=user.id,
             tier=user.tier,
@@ -220,6 +285,7 @@ async def _submit_zip_task(
             image_conversion_config=request.app.state.config.image_conversion,
             estimated_cost=estimated_cost,
             handler=handler,
+            process_zip_response=process_zip_response,
         )
     except QueueFull:
         quota_manager.release(user.id, estimated_cost)
@@ -249,10 +315,10 @@ async def _submit_zip_task(
         return JSONResponse(status_code=502, content={"message": str(exc)})
 
     return Response(
-        content=zip_payload,
+        content=binary_payload,
         status_code=201,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment;filename=image.zip"},
+        media_type=media_type,
+        headers=response_headers,
     )
 
 
@@ -374,6 +440,55 @@ def _generate_metadata(req: GenerateImageInfer) -> dict[str, Any]:
     }
 
 
+def _calculate_generate_cost(req: GenerateImageInfer, payload: dict[str, Any], *, is_opus: bool) -> int:
+    base_cost = int(req.calculate_cost(is_opus=is_opus))
+    params = _payload_parameters(payload)
+    return base_cost + _reference_anlas_cost(params)
+
+
+def _reference_anlas_cost(parameters: dict[str, Any]) -> int:
+    precise_references = _reference_count(parameters, "director_reference_images")
+
+    vibe_references = _reference_count(parameters, "reference_image")
+    vibe_references += _reference_count(parameters, "reference_image_multiple")
+    extra_vibes = max(vibe_references - FREE_VIBE_REFERENCES_PER_GENERATION, 0)
+    return (
+        precise_references * IMAGE_ANLAS_PER_PRECISE_REFERENCE
+        + extra_vibes * IMAGE_ANLAS_PER_EXTRA_VIBE_REFERENCE
+    )
+
+
+def _reference_count(parameters: dict[str, Any], key: str) -> int:
+    value = parameters.get(key)
+    if isinstance(value, list):
+        return sum(1 for item in value if item)
+    if value:
+        return 1
+    return 0
+
+
+def _merge_generate_payload(validated_payload: dict[str, Any], original_payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(validated_payload)
+    for key, value in original_payload.items():
+        if key == "parameters":
+            continue
+        if key not in payload:
+            payload[key] = value
+
+    merged_parameters = dict(validated_payload.get("parameters") or {})
+    original_parameters = _payload_parameters(original_payload)
+    for key, value in original_parameters.items():
+        if key not in merged_parameters:
+            merged_parameters[key] = value
+    payload["parameters"] = merged_parameters
+    return payload
+
+
+def _payload_parameters(payload: dict[str, Any]) -> dict[str, Any]:
+    parameters = payload.get("parameters")
+    return parameters if isinstance(parameters, dict) else {}
+
+
 def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail={"message": "Invalid request"})
@@ -384,11 +499,21 @@ def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:
         return normalized
 
     normalized_parameters = dict(parameters)
+    _normalize_img2img_parameters(normalized_parameters)
     _normalize_int_ceiling(normalized_parameters, "skip_cfg_above_sigma")
     _normalize_seed(normalized_parameters, "seed")
     _normalize_seed(normalized_parameters, "extra_noise_seed")
     normalized["parameters"] = normalized_parameters
     return normalized
+
+
+def _normalize_img2img_parameters(parameters: dict[str, Any]) -> None:
+    img2img = parameters.get("img2img")
+    if not isinstance(img2img, dict):
+        return
+    for key in ("strength", "noise", "extra_noise_seed", "color_correct"):
+        if key not in parameters and key in img2img:
+            parameters[key] = img2img[key]
 
 
 def _normalize_int_ceiling(parameters: dict[str, Any], key: str) -> None:

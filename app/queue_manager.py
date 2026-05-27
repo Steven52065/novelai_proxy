@@ -26,6 +26,7 @@ class QueueItem:
     estimated_cost: int = field(compare=False)
     logging_config: LoggingConfig = field(compare=False)
     image_conversion_config: ImageConversionConfig = field(compare=False)
+    process_zip_response: bool = field(compare=False)
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
 
@@ -89,6 +90,7 @@ class ProxyQueue:
         image_conversion_config: ImageConversionConfig,
         estimated_cost: int,
         handler: Callable[[], Awaitable[bytes]],
+        process_zip_response: bool = True,
     ) -> bytes:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
@@ -104,6 +106,7 @@ class ProxyQueue:
             estimated_cost=estimated_cost,
             logging_config=logging_config,
             image_conversion_config=image_conversion_config,
+            process_zip_response=process_zip_response,
             handler=handler,
             future=future,
         )
@@ -130,7 +133,8 @@ class ProxyQueue:
                 )
                 logger.info("proxy request running request_id=%s queued_ms=%s", item.request_id, queued_ms)
                 payload = await item.handler()
-                payload = convert_zip_images(payload, item.image_conversion_config)
+                if item.process_zip_response:
+                    payload = convert_zip_images(payload, item.image_conversion_config)
             except Exception as exc:
                 self.quota_manager.release(item.user_id, item.estimated_cost)
                 code, message = self._error_details(exc)
@@ -152,12 +156,15 @@ class ProxyQueue:
                     item.future.set_exception(exc)
             else:
                 try:
-                    saved_files = archive_zip_images(
-                        zip_payload=payload,
-                        request_id=item.request_id,
-                        action=item.action,
-                        config=item.logging_config,
-                    )
+                    if item.process_zip_response:
+                        saved_files = archive_zip_images(
+                            zip_payload=payload,
+                            request_id=item.request_id,
+                            action=item.action,
+                            config=item.logging_config,
+                        )
+                    else:
+                        saved_files = []
                 except Exception:
                     logger.exception("failed to archive generated images request_id=%s", item.request_id)
                     saved_files = []

@@ -35,6 +35,12 @@ class FakeUpstream:
             zip_file.writestr("image.png", b"fake-image")
         return buffer.getvalue()
 
+    async def generate_image_payload_zip(self, payload):
+        return await self.generate_image_zip(payload)
+
+    async def encode_vibe_binary(self, payload):
+        return b"fake-vibe"
+
     async def upscale_zip(self, req):
         return b"fake-upscale-zip"
 
@@ -54,6 +60,9 @@ class FakeImageUpstream:
             zip_file.writestr("image.png", image_buffer.getvalue())
             zip_file.writestr("metadata.txt", b"keep-me")
         return buffer.getvalue()
+
+    async def generate_image_payload_zip(self, payload):
+        return await self.generate_image_zip(payload)
 
 
 class FakeQueueSnapshot:
@@ -234,6 +243,69 @@ def test_generate_normalizes_official_payload_variants(tmp_path: Path, monkeypat
         success_log = next(row for row in logs if row["status"] == "success")
         assert success_log["request_payload"]["parameters"]["skip_cfg_above_sigma"] == 60
         assert 0 < success_log["request_payload"]["parameters"]["seed"] <= 4294967288
+
+
+def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    payload = PAYLOAD | {
+        "parameters": PAYLOAD["parameters"] | {
+            "director_reference_images": ["ref-a", "ref-b"],
+            "director_reference_strength_values": [0.6, 0.7],
+            "director_reference_secondary_strength_values": [0.2, 0.3],
+            "director_reference_information_extracted": [1, 1],
+            "reference_image_multiple": ["v1", "v2", "v3", "v4", "v5"],
+            "reference_strength_multiple": [0.5, 0.5, 0.5, 0.5, 0.5],
+            "reference_information_extracted_multiple": [1, 1, 1, 1, 1],
+        }
+    }
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "reference-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert resp.status_code == 201
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        params = success_log["request_payload"]["parameters"]
+        assert params["director_reference_images"] == ["ref-a", "ref-b"]
+        assert params["reference_image_multiple"] == ["v1", "v2", "v3", "v4", "v5"]
+        assert success_log["estimated_anlas_cost"] == 12
+
+
+def test_encode_vibe_is_queued_and_charged(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "vibe-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post(
+            "/ai/encode-vibe",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"image": "aW1n", "model": "nai-diffusion-4-5-full", "information_extracted": 1},
+        )
+
+        assert resp.status_code == 201
+        assert resp.content == b"fake-vibe"
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert success_log["action"] == "encode-vibe"
+        assert success_log["estimated_anlas_cost"] == 2
+        assert success_log["output_files"] == []
 
 
 def test_cors_preflight_uses_configured_origin(tmp_path: Path, monkeypatch):
