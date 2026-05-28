@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>
+    <i data-lucide="database" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    数据库管理
+  </h1>
+</div>
+
+{% if message %}
+<div class="notice">
+  <span>{{ message }}</span>
+  <a href="/admin/database">刷新状态</a>
+</div>
+{% endif %}
+
+<section class="metrics">
+  <div>
+    <span>
+      <i data-lucide="hard-drive" style="width: 16px; height: 16px; stroke: #6366f1;"></i>
+      数据库文件
+    </span>
+    <strong>{{ stats.files.main.display }}</strong>
+  </div>
+  <div>
+    <span>
+      <i data-lucide="files" style="width: 16px; height: 16px; stroke: #3b82f6;"></i>
+      WAL / SHM
+    </span>
+    <strong style="font-size: 28px;">{{ stats.files.wal.display }} / {{ stats.files.shm.display }}</strong>
+  </div>
+  <div>
+    <span>
+      <i data-lucide="history" style="width: 16px; height: 16px; stroke: #10b981;"></i>
+      日志总数
+    </span>
+    <strong>{{ stats.usage_logs.total }}</strong>
+  </div>
+  <div>
+    <span>
+      <i data-lucide="archive" style="width: 16px; height: 16px; stroke: #f59e0b;"></i>
+      Payload 占用
+    </span>
+    <strong>{{ stats.usage_logs.payload_bytes | filesizeformat }}</strong>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>
+        <i data-lucide="chart-no-axes-combined" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        数据概览
+      </h2>
+      <p class="muted" style="margin-top: 4px;">数据库路径：<code>{{ stats.database_path }}</code></p>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>项目</th>
+          <th>数值</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>可回收空间</td>
+          <td class="mono">{{ stats.reclaimable_bytes | filesizeformat }}</td>
+          <td class="muted">删除或清空字段后，通常需要执行 VACUUM 才会还给文件系统。</td>
+        </tr>
+        <tr>
+          <td>含 Payload 的日志</td>
+          <td class="mono">{{ stats.usage_logs.logs_with_payload }}</td>
+          <td class="muted">这些记录保留了请求参数，图片 base64 会让数据库快速膨胀。</td>
+        </tr>
+        <tr>
+          <td>状态分布</td>
+          <td colspan="2">
+            <div class="actions">
+              {% for item in stats.status_counts %}
+              <span class="badge badge-normal">{{ item.status }}: {{ item.count }}</span>
+              {% else %}
+              <span class="muted">暂无日志</span>
+              {% endfor %}
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="layout-grid">
+  <div class="panel">
+    <div class="section-head">
+      <div>
+        <h2>
+          <i data-lucide="eraser" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+          清空大 Payload
+        </h2>
+        <p class="muted" style="margin-top: 4px;">保留日志、额度和限流统计，只清空占空间的请求参数字段。</p>
+      </div>
+    </div>
+    <form method="post" action="/admin/database/clear-payloads" class="form-grid" onsubmit="return confirm('确认清空符合条件日志的 Payload 字段？该操作不可恢复。')">
+      <label>
+        早于多少天
+        <input name="older_than_days" type="number" min="0" max="3650" value="7">
+      </label>
+      <label>
+        Payload 至少 KB
+        <input name="min_payload_kb" type="number" min="0" max="1048576" value="128">
+      </label>
+      <label class="check">
+        <input type="checkbox" name="clear_output_files">
+        同时清空输出文件路径
+      </label>
+      <button type="submit">
+        <i data-lucide="eraser" style="width: 16px; height: 16px;"></i>
+        清空大字段
+      </button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="section-head">
+      <div>
+        <h2>
+          <i data-lucide="trash-2" style="width: 18px; height: 18px; stroke: #f87171;"></i>
+          删除旧日志
+        </h2>
+        <p class="muted" style="margin-top: 4px;">整条删除日志记录，会影响按日志统计的历史请求数。</p>
+      </div>
+    </div>
+    <form method="post" action="/admin/database/cleanup-logs" class="stack" onsubmit="return confirm('确认删除符合条件的日志记录？该操作不可恢复。')">
+      <div class="form-grid">
+        <label>
+          删除早于多少天的日志
+          <input name="older_than_days" type="number" min="0" max="3650" value="30">
+        </label>
+        <div>
+          <span style="display: block; font-size: 13px; font-weight: 600; color: #cbd5e1; margin-bottom: 8px;">限定状态</span>
+          <div class="actions">
+            {% for status in status_choices %}
+            <label class="check" style="min-height: 32px;">
+              <input type="checkbox" name="statuses" value="{{ status }}">
+              {{ status }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <button class="danger" type="submit">
+        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+        删除旧日志
+      </button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>
+        <i data-lucide="minimize-2" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        压缩数据库文件
+      </h2>
+      <p class="muted" style="margin-top: 4px;">清理数据后执行 VACUUM，并截断 WAL 文件，实际释放磁盘空间。</p>
+    </div>
+    <form method="post" action="/admin/database/vacuum" onsubmit="return confirm('确认执行 VACUUM？执行期间数据库会短暂独占写入。')">
+      <button type="submit">
+        <i data-lucide="minimize-2" style="width: 16px; height: 16px;"></i>
+        立即压缩
+      </button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>
+        <i data-lucide="list-filter" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        最大日志记录
+      </h2>
+      <p class="muted" style="margin-top: 4px;">按请求 Payload 和输出路径字段大小排序。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>请求 ID</th>
+          <th>用户</th>
+          <th>动作</th>
+          <th>状态</th>
+          <th>Payload</th>
+          <th>输出路径</th>
+          <th>创建时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in stats.largest_logs %}
+        <tr>
+          <td><code>{{ log.request_id[:12] }}</code></td>
+          <td>{{ log.user_name }}</td>
+          <td>{{ log.action }}</td>
+          <td><span class="status-pill">{{ log.status }}</span></td>
+          <td class="mono">{{ log.request_payload_display }}</td>
+          <td class="mono">{{ log.output_files_display }}</td>
+          <td class="muted">{{ log.created_at_display }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row">
+          <td colspan="7" style="text-align: center; padding: 32px 0;">
+            <span class="muted">暂无日志记录</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
