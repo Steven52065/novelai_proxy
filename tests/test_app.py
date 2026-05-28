@@ -891,6 +891,19 @@ def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch
         assert "2026-05-27 08:00:00 UTC+8" in logs_page.text
 
 
+def test_admin_logs_filter_accepts_empty_user_id(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        logs_page = client.get("/admin/logs?user_id=&limit=100")
+        assert logs_page.status_code == 200
+        assert "使用日志审计" in logs_page.text
+
+
 def test_admin_database_management_clears_large_payloads(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

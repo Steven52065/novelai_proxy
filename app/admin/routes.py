@@ -552,10 +552,11 @@ async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: i
 
 
 @web_router.get("/logs", response_class=HTMLResponse)
-async def logs_page(request: Request, user_id: int | None = None, limit: int = 100):
+async def logs_page(request: Request, user_id: str | None = None, limit: int = 100):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
-    data = await logs(request, user_id=user_id, limit=limit)
+    selected_user_id = _optional_query_int(user_id)
+    data = await logs(request, user_id=selected_user_id, limit=limit)
     users = request.app.state.db.query_all("SELECT id, name FROM users ORDER BY name")
     return templates.TemplateResponse(
         request,
@@ -564,7 +565,7 @@ async def logs_page(request: Request, user_id: int | None = None, limit: int = 1
             "active": "logs",
             "logs": data["logs"],
             "users": [_row_to_dict(row) for row in users],
-            "selected_user_id": user_id,
+            "selected_user_id": selected_user_id,
             "limit": limit,
         },
     )
@@ -736,6 +737,15 @@ def _json_or_empty_list(value):
     except json.JSONDecodeError:
         return [value]
     return loaded if isinstance(loaded, list) else [loaded]
+
+
+def _optional_query_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": "Invalid query parameter"}) from exc
 
 
 def _database_stats(request: Request) -> dict:
