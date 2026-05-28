@@ -20,6 +20,7 @@ class ServerConfig(BaseModel):
 class QueueConfig(BaseModel):
     max_concurrent_upstream: int = 1
     max_queue_size: int = 50
+    min_upstream_interval_seconds: float = Field(default=0, ge=0)
 
 
 class NovelAIConfig(BaseModel):

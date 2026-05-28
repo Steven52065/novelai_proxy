@@ -36,10 +36,13 @@ class ProxyQueue:
         db: Database,
         quota_manager: QuotaManager,
         max_queue_size: int,
+        min_upstream_interval_seconds: float = 0,
     ):
         self.db = db
         self.quota_manager = quota_manager
         self.queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=max_queue_size)
+        self.min_upstream_interval_seconds = max(0.0, float(min_upstream_interval_seconds))
+        self._last_upstream_started_at: float | None = None
         self._sequence = itertools.count()
         self._worker: asyncio.Task | None = None
         self._running_item: QueueItem | None = None
@@ -129,6 +132,7 @@ class ProxyQueue:
                     (queued_ms, item.request_id),
                 )
                 logger.info("proxy request running request_id=%s queued_ms=%s", item.request_id, queued_ms)
+                await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
             except Exception as exc:
                 self.quota_manager.release(item.user_id, item.estimated_cost)
@@ -194,6 +198,17 @@ class ProxyQueue:
         if isinstance(exc, APIError):
             return str(exc.code or "upstream_error"), exc.message
         return exc.__class__.__name__, str(exc)
+
+    async def _wait_for_upstream_interval(self, request_id: str) -> None:
+        if self.min_upstream_interval_seconds <= 0 or self._last_upstream_started_at is None:
+            self._last_upstream_started_at = time.monotonic()
+            return
+        elapsed = time.monotonic() - self._last_upstream_started_at
+        delay = self.min_upstream_interval_seconds - elapsed
+        if delay > 0:
+            logger.info("proxy request waiting before upstream request_id=%s delay_seconds=%.3f", request_id, delay)
+            await asyncio.sleep(delay)
+        self._last_upstream_started_at = time.monotonic()
 
     @staticmethod
     def _item_snapshot(item: QueueItem, now: float, status: str, position: int) -> dict[str, object]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,7 @@ PAYLOAD = {
 class FakeUpstream:
     def __init__(self):
         self.last_generate_payload = None
+        self.generate_started_at = []
 
     async def generate_image_zip(self, req):
         buffer = io.BytesIO()
@@ -42,6 +44,7 @@ class FakeUpstream:
         return buffer.getvalue()
 
     async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(time.monotonic())
         self.last_generate_payload = payload
         return await self.generate_image_zip(payload)
 
@@ -93,7 +96,7 @@ class FakeQueueSnapshot:
         }
 
 
-def write_test_config(tmp_path: Path) -> Path:
+def write_test_config(tmp_path: Path, min_upstream_interval_seconds: float = 0) -> Path:
     db_path = tmp_path / "test.db"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -107,6 +110,7 @@ server:
 queue:
   max_concurrent_upstream: 1
   max_queue_size: 2
+  min_upstream_interval_seconds: {min_upstream_interval_seconds}
 novelai:
   api_key: ""
   account_tier: 3
@@ -788,6 +792,30 @@ def test_generate_can_force_official_image_format(tmp_path: Path, monkeypatch):
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         success_log = next(row for row in logs if row["status"] == "success")
         assert success_log["request_payload"]["parameters"]["image_format"] == "webp"
+
+
+def test_queue_waits_between_upstream_requests(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path, min_upstream_interval_seconds=0.05)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "delay-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        first = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        second = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert len(fake_upstream.generate_started_at) == 2
+        assert fake_upstream.generate_started_at[1] - fake_upstream.generate_started_at[0] >= 0.045
 
 
 def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeypatch):
