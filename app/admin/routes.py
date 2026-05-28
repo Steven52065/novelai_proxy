@@ -325,6 +325,7 @@ async def dashboard(request: Request):
     total_users = db.query_one("SELECT COUNT(*) AS c FROM users")["c"]
     today_requests = db.query_one("SELECT COUNT(*) AS c FROM usage_logs WHERE created_at >= ?", (today,))["c"]
     total_anlas = db.query_one("SELECT COALESCE(SUM(final_anlas_cost), 0) AS c FROM usage_logs WHERE status = 'success'")["c"]
+    request_trends = _request_trend_stats(db)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -337,6 +338,7 @@ async def dashboard(request: Request):
                 "queue_size": request.app.state.proxy_queue.qsize(),
             },
             "queue": _queue_status_payload(request),
+            "request_trends": request_trends,
         },
     )
 
@@ -643,6 +645,109 @@ def _has_admin_session(request: Request) -> bool:
 
 def _today_utc_prefix() -> str:
     return utc_now_iso().split("T", 1)[0]
+
+
+def _request_trend_stats(db: Database) -> dict:
+    now = datetime.now(DISPLAY_TIMEZONE)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    month_start = today_start.replace(day=1)
+    month_end = _add_month(month_start)
+
+    ranges = {
+        "today": _empty_trend_range(
+            labels=[f"{hour:02d}:00" for hour in range(24)],
+            bucket_count=24,
+        ),
+        "week": _empty_trend_range(
+            labels=[
+                f"{weekday} {((week_start + timedelta(days=index)).strftime('%m-%d'))}"
+                for index, weekday in enumerate(("周一", "周二", "周三", "周四", "周五", "周六", "周日"))
+            ],
+            bucket_count=7,
+        ),
+        "month": _empty_trend_range(
+            labels=[
+                (month_start + timedelta(days=index)).strftime("%m-%d")
+                for index in range((month_end - month_start).days)
+            ],
+            bucket_count=(month_end - month_start).days,
+        ),
+    }
+
+    cutoff = min(today_start, week_start, month_start).astimezone(timezone.utc).isoformat()
+    rows = db.query_all(
+        """
+        SELECT status, created_at
+        FROM usage_logs
+        WHERE created_at >= ?
+        ORDER BY created_at
+        """,
+        (cutoff,),
+    )
+    for row in rows:
+        created_at = _parse_log_datetime(row["created_at"])
+        if created_at is None:
+            continue
+        local_time = created_at.astimezone(DISPLAY_TIMEZONE)
+        status = str(row["status"] or "").lower()
+        _add_trend_point(ranges["today"], local_time, status, today_start, today_start + timedelta(days=1), local_time.hour)
+        _add_trend_point(ranges["week"], local_time, status, week_start, week_start + timedelta(days=7), local_time.weekday())
+        _add_trend_point(ranges["month"], local_time, status, month_start, month_end, local_time.day - 1)
+
+    return ranges
+
+
+def _empty_trend_range(labels: list[str], bucket_count: int) -> dict:
+    return {
+        "labels": labels,
+        "series": {
+            "requests": [0 for _ in range(bucket_count)],
+            "failed": [0 for _ in range(bucket_count)],
+            "rejected": [0 for _ in range(bucket_count)],
+        },
+        "totals": {"requests": 0, "failed": 0, "rejected": 0},
+    }
+
+
+def _add_trend_point(
+    trend_range: dict,
+    local_time: datetime,
+    status: str,
+    start: datetime,
+    end: datetime,
+    bucket_index: int,
+) -> None:
+    if not (start <= local_time < end):
+        return
+    if bucket_index < 0 or bucket_index >= len(trend_range["labels"]):
+        return
+    trend_range["series"]["requests"][bucket_index] += 1
+    trend_range["totals"]["requests"] += 1
+    if status == "failed":
+        trend_range["series"]["failed"][bucket_index] += 1
+        trend_range["totals"]["failed"] += 1
+    elif status == "rejected":
+        trend_range["series"]["rejected"][bucket_index] += 1
+        trend_range["totals"]["rejected"] += 1
+
+
+def _parse_log_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _add_month(value: datetime) -> datetime:
+    if value.month == 12:
+        return value.replace(year=value.year + 1, month=1, day=1)
+    return value.replace(month=value.month + 1, day=1)
 
 
 def _row_to_dict(row):

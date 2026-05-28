@@ -43,6 +43,46 @@
 </section>
 
 <section class="panel">
+  <div class="section-head dashboard-chart-head">
+    <div>
+      <h2 style="font-size: 18px; font-weight: 700;">
+        <i data-lucide="chart-line" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        请求数量趋势
+      </h2>
+      <p class="muted" style="margin-top: 4px;">统计全部代理请求、上游失败请求和中转拒绝请求</p>
+    </div>
+    <div class="segmented-control" role="tablist" aria-label="统计时间范围">
+      <button type="button" class="secondary active" data-trend-range="today">今天</button>
+      <button type="button" class="secondary" data-trend-range="week">本周</button>
+      <button type="button" class="secondary" data-trend-range="month">本月</button>
+    </div>
+  </div>
+  <div class="trend-summary" aria-label="请求趋势汇总">
+    <div>
+      <span>请求数量</span>
+      <strong id="trend-total-requests">0</strong>
+    </div>
+    <div>
+      <span>失败数量</span>
+      <strong id="trend-total-failed">0</strong>
+    </div>
+    <div>
+      <span>拒绝数量</span>
+      <strong id="trend-total-rejected">0</strong>
+    </div>
+  </div>
+  <div class="trend-chart-card">
+    <svg id="request-trend-chart" class="trend-chart" viewBox="0 0 960 360" role="img" aria-label="请求数量趋势折线图"></svg>
+    <div id="trend-empty" class="trend-empty muted">当前范围内暂无请求记录</div>
+  </div>
+  <div class="chart-legend" aria-label="图例">
+    <span><i style="background:#60a5fa;"></i>请求数量</span>
+    <span><i style="background:#ef4444;"></i>失败数量</span>
+    <span><i style="background:#f59e0b;"></i>拒绝数量</span>
+  </div>
+</section>
+
+<section class="panel">
   <div class="section-head" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
     <div>
       <h2 style="font-size: 18px; font-weight: 700;">
@@ -76,6 +116,139 @@
 </section>
 
 <script id="initial-queue" type="application/json">{{ queue | tojson }}</script>
+<script id="request-trends" type="application/json">{{ request_trends | tojson }}</script>
+<script>
+(() => {
+  const chart = document.getElementById("request-trend-chart");
+  const empty = document.getElementById("trend-empty");
+  const trendsEl = document.getElementById("request-trends");
+  const rangeButtons = document.querySelectorAll("[data-trend-range]");
+  const totalRequests = document.getElementById("trend-total-requests");
+  const totalFailed = document.getElementById("trend-total-failed");
+  const totalRejected = document.getElementById("trend-total-rejected");
+  const seriesConfig = [
+    {key: "requests", color: "#60a5fa", fill: "rgba(96, 165, 250, 0.08)"},
+    {key: "failed", color: "#ef4444", fill: "rgba(239, 68, 68, 0.06)"},
+    {key: "rejected", color: "#f59e0b", fill: "rgba(245, 158, 11, 0.06)"},
+  ];
+  let trends = {};
+
+  function svgEl(name, attrs = {}) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const [key, value] of Object.entries(attrs)) {
+      node.setAttribute(key, value);
+    }
+    return node;
+  }
+
+  function pointPath(values, maxValue, width, height, left, top) {
+    if (!values.length) return "";
+    const plotWidth = width - left - 28;
+    const plotHeight = height - top - 54;
+    return values.map((value, index) => {
+      const x = left + (values.length === 1 ? plotWidth / 2 : (plotWidth * index) / (values.length - 1));
+      const y = top + plotHeight - (Number(value || 0) / maxValue) * plotHeight;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(" ");
+  }
+
+  function areaPath(values, maxValue, width, height, left, top) {
+    const line = pointPath(values, maxValue, width, height, left, top);
+    if (!line) return "";
+    const plotWidth = width - left - 28;
+    const baseY = height - 54;
+    const firstX = left;
+    const lastX = left + (values.length === 1 ? plotWidth / 2 : plotWidth);
+    return `${line} L ${lastX.toFixed(2)} ${baseY} L ${firstX.toFixed(2)} ${baseY} Z`;
+  }
+
+  function niceTicks(maxValue) {
+    if (maxValue <= 0) return [0, 1, 2, 3];
+    const step = Math.max(1, Math.ceil(maxValue / 3));
+    return [0, step, step * 2, step * 3].filter((value, index, list) => index === 0 || value !== list[index - 1]);
+  }
+
+  function labelIndexes(count) {
+    if (count <= 8) return Array.from({length: count}, (_, index) => index);
+    const step = Math.ceil(count / 7);
+    const indexes = [];
+    for (let index = 0; index < count; index += step) indexes.push(index);
+    if (indexes[indexes.length - 1] !== count - 1) indexes.push(count - 1);
+    return indexes;
+  }
+
+  function renderTrend(rangeKey) {
+    const data = trends[rangeKey] || {labels: [], series: {}, totals: {}};
+    const labels = data.labels || [];
+    const series = data.series || {};
+    const totals = data.totals || {};
+    const width = 960;
+    const height = 360;
+    const left = 58;
+    const top = 28;
+    const values = seriesConfig.flatMap((item) => series[item.key] || []);
+    const maxValue = Math.max(1, ...values.map((value) => Number(value || 0)));
+    const ticks = niceTicks(maxValue);
+    const yMax = Math.max(...ticks, maxValue, 1);
+    const plotWidth = width - left - 28;
+    const plotHeight = height - top - 54;
+
+    totalRequests.textContent = Number(totals.requests || 0);
+    totalFailed.textContent = Number(totals.failed || 0);
+    totalRejected.textContent = Number(totals.rejected || 0);
+    empty.style.display = Number(totals.requests || 0) > 0 ? "none" : "flex";
+    chart.replaceChildren();
+
+    for (const tick of ticks) {
+      const y = top + plotHeight - (tick / yMax) * plotHeight;
+      chart.appendChild(svgEl("line", {x1: left, y1: y, x2: width - 28, y2: y, class: "trend-grid"}));
+      const label = svgEl("text", {x: left - 14, y: y + 4, class: "trend-axis-label", "text-anchor": "end"});
+      label.textContent = tick;
+      chart.appendChild(label);
+    }
+
+    for (const index of labelIndexes(labels.length)) {
+      const x = left + (labels.length === 1 ? plotWidth / 2 : (plotWidth * index) / Math.max(labels.length - 1, 1));
+      const label = svgEl("text", {x, y: height - 18, class: "trend-axis-label", "text-anchor": "middle"});
+      label.textContent = labels[index];
+      chart.appendChild(label);
+    }
+
+    for (const item of seriesConfig) {
+      const itemValues = series[item.key] || [];
+      if (!itemValues.length) continue;
+      chart.appendChild(svgEl("path", {
+        d: areaPath(itemValues, yMax, width, height, left, top),
+        fill: item.fill,
+        class: "trend-area",
+      }));
+      chart.appendChild(svgEl("path", {
+        d: pointPath(itemValues, yMax, width, height, left, top),
+        fill: "none",
+        stroke: item.color,
+        "stroke-width": item.key === "requests" ? 3 : 2.5,
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        class: "trend-line",
+      }));
+    }
+  }
+
+  try {
+    trends = JSON.parse(trendsEl.textContent);
+  } catch (error) {
+    trends = {};
+  }
+
+  for (const button of rangeButtons) {
+    button.addEventListener("click", () => {
+      for (const item of rangeButtons) item.classList.toggle("active", item === button);
+      renderTrend(button.dataset.trendRange);
+    });
+  }
+  renderTrend("today");
+})();
+</script>
 <script>
 (() => {
   const queueSize = document.getElementById("queue-size");

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -855,6 +856,48 @@ def test_admin_login_page(tmp_path: Path, monkeypatch):
         dashboard = client.get("/admin")
         assert dashboard.status_code == 200
         assert "仪表盘" in dashboard.text
+
+
+def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "trend-user", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        now = datetime.now(timezone.utc).isoformat()
+        for request_id, status in (
+            ("trend-success", "success"),
+            ("trend-failed", "failed"),
+            ("trend-rejected", "rejected"),
+        ):
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (request_id, user_id, "generate", 0, status, "INFO", now),
+            )
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        dashboard = client.get("/admin")
+
+        assert dashboard.status_code == 200
+        assert "请求数量趋势" in dashboard.text
+        assert 'id="request-trends"' in dashboard.text
+        trend_json = dashboard.text.split('<script id="request-trends" type="application/json">', 1)[1].split("</script>", 1)[0]
+        trends = json.loads(trend_json)
+        assert trends["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 1}
+        assert sum(trends["today"]["series"]["requests"]) == 3
+        assert sum(trends["week"]["series"]["failed"]) == 1
+        assert sum(trends["month"]["series"]["rejected"]) == 1
 
 
 def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch):
