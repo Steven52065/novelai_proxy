@@ -898,6 +898,8 @@ def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):
         )
         user_id = create_resp.json()["user_id"]
         now = datetime.now(timezone.utc).isoformat()
+        local_today_start = datetime.now(timezone(timedelta(hours=8))).replace(hour=0, minute=0, second=0, microsecond=0)
+        previous_local_day = (local_today_start - timedelta(minutes=30)).astimezone(timezone.utc).isoformat()
         for request_id, status in (
             ("trend-success", "success"),
             ("trend-failed", "failed"),
@@ -912,6 +914,15 @@ def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):
                 """,
                 (request_id, user_id, "generate", 0, status, "INFO", now),
             )
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, status, log_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("trend-previous-local-day", user_id, "generate", 0, "success", "INFO", previous_local_day),
+        )
 
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
@@ -919,6 +930,9 @@ def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):
 
         assert dashboard.status_code == 200
         assert "请求数量趋势" in dashboard.text
+        assert "今日生成请求" in dashboard.text
+        today_metric = dashboard.text.split("今日生成请求", 1)[1].split("</div>", 1)[0]
+        assert "<strong>3</strong>" in today_metric
         assert 'id="request-trends"' in dashboard.text
         trend_json = dashboard.text.split('<script id="request-trends" type="application/json">', 1)[1].split("</script>", 1)[0]
         trends = json.loads(trend_json)

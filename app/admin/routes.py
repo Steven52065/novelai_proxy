@@ -321,9 +321,17 @@ async def dashboard(request: Request):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
-    today = _today_utc_prefix()
+    today_start, today_end = _local_day_range(datetime.now(DISPLAY_TIMEZONE))
     total_users = db.query_one("SELECT COUNT(*) AS c FROM users")["c"]
-    today_requests = db.query_one("SELECT COUNT(*) AS c FROM usage_logs WHERE created_at >= ?", (today,))["c"]
+    today_requests = db.query_one(
+        """
+        SELECT COUNT(*) AS c
+        FROM usage_logs
+        WHERE datetime(created_at) >= datetime(?)
+          AND datetime(created_at) < datetime(?)
+        """,
+        (_to_utc_iso(today_start), _to_utc_iso(today_end)),
+    )["c"]
     total_anlas = db.query_one("SELECT COALESCE(SUM(final_anlas_cost), 0) AS c FROM usage_logs WHERE status = 'success'")["c"]
     request_trends = _request_trend_stats(db)
     return templates.TemplateResponse(
@@ -643,14 +651,11 @@ def _has_admin_session(request: Request) -> bool:
     return hmac.compare_digest(cookie, _session_value(request))
 
 
-def _today_utc_prefix() -> str:
-    return utc_now_iso().split("T", 1)[0]
-
-
 def _request_trend_stats(db: Database) -> dict:
     now = datetime.now(DISPLAY_TIMEZONE)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start, today_end = _local_day_range(now)
     week_start = today_start - timedelta(days=today_start.weekday())
+    week_end = week_start + timedelta(days=7)
     month_start = today_start.replace(day=1)
     month_end = _add_month(month_start)
 
@@ -675,27 +680,80 @@ def _request_trend_stats(db: Database) -> dict:
         ),
     }
 
-    cutoff = min(today_start, week_start, month_start).astimezone(timezone.utc).isoformat()
-    rows = db.query_all(
-        """
-        SELECT status, created_at
-        FROM usage_logs
-        WHERE created_at >= ?
-        ORDER BY created_at
-        """,
-        (cutoff,),
+    _fill_trend_range_from_rows(
+        ranges["today"],
+        db.query_all(
+            """
+            SELECT CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) AS bucket,
+                   COUNT(*) AS requests,
+                   SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
+                   SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
+            FROM usage_logs
+            WHERE datetime(created_at) >= datetime(?)
+              AND datetime(created_at) < datetime(?)
+            GROUP BY bucket
+            """,
+            (_to_utc_iso(today_start), _to_utc_iso(today_end)),
+        ),
     )
-    for row in rows:
-        created_at = _parse_log_datetime(row["created_at"])
-        if created_at is None:
-            continue
-        local_time = created_at.astimezone(DISPLAY_TIMEZONE)
-        status = str(row["status"] or "").lower()
-        _add_trend_point(ranges["today"], local_time, status, today_start, today_start + timedelta(days=1), local_time.hour)
-        _add_trend_point(ranges["week"], local_time, status, week_start, week_start + timedelta(days=7), local_time.weekday())
-        _add_trend_point(ranges["month"], local_time, status, month_start, month_end, local_time.day - 1)
+    _fill_trend_range_from_rows(
+        ranges["week"],
+        _date_bucket_rows(db, week_start, week_end),
+        _date_index_map(week_start, 7),
+    )
+    _fill_trend_range_from_rows(
+        ranges["month"],
+        _date_bucket_rows(db, month_start, month_end),
+        _date_index_map(month_start, (month_end - month_start).days),
+    )
 
     return ranges
+
+
+def _date_bucket_rows(db: Database, start: datetime, end: datetime) -> list:
+    return db.query_all(
+        """
+        SELECT date(datetime(created_at, '+8 hours')) AS bucket,
+               COUNT(*) AS requests,
+               SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
+               SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
+        FROM usage_logs
+        WHERE datetime(created_at) >= datetime(?)
+          AND datetime(created_at) < datetime(?)
+        GROUP BY bucket
+        """,
+        (_to_utc_iso(start), _to_utc_iso(end)),
+    )
+
+
+def _date_index_map(start: datetime, bucket_count: int) -> dict[str, int]:
+    return {
+        (start + timedelta(days=index)).date().isoformat(): index
+        for index in range(bucket_count)
+    }
+
+
+def _fill_trend_range_from_rows(trend_range: dict, rows: list, bucket_indexes: dict[str, int] | None = None) -> None:
+    for row in rows:
+        raw_bucket = row["bucket"]
+        bucket_index = bucket_indexes.get(str(raw_bucket)) if bucket_indexes is not None else raw_bucket
+        if bucket_index is None:
+            continue
+        try:
+            index = int(bucket_index)
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(trend_range["labels"]):
+            continue
+        requests = int(row["requests"] or 0)
+        failed = int(row["failed"] or 0)
+        rejected = int(row["rejected"] or 0)
+        trend_range["series"]["requests"][index] = requests
+        trend_range["series"]["failed"][index] = failed
+        trend_range["series"]["rejected"][index] = rejected
+        trend_range["totals"]["requests"] += requests
+        trend_range["totals"]["failed"] += failed
+        trend_range["totals"]["rejected"] += rejected
 
 
 def _empty_trend_range(labels: list[str], bucket_count: int) -> dict:
@@ -710,38 +768,13 @@ def _empty_trend_range(labels: list[str], bucket_count: int) -> dict:
     }
 
 
-def _add_trend_point(
-    trend_range: dict,
-    local_time: datetime,
-    status: str,
-    start: datetime,
-    end: datetime,
-    bucket_index: int,
-) -> None:
-    if not (start <= local_time < end):
-        return
-    if bucket_index < 0 or bucket_index >= len(trend_range["labels"]):
-        return
-    trend_range["series"]["requests"][bucket_index] += 1
-    trend_range["totals"]["requests"] += 1
-    if status == "failed":
-        trend_range["series"]["failed"][bucket_index] += 1
-        trend_range["totals"]["failed"] += 1
-    elif status == "rejected":
-        trend_range["series"]["rejected"][bucket_index] += 1
-        trend_range["totals"]["rejected"] += 1
+def _local_day_range(value: datetime) -> tuple[datetime, datetime]:
+    start = value.astimezone(DISPLAY_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
 
 
-def _parse_log_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
+def _to_utc_iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _add_month(value: datetime) -> datetime:
