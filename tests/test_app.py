@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
+import threading
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -104,12 +106,15 @@ class FakeQueueSnapshot:
 
 
 class FakeImageHosting:
-    def __init__(self):
+    def __init__(self, release_event: threading.Event | None = None):
+        self.release_event = release_event
         self.uploaded_request_ids = []
 
     async def upload_zip_images(self, *, zip_payload: bytes, request_id: str):
         assert b"fake-image" in zip_payload
         self.uploaded_request_ids.append(request_id)
+        if self.release_event is not None:
+            await asyncio.to_thread(self.release_event.wait)
         return [
             {
                 "provider": "catbox",
@@ -757,7 +762,8 @@ def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkey
     from app.main import app
 
     with TestClient(app) as client:
-        fake_hosting = FakeImageHosting()
+        release_upload = threading.Event()
+        fake_hosting = FakeImageHosting(release_upload)
         app.state.upstream = FakeUpstream()
         app.state.proxy_queue.image_hosting = fake_hosting
         create_resp = client.post(
@@ -773,6 +779,10 @@ def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkey
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         success_log = next(row for row in logs if row["status"] == "success")
         assert fake_hosting.uploaded_request_ids == [success_log["request_id"]]
+        assert success_log["image_urls"] == []
+
+        release_upload.set()
+        success_log = _wait_for_log_image_urls(client, success_log["request_id"])
         assert success_log["image_urls"] == [
             {
                 "provider": "catbox",
@@ -789,6 +799,17 @@ def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkey
         assert page.status_code == 200
         assert "https://files.catbox.moe/fake-image.png" in page.text
         assert "图床图片" in page.text
+
+
+def _wait_for_log_image_urls(client: TestClient, request_id: str) -> dict:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        log = next(row for row in logs if row["request_id"] == request_id)
+        if log["image_urls"]:
+            return log
+        time.sleep(0.05)
+    raise AssertionError("timed out waiting for image host upload")
 
 
 def test_generate_respects_requested_official_image_format(tmp_path: Path, monkeypatch):
@@ -1123,12 +1144,44 @@ def test_admin_database_management_clears_large_payloads(tmp_path: Path, monkeyp
                 """
                 INSERT INTO usage_logs (
                     request_id, user_id, action, estimated_anlas_cost, status, log_level,
-                    request_payload, output_files, created_at
+                    request_payload, output_files, image_urls, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (request_id, user_id, "generate", 0, "success", "INFO", large_payload, '["image.png"]', created_at),
+                (
+                    request_id,
+                    user_id,
+                    "generate",
+                    0,
+                    "success",
+                    "INFO",
+                    large_payload,
+                    '["image.png"]',
+                    '[{"url":"https://files.catbox.moe/image.png"}]',
+                    created_at,
+                ),
             )
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, status, log_level,
+                request_payload, output_files, image_urls, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old-large-image-urls",
+                user_id,
+                "generate",
+                0,
+                "success",
+                "INFO",
+                None,
+                "[]",
+                '[{"url":"https://files.catbox.moe/' + ("b" * 2048) + '.png"}]',
+                old_time,
+            ),
+        )
 
         stats = client.get("/admin/api/database/stats", auth=("admin", "admin123"))
         assert stats.status_code == 200
@@ -1143,16 +1196,33 @@ def test_admin_database_management_clears_large_payloads(tmp_path: Path, monkeyp
         assert clear_resp.json()["updated_logs"] == 1
 
         old_row = app.state.db.query_one(
-            "SELECT request_payload, output_files FROM usage_logs WHERE request_id = ?",
+            "SELECT request_payload, output_files, image_urls FROM usage_logs WHERE request_id = ?",
             ("old-large-payload",),
         )
         recent_row = app.state.db.query_one(
-            "SELECT request_payload, output_files FROM usage_logs WHERE request_id = ?",
+            "SELECT request_payload, output_files, image_urls FROM usage_logs WHERE request_id = ?",
             ("recent-large-payload",),
         )
         assert old_row["request_payload"] is None
         assert old_row["output_files"] == '["image.png"]'
+        assert old_row["image_urls"] == '[{"url":"https://files.catbox.moe/image.png"}]'
         assert recent_row["request_payload"] == large_payload
+
+        clear_urls_resp = client.post(
+            "/admin/api/database/clear-payloads",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 7, "min_payload_kb": 1, "clear_image_urls": True},
+        )
+        assert clear_urls_resp.status_code == 200
+        assert clear_urls_resp.json()["updated_logs"] == 1
+
+        image_url_row = app.state.db.query_one(
+            "SELECT request_payload, output_files, image_urls FROM usage_logs WHERE request_id = ?",
+            ("old-large-image-urls",),
+        )
+        assert image_url_row["request_payload"] is None
+        assert image_url_row["output_files"] == "[]"
+        assert image_url_row["image_urls"] is None
 
 
 def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, monkeypatch):

@@ -53,6 +53,7 @@ class ProxyQueue:
         self._last_upstream_started_at: float | None = None
         self._sequence = itertools.count()
         self._worker: asyncio.Task | None = None
+        self._image_upload_tasks: set[asyncio.Task] = set()
         self._running_item: QueueItem | None = None
         self._running_started_at: float | None = None
 
@@ -68,6 +69,15 @@ class ProxyQueue:
             await self._worker
         except asyncio.CancelledError:
             pass
+        if self._image_upload_tasks:
+            for task in self._image_upload_tasks:
+                task.cancel()
+            await asyncio.gather(*self._image_upload_tasks, return_exceptions=True)
+            self._image_upload_tasks.clear()
+
+    async def wait_for_image_uploads(self) -> None:
+        if self._image_upload_tasks:
+            await asyncio.gather(*self._image_upload_tasks)
 
     def qsize(self) -> int:
         return self.queue.qsize()
@@ -167,7 +177,6 @@ class ProxyQueue:
                     item.future.set_exception(exc)
             else:
                 saved_files = []
-                image_urls = []
                 if item.process_zip_response:
                     try:
                         saved_files = archive_zip_images(
@@ -179,15 +188,6 @@ class ProxyQueue:
                     except Exception:
                         logger.exception("failed to archive generated images request_id=%s", item.request_id)
                         saved_files = []
-                    if self.image_hosting is not None:
-                        try:
-                            image_urls = await self.image_hosting.upload_zip_images(
-                                zip_payload=payload,
-                                request_id=item.request_id,
-                            )
-                        except Exception:
-                            logger.exception("failed to upload generated images request_id=%s", item.request_id)
-                            image_urls = []
                 if item.manage_quota:
                     self.quota_manager.confirm(item.user_id, item.estimated_cost)
                 self.db.execute(
@@ -197,7 +197,7 @@ class ProxyQueue:
                         queued_ms = COALESCE(queued_ms, ?),
                         final_anlas_cost = ?,
                         output_files = ?,
-                        image_urls = ?,
+                        image_urls = COALESCE(image_urls, ?),
                         completed_at = ?
                     WHERE request_id = ?
                     """,
@@ -205,20 +205,21 @@ class ProxyQueue:
                         queued_ms,
                         item.estimated_cost,
                         json_dumps(saved_files),
-                        json_dumps(image_urls),
+                        json_dumps([]),
                         utc_now_iso(),
                         item.request_id,
                     ),
                 )
                 logger.info(
-                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s image_urls=%s",
+                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s",
                     item.request_id,
                     item.estimated_cost,
                     len(saved_files),
-                    len(image_urls),
                 )
                 if not item.future.done():
                     item.future.set_result(payload)
+                if item.process_zip_response and self.image_hosting is not None:
+                    self._schedule_image_upload(zip_payload=payload, request_id=item.request_id)
             finally:
                 self._running_item = None
                 self._running_started_at = None
@@ -240,6 +241,36 @@ class ProxyQueue:
             logger.info("proxy request waiting before upstream request_id=%s delay_seconds=%.3f", request_id, delay)
             await asyncio.sleep(delay)
         self._last_upstream_started_at = time.monotonic()
+
+    def _schedule_image_upload(self, *, zip_payload: bytes, request_id: str) -> None:
+        task = asyncio.create_task(self._upload_images_and_update_log(zip_payload=zip_payload, request_id=request_id))
+        self._image_upload_tasks.add(task)
+        task.add_done_callback(self._image_upload_tasks.discard)
+
+    async def _upload_images_and_update_log(self, *, zip_payload: bytes, request_id: str) -> None:
+        if self.image_hosting is None:
+            return
+        try:
+            image_urls = await self.image_hosting.upload_zip_images(
+                zip_payload=zip_payload,
+                request_id=request_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("failed to upload generated images request_id=%s", request_id)
+            return
+        if not image_urls:
+            return
+        self.db.execute(
+            """
+            UPDATE usage_logs
+            SET image_urls = ?
+            WHERE request_id = ?
+            """,
+            (json_dumps(image_urls), request_id),
+        )
+        logger.info("image host upload succeeded request_id=%s image_urls=%s", request_id, len(image_urls))
 
     @staticmethod
     def _item_snapshot(item: QueueItem, now: float, status: str, position: int) -> dict[str, object]:

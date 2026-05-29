@@ -39,7 +39,7 @@
   <div>
     <span>
       <i data-lucide="archive" style="width: 16px; height: 16px; stroke: #f59e0b;"></i>
-      Payload 占用
+      大字段占用
     </span>
     <strong>{{ stats.usage_logs.payload_bytes | filesizeformat }}</strong>
   </div>
@@ -117,6 +117,10 @@
         <input type="checkbox" name="clear_output_files">
         同时清空输出文件路径
       </label>
+      <label class="check">
+        <input type="checkbox" name="clear_image_urls">
+        同时清空图床 URL
+      </label>
       <button type="submit">
         <i data-lucide="eraser" style="width: 16px; height: 16px;"></i>
         清空大字段
@@ -185,7 +189,7 @@
         <i data-lucide="list-filter" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
         最大日志记录
       </h2>
-      <p class="muted" style="margin-top: 4px;">按请求 Payload 和输出路径字段大小排序。</p>
+      <p class="muted" style="margin-top: 4px;">按请求 Payload、输出路径和图床 URL 字段大小排序。</p>
     </div>
   </div>
   <div class="table-wrap">
@@ -198,6 +202,7 @@
           <th>状态</th>
           <th>Payload</th>
           <th>输出路径</th>
+          <th>图床 URL</th>
           <th>创建时间</th>
         </tr>
       </thead>
@@ -210,11 +215,12 @@
           <td><span class="status-pill">{{ log.status }}</span></td>
           <td class="mono">{{ log.request_payload_display }}</td>
           <td class="mono">{{ log.output_files_display }}</td>
+          <td class="mono">{{ log.image_urls_display }}</td>
           <td class="muted">{{ log.created_at_display }}</td>
         </tr>
         {% else %}
         <tr class="empty-row">
-          <td colspan="7" style="text-align: center; padding: 32px 0;">
+          <td colspan="8" style="text-align: center; padding: 32px 0;">
             <span class="muted">暂无日志记录</span>
           </td>
         </tr>

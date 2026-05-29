@@ -77,6 +77,7 @@ class ClearPayloadsRequest(BaseModel):
     older_than_days: int = Field(default=7, ge=0, le=3650)
     min_payload_kb: int = Field(default=128, ge=0, le=1024 * 1024)
     clear_output_files: bool = False
+    clear_image_urls: bool = False
 
 
 REPLAY_PRIORITY = -100
@@ -394,6 +395,7 @@ async def clear_payloads(payload: ClearPayloadsRequest, request: Request):
         older_than_days=payload.older_than_days,
         min_payload_kb=payload.min_payload_kb,
         clear_output_files=payload.clear_output_files,
+        clear_image_urls=payload.clear_image_urls,
     )
 
 
@@ -720,6 +722,7 @@ async def clear_payloads_form(
     older_than_days: int = Form(7),
     min_payload_kb: int = Form(128),
     clear_output_files: str | None = Form(None),
+    clear_image_urls: str | None = Form(None),
 ):
     if not _has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -728,6 +731,7 @@ async def clear_payloads_form(
         older_than_days=older_than_days,
         min_payload_kb=min_payload_kb,
         clear_output_files=clear_output_files == "on",
+        clear_image_urls=clear_image_urls == "on",
     )
     return RedirectResponse(f"/admin/database?message=已清空 {result['updated_logs']} 条日志的大字段", status_code=303)
 
@@ -1126,6 +1130,7 @@ def _clear_payloads(
     older_than_days: int,
     min_payload_kb: int,
     clear_output_files: bool,
+    clear_image_urls: bool,
 ) -> dict:
     db: Database = request.app.state.db
     cutoff = _cutoff_time(older_than_days)
@@ -1133,12 +1138,20 @@ def _clear_payloads(
     set_clause = "request_payload = NULL"
     if clear_output_files:
         set_clause += ", output_files = NULL"
+    if clear_image_urls:
+        set_clause += ", image_urls = NULL"
+    size_terms = ["COALESCE(LENGTH(request_payload), 0)"]
+    if clear_output_files:
+        size_terms.append("COALESCE(LENGTH(output_files), 0)")
+    if clear_image_urls:
+        size_terms.append("COALESCE(LENGTH(image_urls), 0)")
+    size_filter = " + ".join(size_terms)
     cursor = db.execute(
         f"""
         UPDATE usage_logs
         SET {set_clause}
         WHERE created_at < ?
-          AND COALESCE(LENGTH(request_payload), 0) >= ?
+          AND ({size_filter}) >= ?
         """,
         (cutoff, min_payload_bytes),
     )
@@ -1148,6 +1161,7 @@ def _clear_payloads(
         "cutoff": cutoff,
         "min_payload_bytes": min_payload_bytes,
         "clear_output_files": clear_output_files,
+        "clear_image_urls": clear_image_urls,
     }
 
 
