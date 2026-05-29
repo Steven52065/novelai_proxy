@@ -38,15 +38,16 @@ class ImageHostClient(Protocol):
 class CatboxImageHost:
     provider = "catbox"
 
-    def __init__(self, *, api_url: str, userhash: str | None, timeout_seconds: float):
+    def __init__(self, *, api_url: str, userhash: str, timeout_seconds: float):
+        userhash = userhash.strip()
+        if not userhash:
+            raise ValueError("Catbox userhash is required when image hosting is enabled")
         self.api_url = api_url
         self.userhash = userhash
         self.timeout_seconds = timeout_seconds
 
     async def upload_image(self, image: ImageUploadFile) -> str:
-        data = {"reqtype": "fileupload"}
-        if self.userhash:
-            data["userhash"] = self.userhash
+        data = {"reqtype": "fileupload", "userhash": self.userhash}
         files = {
             "fileToUpload": (
                 image.filename,

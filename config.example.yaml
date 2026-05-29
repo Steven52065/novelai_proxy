@@ -90,8 +90,8 @@ image_hosting:
   catbox:
     # Catbox 官方 API 入口。
     api_url: https://catbox.moe/user/api.php
-    # 可选：Catbox 用户 hash。留空则匿名上传。
-    userhash:
+    # Catbox 用户 hash。启用图床上传时必须填写。
+    userhash: ""
 
 # 浏览器跨域 CORS 配置。
 # 当前项目主要使用 Authorization: Bearer <proxy_api_key> 鉴权；

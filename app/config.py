@@ -59,7 +59,7 @@ class CorsConfig(BaseModel):
 
 class CatboxConfig(BaseModel):
     api_url: str = "https://catbox.moe/user/api.php"
-    userhash: str | None = None
+    userhash: str = ""
 
 
 class ImageHostingConfig(BaseModel):
