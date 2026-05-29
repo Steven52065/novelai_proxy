@@ -35,6 +35,8 @@ PAYLOAD = {
 class FakeUpstream:
     def __init__(self):
         self.last_generate_payload = None
+        self.last_post_binary_url = None
+        self.last_post_binary_payload = None
         self.generate_started_at = []
 
     async def generate_image_zip(self, req):
@@ -50,6 +52,11 @@ class FakeUpstream:
 
     async def encode_vibe_binary(self, payload):
         return b"fake-vibe"
+
+    async def post_binary(self, url, payload):
+        self.last_post_binary_url = url
+        self.last_post_binary_payload = payload
+        return await self.generate_image_zip(payload)
 
     async def upscale_zip(self, req):
         return b"fake-upscale-zip"
@@ -839,6 +846,55 @@ def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeyp
 
         assert resp.status_code == 402
         assert resp.json()["message"].startswith("Insufficient anlas")
+
+
+def test_admin_can_replay_rejected_generate_without_quota_charge(tmp_path: Path, monkeypatch):
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    paid_payload = PAYLOAD | {
+        "parameters": PAYLOAD["parameters"] | {"width": 1024, "height": 1024, "steps": 50}
+    }
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "replay-low-quota", "tier": "normal", "anlas_total": 1},
+        )
+        user_id = create_resp.json()["user_id"]
+        api_key = create_resp.json()["api_key"]
+
+        rejected = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=paid_payload)
+        assert rejected.status_code == 402
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        rejected_log = next(row for row in logs if row["status"] == "rejected")
+
+        replay = client.post(f"/admin/api/logs/{rejected_log['request_id']}/replay", auth=("admin", "admin123"))
+
+        assert replay.status_code == 200
+        body = replay.json()
+        assert body["source_request_id"] == rejected_log["request_id"]
+        assert body["replay_request_id"] != rejected_log["request_id"]
+        assert body["images"][0]["filename"] == "image.png"
+        assert body["images"][0]["data_url"].startswith("data:image/png;base64,")
+        assert fake_upstream.last_post_binary_url == "https://image.novelai.net/ai/generate-image"
+        assert fake_upstream.last_post_binary_payload == paid_payload
+
+        quota = app.state.quota_manager.get_snapshot(user_id)
+        assert quota.used == 0
+        assert quota.reserved == 0
+
+        replay_log = app.state.db.query_one(
+            "SELECT action, status, estimated_anlas_cost, final_anlas_cost FROM usage_logs WHERE request_id = ?",
+            (body["replay_request_id"],),
+        )
+        assert replay_log["action"] == "replay:generate"
+        assert replay_log["status"] == "success"
+        assert replay_log["estimated_anlas_cost"] == 0
+        assert replay_log["final_anlas_cost"] == 0
 
 
 def test_upscale_and_augment_are_queued_and_logged(tmp_path: Path, monkeypatch):

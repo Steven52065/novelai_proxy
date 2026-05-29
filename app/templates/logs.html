@@ -45,12 +45,13 @@
           <th>Anlas (预估/实际)</th>
           <th>运行状态</th>
           <th>创建时间</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
         {% if not logs %}
         <tr class="empty-row">
-          <td colspan="9" style="text-align: center; padding: 48px 0;">
+          <td colspan="10" style="text-align: center; padding: 48px 0;">
             <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
               <i data-lucide="info" style="width:32px; height:32px; stroke:#64748b;"></i>
               <span class="muted">当前没有任何符合条件的日志记录</span>
@@ -98,13 +99,25 @@
             {% endif %}
           </td>
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
+          <td>
+            {% if log.request_payload %}
+            <button class="secondary btn-replay-log" data-request-id="{{ log.request_id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+              <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
+              <span>重放</span>
+            </button>
+            {% else %}
+            <span class="muted" style="font-size: 12px;">不可重放</span>
+            {% endif %}
+          </td>
         </tr>
         <tr class="log-detail-row">
-          <td colspan="9">
+          <td colspan="10">
             <details class="log-details-block" data-request-id="{{ log.request_id }}">
               <summary>展开请求参数及输出文件</summary>
               
               <div style="margin-top: 16px; display: grid; gap: 16px; animation: slideDown 0.25s ease-out;">
+                <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
+
                 {% if log.error_message %}
                 <div class="error" style="margin-bottom: 0;">
                   <div style="display: flex; align-items: center; gap: 8px;">
@@ -333,6 +346,103 @@
       }
     });
   });
+
+  document.querySelectorAll(".btn-replay-log").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const requestId = btn.dataset.requestId;
+      const resultBox = document.getElementById(`replay-result-${requestId}`);
+      const detailBlock = document.querySelector(`.log-details-block[data-request-id="${requestId}"]`);
+      if (detailBlock && !detailBlock.open) {
+        detailBlock.open = true;
+      }
+      setReplayButtonState(btn, true, "重放中");
+      renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
+
+      try {
+        const response = await fetch(`/admin/api/logs/${encodeURIComponent(requestId)}/replay`, {
+          method: "POST",
+          headers: { "Accept": "application/json" },
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.message || body.detail?.message || `重放失败：HTTP ${response.status}`);
+        }
+        renderReplayImages(resultBox, body);
+        showToast(`重放完成：${body.images?.length || 0} 张图片`);
+      } catch (err) {
+        renderReplayStatus(resultBox, "error", err.message || "重放请求失败。");
+        showToast(err.message || "重放请求失败。");
+      } finally {
+        setReplayButtonState(btn, false, "重放");
+      }
+    });
+  });
+
+  function setReplayButtonState(btn, loading, label) {
+    btn.disabled = loading;
+    const labelSpan = btn.querySelector("span");
+    const icon = btn.querySelector("i");
+    if (labelSpan) labelSpan.textContent = label;
+    if (icon) icon.setAttribute("data-lucide", loading ? "loader-circle" : "repeat-2");
+    lucide.createIcons();
+  }
+
+  function renderReplayStatus(container, type, message) {
+    if (!container) return;
+    container.hidden = false;
+    container.innerHTML = `
+      <div class="replay-status replay-status-${type}">
+        <i data-lucide="${type === "error" ? "alert-circle" : "loader-circle"}" style="width: 16px; height: 16px;"></i>
+        <span>${escapeHtml(message)}</span>
+      </div>
+    `;
+    lucide.createIcons();
+  }
+
+  function renderReplayImages(container, body) {
+    if (!container) return;
+    container.hidden = false;
+    const images = Array.isArray(body.images) ? body.images : [];
+    if (images.length === 0) {
+      renderReplayStatus(container, "error", `重放完成，但响应中没有可直接预览的图片。新日志：${body.replay_request_id || "-"}`);
+      return;
+    }
+    const imageHtml = images.map((image, index) => `
+      <button class="replay-image-button" type="button" data-image-index="${index}" title="${escapeHtml(image.filename || "image")}">
+        <img src="${image.data_url}" alt="${escapeHtml(image.filename || "replay image")}">
+        <span>${escapeHtml(image.filename || `image-${index + 1}`)}</span>
+      </button>
+    `).join("");
+    container.innerHTML = `
+      <div class="replay-head">
+        <span>
+          <i data-lucide="image" style="width: 15px; height: 15px;"></i>
+          重放结果
+        </span>
+        <code>${escapeHtml(body.replay_request_id || "")}</code>
+      </div>
+      <div class="replay-gallery">${imageHtml}</div>
+    `;
+    container.querySelectorAll(".replay-image-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const image = images[Number(button.dataset.imageIndex)];
+        if (image?.data_url) {
+          previewBase64Image(image.data_url);
+        }
+      });
+    });
+    lucide.createIcons();
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 })();
 </script>
 {% endblock %}

@@ -30,6 +30,9 @@ class UpstreamClient:
     async def encode_vibe_binary(self, payload: dict[str, Any]) -> bytes:
         return await self._post_binary("https://image.novelai.net/ai/encode-vibe", payload)
 
+    async def post_binary(self, url: str, payload: dict[str, Any]) -> bytes:
+        return await self._post_binary(url, payload)
+
     async def upscale_zip(self, req: Upscale) -> bytes:
         result = await req.request(session=self._credential())
         files = [result.files] if result.files else []

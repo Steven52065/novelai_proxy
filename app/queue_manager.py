@@ -24,6 +24,7 @@ class QueueItem:
     action: str = field(compare=False)
     tier: str = field(compare=False)
     estimated_cost: int = field(compare=False)
+    manage_quota: bool = field(compare=False)
     logging_config: LoggingConfig = field(compare=False)
     process_zip_response: bool = field(compare=False)
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
@@ -92,10 +93,12 @@ class ProxyQueue:
         estimated_cost: int,
         handler: Callable[[], Awaitable[bytes]],
         process_zip_response: bool = True,
+        priority_override: int | None = None,
+        manage_quota: bool = True,
     ) -> bytes:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        priority = 0 if tier == "vip" else 10
+        priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
         item = QueueItem(
             priority=priority,
             sequence=next(self._sequence),
@@ -105,6 +108,7 @@ class ProxyQueue:
             action=action,
             tier=tier,
             estimated_cost=estimated_cost,
+            manage_quota=manage_quota,
             logging_config=logging_config,
             process_zip_response=process_zip_response,
             handler=handler,
@@ -135,7 +139,8 @@ class ProxyQueue:
                 await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
             except Exception as exc:
-                self.quota_manager.release(item.user_id, item.estimated_cost)
+                if item.manage_quota:
+                    self.quota_manager.release(item.user_id, item.estimated_cost)
                 code, message = self._error_details(exc)
                 self.db.execute(
                     """
@@ -167,7 +172,8 @@ class ProxyQueue:
                 except Exception:
                     logger.exception("failed to archive generated images request_id=%s", item.request_id)
                     saved_files = []
-                self.quota_manager.confirm(item.user_id, item.estimated_cost)
+                if item.manage_quota:
+                    self.quota_manager.confirm(item.user_id, item.estimated_cost)
                 self.db.execute(
                     """
                     UPDATE usage_logs

@@ -1133,6 +1133,91 @@ pre {
   box-shadow: none;
 }
 
+/* Replay result preview on logs page */
+.replay-result {
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: var(--border-radius-md);
+  background: rgba(15, 23, 42, 0.42);
+  padding: 14px;
+}
+
+.replay-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #bfdbfe;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.replay-status-error {
+  color: #fca5a5;
+}
+
+.replay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.replay-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #bfdbfe;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.replay-head code {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replay-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.replay-image-button {
+  min-height: auto;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--border-radius-md);
+  background: rgba(7, 10, 23, 0.5);
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.replay-image-button:hover {
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(15, 23, 42, 0.8);
+  box-shadow: none;
+}
+
+.replay-image-button img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  border-radius: var(--border-radius-sm);
+  background: #050814;
+}
+
+.replay-image-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
 /* Lightbox for previewing base64 image */
 .lightbox {
   position: fixed;
