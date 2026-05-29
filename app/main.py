@@ -19,6 +19,7 @@ from .admin.routes import router as admin_router
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .database import Database
+from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .proxy.routes import router as proxy_router
 from .queue_manager import ProxyQueue
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
         quota_manager=quota_manager,
         max_queue_size=config.queue.max_queue_size,
         min_upstream_interval_seconds=config.queue.min_upstream_interval_seconds,
+        image_hosting=ImageHostingService(config.image_hosting),
     )
 
     app.state.config = config

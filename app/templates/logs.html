@@ -147,6 +147,33 @@
 
                 <div>
                   <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+                    图床图片：
+                  </span>
+                  {% if log.image_urls %}
+                  <div class="hosted-image-gallery">
+                    {% for image in log.image_urls %}
+                    {% set image_url = image.url if image is mapping else image %}
+                    {% set image_name = image.filename if image is mapping and image.filename else image_url %}
+                    <a class="hosted-image-card" href="{{ image_url }}" target="_blank" rel="noopener noreferrer">
+                      <img src="{{ image_url }}" alt="{{ image_name }}">
+                      <span>
+                        <i data-lucide="external-link" style="width: 13px; height: 13px;"></i>
+                        {{ image.provider if image is mapping and image.provider else "image-host" }}
+                      </span>
+                      <code>{{ image_url }}</code>
+                    </a>
+                    {% endfor %}
+                  </div>
+                  {% else %}
+                  <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
+                    <i data-lucide="info" style="width: 14px; height: 14px;"></i>
+                    未上传到图床
+                  </p>
+                  {% endif %}
+                </div>
+
+                <div>
+                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
                     本地生成的图片输出路径：
                   </span>
                   {% if log.output_files %}

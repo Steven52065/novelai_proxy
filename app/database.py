@@ -78,6 +78,7 @@ class Database:
                     log_level TEXT NOT NULL DEFAULT 'INFO',
                     request_payload TEXT,
                     output_files TEXT,
+                    image_urls TEXT,
                     created_at TEXT NOT NULL,
                     completed_at TEXT
                 );
@@ -91,6 +92,7 @@ class Database:
             self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
             self._add_column_if_missing("usage_logs", "request_payload", "TEXT")
             self._add_column_if_missing("usage_logs", "output_files", "TEXT")
+            self._add_column_if_missing("usage_logs", "image_urls", "TEXT")
             self._add_column_if_missing("users", "api_key", "TEXT")
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("users", "allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'")

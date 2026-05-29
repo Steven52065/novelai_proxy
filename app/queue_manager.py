@@ -4,7 +4,7 @@ import asyncio
 import itertools
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 from novelai_python._exceptions import APIError
 
@@ -12,6 +12,11 @@ from .config import LoggingConfig
 from .database import Database, utc_now_iso
 from .logging_utils import archive_zip_images, json_dumps, logger
 from .quota_manager import QuotaManager
+
+
+class ImageHostingServiceLike(Protocol):
+    async def upload_zip_images(self, *, zip_payload: bytes, request_id: str) -> list[dict[str, object]]:
+        ...
 
 
 @dataclass(order=True)
@@ -38,9 +43,11 @@ class ProxyQueue:
         quota_manager: QuotaManager,
         max_queue_size: int,
         min_upstream_interval_seconds: float = 0,
+        image_hosting: ImageHostingServiceLike | None = None,
     ):
         self.db = db
         self.quota_manager = quota_manager
+        self.image_hosting = image_hosting
         self.queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=max_queue_size)
         self.min_upstream_interval_seconds = max(0.0, float(min_upstream_interval_seconds))
         self._last_upstream_started_at: float | None = None
@@ -159,19 +166,28 @@ class ProxyQueue:
                 if not item.future.done():
                     item.future.set_exception(exc)
             else:
-                try:
-                    if item.process_zip_response:
+                saved_files = []
+                image_urls = []
+                if item.process_zip_response:
+                    try:
                         saved_files = archive_zip_images(
                             zip_payload=payload,
                             request_id=item.request_id,
                             action=item.action,
                             config=item.logging_config,
                         )
-                    else:
+                    except Exception:
+                        logger.exception("failed to archive generated images request_id=%s", item.request_id)
                         saved_files = []
-                except Exception:
-                    logger.exception("failed to archive generated images request_id=%s", item.request_id)
-                    saved_files = []
+                    if self.image_hosting is not None:
+                        try:
+                            image_urls = await self.image_hosting.upload_zip_images(
+                                zip_payload=payload,
+                                request_id=item.request_id,
+                            )
+                        except Exception:
+                            logger.exception("failed to upload generated images request_id=%s", item.request_id)
+                            image_urls = []
                 if item.manage_quota:
                     self.quota_manager.confirm(item.user_id, item.estimated_cost)
                 self.db.execute(
@@ -181,16 +197,25 @@ class ProxyQueue:
                         queued_ms = COALESCE(queued_ms, ?),
                         final_anlas_cost = ?,
                         output_files = ?,
+                        image_urls = ?,
                         completed_at = ?
                     WHERE request_id = ?
                     """,
-                    (queued_ms, item.estimated_cost, json_dumps(saved_files), utc_now_iso(), item.request_id),
+                    (
+                        queued_ms,
+                        item.estimated_cost,
+                        json_dumps(saved_files),
+                        json_dumps(image_urls),
+                        utc_now_iso(),
+                        item.request_id,
+                    ),
                 )
                 logger.info(
-                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s",
+                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s image_urls=%s",
                     item.request_id,
                     item.estimated_cost,
                     len(saved_files),
+                    len(image_urls),
                 )
                 if not item.future.done():
                     item.future.set_result(payload)

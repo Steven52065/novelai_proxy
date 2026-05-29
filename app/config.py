@@ -57,6 +57,18 @@ class CorsConfig(BaseModel):
     max_age: int = Field(default=600, ge=0)
 
 
+class CatboxConfig(BaseModel):
+    api_url: str = "https://catbox.moe/user/api.php"
+    userhash: str | None = None
+
+
+class ImageHostingConfig(BaseModel):
+    enabled: bool = False
+    provider: Literal["catbox"] = "catbox"
+    timeout_seconds: float = Field(default=30, gt=0)
+    catbox: CatboxConfig = Field(default_factory=CatboxConfig)
+
+
 class AppConfig(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -65,6 +77,7 @@ class AppConfig(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)
+    image_hosting: ImageHostingConfig = Field(default_factory=ImageHostingConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 

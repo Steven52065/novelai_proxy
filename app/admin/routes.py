@@ -925,6 +925,7 @@ def _usage_log_to_dict(row):
     data["completed_at_display"] = _format_display_time(data.get("completed_at"))
     data["request_payload"] = _json_or_none(data.get("request_payload"))
     data["output_files"] = _json_or_empty_list(data.get("output_files"))
+    data["image_urls"] = _json_or_empty_list(data.get("image_urls"))
     return data
 
 
@@ -1046,6 +1047,7 @@ def _database_stats(request: Request) -> dict:
         SELECT COUNT(*) AS total_logs,
                COALESCE(SUM(LENGTH(request_payload)), 0) AS request_payload_bytes,
                COALESCE(SUM(LENGTH(output_files)), 0) AS output_files_bytes,
+               COALESCE(SUM(LENGTH(image_urls)), 0) AS image_urls_bytes,
                SUM(CASE WHEN request_payload IS NOT NULL AND request_payload != '' THEN 1 ELSE 0 END) AS logs_with_payload
         FROM usage_logs
         """
@@ -1062,14 +1064,19 @@ def _database_stats(request: Request) -> dict:
         """
         SELECT l.id, l.request_id, l.action, l.status, l.created_at, u.name AS user_name,
                COALESCE(LENGTH(l.request_payload), 0) AS request_payload_bytes,
-               COALESCE(LENGTH(l.output_files), 0) AS output_files_bytes
+               COALESCE(LENGTH(l.output_files), 0) AS output_files_bytes,
+               COALESCE(LENGTH(l.image_urls), 0) AS image_urls_bytes
         FROM usage_logs l
         JOIN users u ON u.id = l.user_id
-        ORDER BY request_payload_bytes DESC, output_files_bytes DESC
+        ORDER BY request_payload_bytes DESC, output_files_bytes DESC, image_urls_bytes DESC
         LIMIT 10
         """
     )
-    total_payload_bytes = int(usage["request_payload_bytes"] or 0) + int(usage["output_files_bytes"] or 0)
+    total_payload_bytes = (
+        int(usage["request_payload_bytes"] or 0)
+        + int(usage["output_files_bytes"] or 0)
+        + int(usage["image_urls_bytes"] or 0)
+    )
     main_bytes = int(db_files["main"]["bytes"])
     wal_bytes = int(db_files["wal"]["bytes"])
     shm_bytes = int(db_files["shm"]["bytes"])
@@ -1092,6 +1099,7 @@ def _database_stats(request: Request) -> dict:
             "logs_with_payload": int(usage["logs_with_payload"] or 0),
             "request_payload_bytes": int(usage["request_payload_bytes"] or 0),
             "output_files_bytes": int(usage["output_files_bytes"] or 0),
+            "image_urls_bytes": int(usage["image_urls_bytes"] or 0),
             "payload_bytes": total_payload_bytes,
         },
         "status_counts": [_row_to_dict(row) for row in status_rows],
@@ -1191,10 +1199,12 @@ def _usage_log_size_to_dict(row):
     data = _row_to_dict(row)
     request_payload_bytes = int(data["request_payload_bytes"] or 0)
     output_files_bytes = int(data["output_files_bytes"] or 0)
+    image_urls_bytes = int(data["image_urls_bytes"] or 0)
     data["created_at_display"] = _format_display_time(data.get("created_at"))
     data["request_payload_display"] = _format_bytes(request_payload_bytes)
     data["output_files_display"] = _format_bytes(output_files_bytes)
-    data["total_bytes"] = request_payload_bytes + output_files_bytes
+    data["image_urls_display"] = _format_bytes(image_urls_bytes)
+    data["total_bytes"] = request_payload_bytes + output_files_bytes + image_urls_bytes
     data["total_display"] = _format_bytes(data["total_bytes"])
     return data
 

@@ -103,6 +103,24 @@ class FakeQueueSnapshot:
         }
 
 
+class FakeImageHosting:
+    def __init__(self):
+        self.uploaded_request_ids = []
+
+    async def upload_zip_images(self, *, zip_payload: bytes, request_id: str):
+        assert b"fake-image" in zip_payload
+        self.uploaded_request_ids.append(request_id)
+        return [
+            {
+                "provider": "catbox",
+                "url": "https://files.catbox.moe/fake-image.png",
+                "filename": "image.png",
+                "bytes": 10,
+                "index": 1,
+            }
+        ]
+
+
 def write_test_config(tmp_path: Path, min_upstream_interval_seconds: float = 0) -> Path:
     db_path = tmp_path / "test.db"
     config_path = tmp_path / "config.yaml"
@@ -731,6 +749,46 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert success_log["request_payload"]["parameters"]["sampler"] == "k_euler_ancestral"
         assert len(success_log["output_files"]) == 1
         assert Path(success_log["output_files"][0]).read_bytes() == b"fake-image"
+        assert success_log["image_urls"] == []
+
+
+def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_hosting = FakeImageHosting()
+        app.state.upstream = FakeUpstream()
+        app.state.proxy_queue.image_hosting = fake_hosting
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "image-host-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 201
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert fake_hosting.uploaded_request_ids == [success_log["request_id"]]
+        assert success_log["image_urls"] == [
+            {
+                "provider": "catbox",
+                "url": "https://files.catbox.moe/fake-image.png",
+                "filename": "image.png",
+                "bytes": 10,
+                "index": 1,
+            }
+        ]
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        page = client.get("/admin/logs")
+        assert page.status_code == 200
+        assert "https://files.catbox.moe/fake-image.png" in page.text
+        assert "图床图片" in page.text
 
 
 def test_generate_respects_requested_official_image_format(tmp_path: Path, monkeypatch):
