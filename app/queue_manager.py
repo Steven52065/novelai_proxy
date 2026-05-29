@@ -249,7 +249,7 @@ class ProxyQueue:
             return
         max_pending = int(self.image_hosting.max_pending_uploads)
         pending = len(self._image_upload_tasks)
-        if pending >= max_pending:
+        if max_pending > 0 and pending >= max_pending:
             logger.warning(
                 "image host upload skipped request_id=%s reason=pending_limit pending=%s max_pending=%s",
                 request_id,

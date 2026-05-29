@@ -835,6 +835,37 @@ def test_generate_skips_image_host_upload_when_pending_limit_reached(tmp_path: P
         assert skipped_log["image_urls"] == []
 
 
+def test_image_host_upload_pending_limit_zero_allows_unlimited_tasks(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        release_upload = threading.Event()
+        fake_hosting = FakeImageHosting(release_upload, max_pending_uploads=0)
+        app.state.upstream = FakeUpstream()
+        app.state.proxy_queue.image_hosting = fake_hosting
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "image-host-unlimited-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        try:
+            first = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+            second = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+            assert first.status_code == 201
+            assert second.status_code == 201
+            assert len(fake_hosting.uploaded_request_ids) == 2
+        finally:
+            release_upload.set()
+
+        for request_id in fake_hosting.uploaded_request_ids:
+            success_log = _wait_for_log_image_urls(client, request_id)
+            assert success_log["status"] == "success"
+
+
 def _wait_for_log_image_urls(client: TestClient, request_id: str) -> dict:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
