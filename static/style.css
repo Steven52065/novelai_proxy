@@ -649,6 +649,28 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.logs-table {
+  table-layout: fixed;
+  min-width: 1180px;
+}
+
+.logs-table th:nth-child(1), .logs-table td:nth-child(1) { width: 96px; }
+.logs-table th:nth-child(2), .logs-table td:nth-child(2) { width: 98px; }
+.logs-table th:nth-child(3), .logs-table td:nth-child(3) { width: 120px; }
+.logs-table th:nth-child(4), .logs-table td:nth-child(4) { width: 132px; }
+.logs-table th:nth-child(5), .logs-table td:nth-child(5) { width: 150px; }
+.logs-table th:nth-child(6), .logs-table td:nth-child(6) { width: 108px; }
+.logs-table th:nth-child(7), .logs-table td:nth-child(7) { width: 150px; }
+.logs-table th:nth-child(8), .logs-table td:nth-child(8) { width: 100px; }
+.logs-table th:nth-child(9), .logs-table td:nth-child(9) { width: 150px; }
+.logs-table th:nth-child(10), .logs-table td:nth-child(10) { width: 110px; }
+
+.logs-table th,
+.logs-table td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* Badges / Pill Badges */
 .status-pill {
   display: inline-flex;
@@ -777,11 +799,15 @@ pre {
   padding: 0 20px;
   background: rgba(10, 12, 26, 0.25);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  max-width: 0;
 }
 
 .log-detail-row details {
   padding: 16px 0;
   animation: slideDown 0.3s ease-out;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 @keyframes slideDown {
@@ -799,6 +825,33 @@ pre {
 }
 .log-detail-row summary:hover {
   color: #c084fc;
+}
+
+.log-details-content {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  max-width: 100%;
+  min-width: 0;
+  animation: slideDown 0.25s ease-out;
+}
+
+.payload-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.pretty-payload {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .file-list {

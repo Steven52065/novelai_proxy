@@ -33,7 +33,7 @@
 
 <section class="panel">
   <div class="table-wrap">
-    <table>
+    <table class="logs-table">
       <thead>
         <tr>
           <th>日志 ID</th>
@@ -115,7 +115,7 @@
             <details class="log-details-block" data-request-id="{{ log.request_id }}">
               <summary>展开请求参数及输出文件</summary>
               
-              <div style="margin-top: 16px; display: grid; gap: 16px; animation: slideDown 0.25s ease-out;">
+              <div class="log-details-content">
                 <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
 
                 {% if log.error_message %}
@@ -132,7 +132,7 @@
                 <script type="application/json" id="raw-payload-{{ log.request_id }}">{{ log.request_payload | tojson }}</script>
                 
                 <div>
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <div class="payload-toolbar">
                     <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
                       <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
                       请求与响应 Payload 数据 (含智能安全截断)
