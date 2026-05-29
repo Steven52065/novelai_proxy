@@ -66,6 +66,7 @@ class ImageHostingConfig(BaseModel):
     enabled: bool = False
     provider: Literal["catbox"] = "catbox"
     timeout_seconds: float = Field(default=30, gt=0)
+    max_pending_uploads: int = Field(default=50, ge=0)
     catbox: CatboxConfig = Field(default_factory=CatboxConfig)
 
 

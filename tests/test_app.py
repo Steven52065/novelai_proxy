@@ -106,8 +106,9 @@ class FakeQueueSnapshot:
 
 
 class FakeImageHosting:
-    def __init__(self, release_event: threading.Event | None = None):
+    def __init__(self, release_event: threading.Event | None = None, max_pending_uploads: int = 50):
         self.release_event = release_event
+        self.max_pending_uploads = max_pending_uploads
         self.uploaded_request_ids = []
 
     async def upload_zip_images(self, *, zip_payload: bytes, request_id: str):
@@ -799,6 +800,39 @@ def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkey
         assert page.status_code == 200
         assert "https://files.catbox.moe/fake-image.png" in page.text
         assert "图床图片" in page.text
+
+
+def test_generate_skips_image_host_upload_when_pending_limit_reached(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        release_upload = threading.Event()
+        fake_hosting = FakeImageHosting(release_upload, max_pending_uploads=1)
+        app.state.upstream = FakeUpstream()
+        app.state.proxy_queue.image_hosting = fake_hosting
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "image-host-limit-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        try:
+            first = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+            second = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+            assert first.status_code == 201
+            assert second.status_code == 201
+            assert len(fake_hosting.uploaded_request_ids) == 1
+        finally:
+            release_upload.set()
+
+        _wait_for_log_image_urls(client, fake_hosting.uploaded_request_ids[0])
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        skipped_log = next(row for row in logs if row["request_id"] not in fake_hosting.uploaded_request_ids)
+        assert skipped_log["status"] == "success"
+        assert skipped_log["image_urls"] == []
 
 
 def _wait_for_log_image_urls(client: TestClient, request_id: str) -> dict:

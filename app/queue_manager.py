@@ -15,6 +15,8 @@ from .quota_manager import QuotaManager
 
 
 class ImageHostingServiceLike(Protocol):
+    max_pending_uploads: int
+
     async def upload_zip_images(self, *, zip_payload: bytes, request_id: str) -> list[dict[str, object]]:
         ...
 
@@ -243,6 +245,18 @@ class ProxyQueue:
         self._last_upstream_started_at = time.monotonic()
 
     def _schedule_image_upload(self, *, zip_payload: bytes, request_id: str) -> None:
+        if self.image_hosting is None:
+            return
+        max_pending = int(self.image_hosting.max_pending_uploads)
+        pending = len(self._image_upload_tasks)
+        if pending >= max_pending:
+            logger.warning(
+                "image host upload skipped request_id=%s reason=pending_limit pending=%s max_pending=%s",
+                request_id,
+                pending,
+                max_pending,
+            )
+            return
         task = asyncio.create_task(self._upload_images_and_update_log(zip_payload=zip_payload, request_id=request_id))
         self._image_upload_tasks.add(task)
         task.add_done_callback(self._image_upload_tasks.discard)

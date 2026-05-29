@@ -85,6 +85,8 @@ image_hosting:
   provider: catbox
   # 上传请求超时时间，单位秒。
   timeout_seconds: 30
+  # 后台待上传任务上限；达到上限时跳过本次图床上传，只保留本地输出和日志。
+  max_pending_uploads: 50
   catbox:
     # Catbox 官方 API 入口。
     api_url: https://catbox.moe/user/api.php

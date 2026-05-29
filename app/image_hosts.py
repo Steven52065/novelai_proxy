@@ -66,6 +66,7 @@ class CatboxImageHost:
 class ImageHostingService:
     def __init__(self, config: ImageHostingConfig):
         self.config = config
+        self.max_pending_uploads = config.max_pending_uploads
         self.client = self._build_client(config) if config.enabled else None
 
     async def upload_zip_images(self, *, zip_payload: bytes, request_id: str) -> list[dict[str, object]]:
