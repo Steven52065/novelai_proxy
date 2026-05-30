@@ -257,23 +257,35 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
 
 
 @api_router.get("/logs", dependencies=[Depends(require_admin_or_session)])
-async def logs(request: Request, user_id: int | None = None, limit: int = 100, offset: int = 0):
+async def logs(request: Request, user_id: int | None = None, limit: int = 100, before_id: int | None = None):
     db: Database = request.app.state.db
     limit = max(1, min(limit, 500))
-    offset = max(0, offset)
+    before_id = before_id if before_id is not None and before_id > 0 else None
     fetch_limit = limit + 1
-    if user_id is None:
+    if user_id is None and before_id is None:
         rows = db.query_all(
             """
             SELECT l.*, u.name AS user_name
             FROM usage_logs l
             JOIN users u ON u.id = l.user_id
             ORDER BY l.id DESC
-            LIMIT ? OFFSET ?
+            LIMIT ?
             """,
-            (fetch_limit, offset),
+            (fetch_limit,),
         )
-    else:
+    elif user_id is None:
+        rows = db.query_all(
+            """
+            SELECT l.*, u.name AS user_name
+            FROM usage_logs l
+            JOIN users u ON u.id = l.user_id
+            WHERE l.id < ?
+            ORDER BY l.id DESC
+            LIMIT ?
+            """,
+            (before_id, fetch_limit),
+        )
+    elif before_id is None:
         rows = db.query_all(
             """
             SELECT l.*, u.name AS user_name
@@ -281,16 +293,28 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100, o
             JOIN users u ON u.id = l.user_id
             WHERE l.user_id = ?
             ORDER BY l.id DESC
-            LIMIT ? OFFSET ?
+            LIMIT ?
             """,
-            (user_id, fetch_limit, offset),
+            (user_id, fetch_limit),
+        )
+    else:
+        rows = db.query_all(
+            """
+            SELECT l.*, u.name AS user_name
+            FROM usage_logs l
+            JOIN users u ON u.id = l.user_id
+            WHERE l.user_id = ? AND l.id < ?
+            ORDER BY l.id DESC
+            LIMIT ?
+            """,
+            (user_id, before_id, fetch_limit),
         )
     page_rows = rows[:limit]
     return {
         "logs": [_usage_log_to_dict(row) for row in page_rows],
         "limit": limit,
-        "offset": offset,
-        "next_offset": offset + len(page_rows),
+        "before_id": before_id,
+        "next_before_id": int(page_rows[-1]["id"]) if page_rows else None,
         "has_more": len(rows) > limit,
     }
 
@@ -695,7 +719,7 @@ async def logs_page(request: Request, user_id: str | None = None, limit: int = 1
             "selected_user_id": selected_user_id,
             "limit": data["limit"],
             "has_more": data["has_more"],
-            "next_offset": data["next_offset"],
+            "next_before_id": data["next_before_id"],
         },
     )
 

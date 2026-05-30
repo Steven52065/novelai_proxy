@@ -197,7 +197,7 @@
           <th>操作</th>
         </tr>
       </thead>
-      <tbody id="logs-table-body" data-next-offset="{{ next_offset }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
+      <tbody id="logs-table-body" data-next-before-id="{{ next_before_id if next_before_id is not none else '' }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
           <td colspan="10" style="text-align: center; padding: 48px 0;">
@@ -238,7 +238,7 @@
   setupInfiniteScroll();
 
   function applyStoredLimit() {
-    const savedLimit = normalizeLimit(window.localStorage.getItem(logsLimitStorageKey));
+    const savedLimit = normalizeLimit(readStoredValue(logsLimitStorageKey));
     const url = new URL(window.location.href);
     if (!savedLimit || url.searchParams.has("limit")) {
       return;
@@ -252,16 +252,32 @@
     limitInput.addEventListener("change", () => {
       const limit = normalizeLimit(limitInput.value);
       if (limit) {
-        window.localStorage.setItem(logsLimitStorageKey, String(limit));
+        writeStoredValue(logsLimitStorageKey, String(limit));
         limitInput.value = String(limit);
       }
     });
     if (filterForm) {
       filterForm.addEventListener("submit", () => {
         const limit = normalizeLimit(limitInput.value) || 100;
-        window.localStorage.setItem(logsLimitStorageKey, String(limit));
+        writeStoredValue(logsLimitStorageKey, String(limit));
         limitInput.value = String(limit);
       });
+    }
+  }
+
+  function readStoredValue(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeStoredValue(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (err) {
+      // Storage may be disabled; the page should still work without persistence.
     }
   }
 
@@ -337,11 +353,13 @@
     renderInfiniteStatus("正在加载更多日志...");
 
     const limit = normalizeLimit(limitInput?.value) || 100;
-    const offset = Math.max(0, Number.parseInt(tableBody.dataset.nextOffset || "0", 10) || 0);
+    const beforeId = Math.max(0, Number.parseInt(tableBody.dataset.nextBeforeId || "0", 10) || 0);
     const params = new URLSearchParams({
       limit: String(limit),
-      offset: String(offset),
     });
+    if (beforeId > 0) {
+      params.set("before_id", String(beforeId));
+    }
     const selectedUserId = tableBody.dataset.selectedUserId;
     if (selectedUserId) {
       params.set("user_id", selectedUserId);
@@ -358,7 +376,7 @@
 
       const logs = Array.isArray(body.logs) ? body.logs : [];
       appendLogs(logs);
-      tableBody.dataset.nextOffset = String(body.next_offset ?? offset + logs.length);
+      tableBody.dataset.nextBeforeId = body.next_before_id ? String(body.next_before_id) : "";
       tableBody.dataset.hasMore = body.has_more ? "true" : "false";
       renderInfiniteStatus(body.has_more ? "" : "没有更多日志。", !body.has_more);
     } catch (err) {

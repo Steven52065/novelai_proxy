@@ -1329,32 +1329,47 @@ def test_admin_logs_api_supports_session_pagination(tmp_path: Path, monkeypatch)
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
 
-        first_page = client.get("/admin/api/logs?limit=2&offset=0")
+        first_page = client.get("/admin/api/logs?limit=2")
         assert first_page.status_code == 200
         first_body = first_page.json()
         assert [row["request_id"] for row in first_body["logs"]] == ["page-log-4", "page-log-3"]
         assert first_body["has_more"] is True
-        assert first_body["next_offset"] == 2
+        first_cursor = first_body["next_before_id"]
+        assert first_cursor == first_body["logs"][-1]["id"]
 
-        second_page = client.get("/admin/api/logs?limit=2&offset=2")
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, status, log_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("page-log-newer", user_id, "generate", 0, "success", "INFO", "2026-05-27T00:00:09+00:00"),
+        )
+
+        second_page = client.get(f"/admin/api/logs?limit=2&before_id={first_cursor}")
         assert second_page.status_code == 200
         second_body = second_page.json()
         assert [row["request_id"] for row in second_body["logs"]] == ["page-log-2", "page-log-1"]
         assert second_body["has_more"] is True
-        assert second_body["next_offset"] == 4
+        second_cursor = second_body["next_before_id"]
+        assert second_cursor == second_body["logs"][-1]["id"]
 
-        final_page = client.get("/admin/api/logs?limit=2&offset=4")
+        final_page = client.get(f"/admin/api/logs?limit=2&before_id={second_cursor}")
         assert final_page.status_code == 200
         final_body = final_page.json()
         assert [row["request_id"] for row in final_body["logs"]] == ["page-log-0"]
         assert final_body["has_more"] is False
-        assert final_body["next_offset"] == 5
+        assert final_body["next_before_id"] == final_body["logs"][-1]["id"]
 
         logs_page = client.get("/admin/logs?limit=2")
         assert logs_page.status_code == 200
-        assert 'data-next-offset="2"' in logs_page.text
+        newest_page = client.get("/admin/api/logs?limit=2")
+        newest_body = newest_page.json()
+        assert f'data-next-before-id="{newest_body["next_before_id"]}"' in logs_page.text
         assert 'data-has-more="true"' in logs_page.text
         assert "window.localStorage" in logs_page.text
+        assert "readStoredValue" in logs_page.text
         assert "IntersectionObserver" in logs_page.text
 
 
