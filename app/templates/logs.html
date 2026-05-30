@@ -1,4 +1,153 @@
 {% extends "base.html" %}
+{% macro render_log_entry(log) -%}
+{% set status_key = (log.status or "unknown")|lower %}
+<tr class="log-entry-row log-status-{{ status_key }}">
+  <td colspan="10">
+    <article class="log-entry-card">
+      <div class="log-entry-summary-grid">
+        <div class="log-entry-cell mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}</div>
+        <div class="log-entry-cell">
+          <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
+        </div>
+        <div class="log-entry-cell" style="font-weight: 700; color: #fff;">{{ log.user_name }}</div>
+        <div class="log-entry-cell">
+          <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">{{ log.action }}</span>
+        </div>
+        <div class="log-entry-cell">
+          {% if log.model %}
+          <span class="badge badge-normal" style="font-size: 11px;">{{ log.model }}</span>
+          {% else %}
+          <span class="muted">-</span>
+          {% endif %}
+        </div>
+        <div class="log-entry-cell mono">
+          {% if log.width and log.height %}
+          <code>{{ log.width }}x{{ log.height }}</code>
+          {% else %}
+          <span class="muted">-</span>
+          {% endif %}
+        </div>
+        <div class="log-entry-cell mono">
+          <span style="color: #94a3b8;">{{ log.estimated_anlas_cost }}</span>
+          <span style="color: rgba(255,255,255,0.15)">/</span>
+          <span style="color: #34d399; font-weight: 700;">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
+        </div>
+        <div class="log-entry-cell">
+          {% if status_key == 'success' %}
+          <span class="status-pill status-success">成功</span>
+          {% elif status_key == 'failed' or status_key == 'error' %}
+          <span class="status-pill status-error">失败</span>
+          {% elif status_key == 'running' %}
+          <span class="status-pill status-log-running">运行中</span>
+          {% else %}
+          <span class="status-pill">{{ log.status }}</span>
+          {% endif %}
+        </div>
+        <div class="log-entry-cell" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</div>
+        <div class="log-entry-cell">
+          {% if log.request_payload %}
+          <button class="secondary btn-replay-log" data-request-id="{{ log.request_id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+            <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
+            <span>重放</span>
+          </button>
+          {% else %}
+          <span class="muted" style="font-size: 12px;">不可重放</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <details class="log-details-block" data-request-id="{{ log.request_id }}">
+        <summary>展开请求参数及输出文件</summary>
+        
+        <div class="log-details-content">
+          <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
+
+          {% if log.error_message %}
+          <div class="error" style="margin-bottom: 0;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i>
+              <strong style="color:#f87171;">错误 {{ log.error_code }}：</strong>
+              <span>{{ log.error_message }}</span>
+            </div>
+          </div>
+          {% endif %}
+
+          <script type="application/json" id="raw-payload-{{ log.request_id }}">{{ log.request_payload | tojson }}</script>
+          
+          <div>
+            <div class="payload-toolbar">
+              <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
+                <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
+                请求与响应 Payload 数据 (含智能安全截断)
+              </span>
+              <button class="secondary btn-copy-raw-payload" data-request-id="{{ log.request_id }}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
+                <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                <span>复制完整 JSON</span>
+              </button>
+            </div>
+            <pre id="pretty-payload-{{ log.request_id }}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+          </div>
+
+          <div>
+            <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+              图床图片：
+            </span>
+            {% if log.image_urls %}
+            <div class="hosted-image-gallery">
+              {% for image in log.image_urls %}
+              {% set image_url = image.url if image is mapping else image %}
+              {% set image_name = image.filename if image is mapping and image.filename else image_url %}
+              <div class="hosted-image-card">
+                <button class="hosted-image-preview" data-image-url="{{ image_url }}" type="button" title="{{ image_name }}">
+                  <img src="{{ image_url }}" alt="{{ image_name }}">
+                </button>
+                <span>
+                  <i data-lucide="image" style="width: 13px; height: 13px;"></i>
+                  {{ image.provider if image is mapping and image.provider else "image-host" }}
+                </span>
+                <div class="hosted-image-url-row">
+                  <code title="{{ image_url }}">{{ image_url }}</code>
+                  <button class="hosted-image-copy-url" data-image-url="{{ image_url }}" type="button" title="复制图床 URL" aria-label="复制图床 URL">
+                    <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
+                  </button>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
+              <i data-lucide="info" style="width: 14px; height: 14px;"></i>
+              未上传到图床
+            </p>
+            {% endif %}
+          </div>
+
+          <div>
+            <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+              本地生成的图片输出路径：
+            </span>
+            {% if log.output_files %}
+            <ul class="file-list">
+              {% for path in log.output_files %}
+              <li style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
+                <i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i>
+                <code>{{ path }}</code>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
+              <i data-lucide="info" style="width: 14px; height: 14px;"></i>
+              未留存本地文件 (例如小图直传或非生图请求)
+            </p>
+            {% endif %}
+          </div>
+        </div>
+      </details>
+    </article>
+  </td>
+</tr>
+{%- endmacro %}
 {% block content %}
 <div class="page-head">
   <h1>
@@ -8,7 +157,7 @@
 </div>
 
 <section class="panel" style="padding: 20px 24px; margin-bottom: 24px;">
-  <form method="get" action="/admin/logs" class="inline-form" style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
+  <form id="logs-filter-form" method="get" action="/admin/logs" class="inline-form" style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
     <label style="flex: 1; min-width: 200px; gap: 6px;">
       筛选发起用户
       <select name="user_id">
@@ -21,7 +170,7 @@
     
     <label style="width: 140px; gap: 6px;">
       展示日志条数
-      <input name="limit" type="number" min="1" max="500" value="{{ limit }}" placeholder="条数上限">
+      <input id="logs-limit-input" name="limit" type="number" min="1" max="500" value="{{ limit }}" placeholder="条数上限">
     </label>
     
     <button type="submit" style="min-height: 44px; padding: 0 24px;">
@@ -48,7 +197,7 @@
           <th>操作</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="logs-table-body" data-next-offset="{{ next_offset }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
           <td colspan="10" style="text-align: center; padding: 48px 0;">
@@ -61,167 +210,182 @@
         {% endif %}
         
         {% for log in logs %}
-        {% set status_key = (log.status or "unknown")|lower %}
-        <tr class="log-entry-row log-status-{{ status_key }}">
-          <td colspan="10">
-            <article class="log-entry-card">
-              <div class="log-entry-summary-grid">
-                <div class="log-entry-cell mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}</div>
-                <div class="log-entry-cell">
-                  <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
-                </div>
-                <div class="log-entry-cell" style="font-weight: 700; color: #fff;">{{ log.user_name }}</div>
-                <div class="log-entry-cell">
-                  <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">{{ log.action }}</span>
-                </div>
-                <div class="log-entry-cell">
-                  {% if log.model %}
-                  <span class="badge badge-normal" style="font-size: 11px;">{{ log.model }}</span>
-                  {% else %}
-                  <span class="muted">-</span>
-                  {% endif %}
-                </div>
-                <div class="log-entry-cell mono">
-                  {% if log.width and log.height %}
-                  <code>{{ log.width }}x{{ log.height }}</code>
-                  {% else %}
-                  <span class="muted">-</span>
-                  {% endif %}
-                </div>
-                <div class="log-entry-cell mono">
-                  <span style="color: #94a3b8;">{{ log.estimated_anlas_cost }}</span>
-                  <span style="color: rgba(255,255,255,0.15)">/</span>
-                  <span style="color: #34d399; font-weight: 700;">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
-                </div>
-                <div class="log-entry-cell">
-                  {% if status_key == 'success' %}
-                  <span class="status-pill status-success">成功</span>
-                  {% elif status_key == 'failed' or status_key == 'error' %}
-                  <span class="status-pill status-error">失败</span>
-                  {% elif status_key == 'running' %}
-                  <span class="status-pill status-log-running">运行中</span>
-                  {% else %}
-                  <span class="status-pill">{{ log.status }}</span>
-                  {% endif %}
-                </div>
-                <div class="log-entry-cell" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</div>
-                <div class="log-entry-cell">
-                  {% if log.request_payload %}
-                  <button class="secondary btn-replay-log" data-request-id="{{ log.request_id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
-                    <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
-                    <span>重放</span>
-                  </button>
-                  {% else %}
-                  <span class="muted" style="font-size: 12px;">不可重放</span>
-                  {% endif %}
-                </div>
-              </div>
-
-              <details class="log-details-block" data-request-id="{{ log.request_id }}">
-              <summary>展开请求参数及输出文件</summary>
-              
-              <div class="log-details-content">
-                <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
-
-                {% if log.error_message %}
-                <div class="error" style="margin-bottom: 0;">
-                  <div style="display: flex; align-items: center; gap: 8px;">
-                    <i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i>
-                    <strong style="color:#f87171;">错误 {{ log.error_code }}：</strong>
-                    <span>{{ log.error_message }}</span>
-                  </div>
-                </div>
-                {% endif %}
-
-                <!-- Raw JSON payload store hidden -->
-                <script type="application/json" id="raw-payload-{{ log.request_id }}">{{ log.request_payload | tojson }}</script>
-                
-                <div>
-                  <div class="payload-toolbar">
-                    <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
-                      <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
-                      请求与响应 Payload 数据 (含智能安全截断)
-                    </span>
-                    <button class="secondary btn-copy-raw-payload" data-request-id="{{ log.request_id }}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
-                      <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
-                      <span>复制完整 JSON</span>
-                    </button>
-                  </div>
-                  <pre id="pretty-payload-{{ log.request_id }}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
-                </div>
-
-                <div>
-                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
-                    图床图片：
-                  </span>
-                  {% if log.image_urls %}
-                  <div class="hosted-image-gallery">
-                    {% for image in log.image_urls %}
-                    {% set image_url = image.url if image is mapping else image %}
-                    {% set image_name = image.filename if image is mapping and image.filename else image_url %}
-                    <div class="hosted-image-card">
-                      <button class="hosted-image-preview" data-image-url="{{ image_url }}" type="button" title="{{ image_name }}">
-                        <img src="{{ image_url }}" alt="{{ image_name }}">
-                      </button>
-                      <span>
-                        <i data-lucide="image" style="width: 13px; height: 13px;"></i>
-                        {{ image.provider if image is mapping and image.provider else "image-host" }}
-                      </span>
-                      <div class="hosted-image-url-row">
-                        <code title="{{ image_url }}">{{ image_url }}</code>
-                        <button class="hosted-image-copy-url" data-image-url="{{ image_url }}" type="button" title="复制图床 URL" aria-label="复制图床 URL">
-                          <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
-                        </button>
-                      </div>
-                    </div>
-                    {% endfor %}
-                  </div>
-                  {% else %}
-                  <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
-                    <i data-lucide="info" style="width: 14px; height: 14px;"></i>
-                    未上传到图床
-                  </p>
-                  {% endif %}
-                </div>
-
-                <div>
-                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
-                    本地生成的图片输出路径：
-                  </span>
-                  {% if log.output_files %}
-                  <ul class="file-list">
-                    {% for path in log.output_files %}
-                    <li style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
-                      <i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i>
-                      <code>{{ path }}</code>
-                    </li>
-                    {% endfor %}
-                  </ul>
-                  {% else %}
-                  <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
-                    <i data-lucide="info" style="width: 14px; height: 14px;"></i>
-                    未留存本地文件 (例如小图直传或非生图请求)
-                  </p>
-                  {% endif %}
-                </div>
-              </div>
-            </details>
-            </article>
-          </td>
-        </tr>
+        {{ render_log_entry(log) }}
         {% endfor %}
       </tbody>
     </table>
   </div>
+  <div id="logs-infinite-status" class="logs-infinite-status" hidden></div>
+  <div id="logs-infinite-sentinel" class="logs-infinite-sentinel" aria-hidden="true"></div>
 </section>
 
 <!-- Advanced Lazy Loading and Base64 Truncation Engine -->
 <script>
 (() => {
-  // Safe deep clone & scan function to truncate huge Base64 strings in the object tree
-  // Stash large base64 values into a temporary cache map for copier and previewer
+  const logsLimitStorageKey = "novelai_proxy_logs_limit";
+  const filterForm = document.getElementById("logs-filter-form");
+  const limitInput = document.getElementById("logs-limit-input");
+  const tableBody = document.getElementById("logs-table-body");
+  const infiniteStatus = document.getElementById("logs-infinite-status");
+  const infiniteSentinel = document.getElementById("logs-infinite-sentinel");
   const base64Cache = new Map();
   let cacheCounter = 0;
+  let loadingMoreLogs = false;
+
+  applyStoredLimit();
+  bindLimitPersistence();
+  bindLogInteractions();
+  setupInfiniteScroll();
+
+  function applyStoredLimit() {
+    const savedLimit = normalizeLimit(window.localStorage.getItem(logsLimitStorageKey));
+    const url = new URL(window.location.href);
+    if (!savedLimit || url.searchParams.has("limit")) {
+      return;
+    }
+    url.searchParams.set("limit", String(savedLimit));
+    window.location.replace(url.toString());
+  }
+
+  function bindLimitPersistence() {
+    if (!limitInput) return;
+    limitInput.addEventListener("change", () => {
+      const limit = normalizeLimit(limitInput.value);
+      if (limit) {
+        window.localStorage.setItem(logsLimitStorageKey, String(limit));
+        limitInput.value = String(limit);
+      }
+    });
+    if (filterForm) {
+      filterForm.addEventListener("submit", () => {
+        const limit = normalizeLimit(limitInput.value) || 100;
+        window.localStorage.setItem(logsLimitStorageKey, String(limit));
+        limitInput.value = String(limit);
+      });
+    }
+  }
+
+  function normalizeLimit(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.max(1, Math.min(parsed, 500));
+  }
+
+  function bindLogInteractions() {
+    document.addEventListener("toggle", (event) => {
+      const details = event.target;
+      if (!details.matches?.(".log-details-block") || !details.open) return;
+      renderPrettyPayload(details);
+    }, true);
+
+    document.addEventListener("click", async (event) => {
+      const copyRawButton = event.target.closest?.(".btn-copy-raw-payload");
+      if (copyRawButton) {
+        event.preventDefault();
+        await copyRawPayload(copyRawButton);
+        return;
+      }
+
+      const replayButton = event.target.closest?.(".btn-replay-log");
+      if (replayButton) {
+        event.preventDefault();
+        await replayLog(replayButton);
+        return;
+      }
+
+      const hostedPreview = event.target.closest?.(".hosted-image-preview");
+      if (hostedPreview) {
+        event.preventDefault();
+        const imageUrl = hostedPreview.dataset.imageUrl;
+        if (imageUrl) {
+          previewBase64Image(imageUrl);
+        }
+        return;
+      }
+
+      const hostedCopy = event.target.closest?.(".hosted-image-copy-url");
+      if (hostedCopy) {
+        event.preventDefault();
+        event.stopPropagation();
+        await copyHostedImageUrl(hostedCopy);
+      }
+    });
+  }
+
+  function setupInfiniteScroll() {
+    if (!tableBody || !infiniteSentinel || !("IntersectionObserver" in window)) {
+      return;
+    }
+    if (tableBody.dataset.hasMore !== "true") {
+      renderInfiniteStatus("", true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (entry?.isIntersecting) {
+        loadMoreLogs();
+      }
+    }, {rootMargin: "320px 0px"});
+    observer.observe(infiniteSentinel);
+  }
+
+  async function loadMoreLogs() {
+    if (loadingMoreLogs || !tableBody || tableBody.dataset.hasMore !== "true") {
+      return;
+    }
+    loadingMoreLogs = true;
+    renderInfiniteStatus("正在加载更多日志...");
+
+    const limit = normalizeLimit(limitInput?.value) || 100;
+    const offset = Math.max(0, Number.parseInt(tableBody.dataset.nextOffset || "0", 10) || 0);
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const selectedUserId = tableBody.dataset.selectedUserId;
+    if (selectedUserId) {
+      params.set("user_id", selectedUserId);
+    }
+
+    try {
+      const response = await fetch(`/admin/api/logs?${params.toString()}`, {
+        headers: {"Accept": "application/json"},
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message || body.detail?.message || `加载失败：HTTP ${response.status}`);
+      }
+
+      const logs = Array.isArray(body.logs) ? body.logs : [];
+      appendLogs(logs);
+      tableBody.dataset.nextOffset = String(body.next_offset ?? offset + logs.length);
+      tableBody.dataset.hasMore = body.has_more ? "true" : "false";
+      renderInfiniteStatus(body.has_more ? "" : "没有更多日志。", !body.has_more);
+    } catch (err) {
+      renderInfiniteStatus(err.message || "加载更多日志失败。");
+    } finally {
+      loadingMoreLogs = false;
+    }
+  }
+
+  function appendLogs(logs) {
+    if (!tableBody || logs.length === 0) return;
+    tableBody.querySelector(".empty-row")?.remove();
+    const fragment = document.createDocumentFragment();
+    logs.forEach((log) => {
+      const template = document.createElement("tbody");
+      template.innerHTML = renderLogEntry(log);
+      Array.from(template.children).forEach((row) => fragment.appendChild(row));
+    });
+    tableBody.appendChild(fragment);
+    lucide.createIcons();
+  }
+
+  function renderInfiniteStatus(message, hidden = false) {
+    if (!infiniteStatus) return;
+    infiniteStatus.hidden = hidden || !message;
+    infiniteStatus.textContent = message || "";
+  }
 
   function truncateBase64(obj) {
     if (typeof obj === 'string') {
@@ -287,172 +451,137 @@
     });
   }
 
-  // Bind toggle events to `<details>` blocks for lazy parsing to prevent render delays on load
-  document.querySelectorAll(".log-details-block").forEach((details) => {
-    details.addEventListener("toggle", function onToggle(e) {
-      if (!details.open) return;
-      
-      const requestId = details.dataset.requestId;
-      const prettyContainer = document.getElementById(`pretty-payload-${requestId}`);
-      
-      // If already rendered, do nothing
-      if (prettyContainer && prettyContainer.getAttribute("data-loaded") === "true") {
+  function renderPrettyPayload(details) {
+    const requestId = details.dataset.requestId;
+    const prettyContainer = document.getElementById(`pretty-payload-${requestId}`);
+    if (!prettyContainer || prettyContainer.getAttribute("data-loaded") === "true") {
+      return;
+    }
+
+    try {
+      const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+      if (!rawJsonEl) {
+        prettyContainer.textContent = "解析失败：找不到原始数据容器。";
         return;
       }
-      
-      try {
-        const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
-        if (!rawJsonEl) {
-          prettyContainer.textContent = "解析失败：找不到原始数据容器。";
-          return;
-        }
-        
-        const rawObj = JSON.parse(rawJsonEl.textContent);
-        const processedObj = truncateBase64(rawObj);
-        
-        // Output styled HTML inside the pre block
-        prettyContainer.innerHTML = customJsonFormatter(processedObj, 2);
-        prettyContainer.setAttribute("data-loaded", "true");
-        
-        // Dynamically initialize Lucide icons for injected buttons
+
+      const rawObj = JSON.parse(rawJsonEl.textContent);
+      const processedObj = truncateBase64(rawObj);
+      prettyContainer.innerHTML = customJsonFormatter(processedObj, 2);
+      prettyContainer.setAttribute("data-loaded", "true");
+      lucide.createIcons();
+    } catch (err) {
+      prettyContainer.textContent = `格式化 JSON 失败: ${err.message}`;
+    }
+  }
+
+  async function copyRawPayload(btn) {
+    const requestId = btn.dataset.requestId;
+    const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+    if (!rawJsonEl) return;
+
+    try {
+      await copyTextToClipboard(rawJsonEl.textContent);
+
+      const labelSpan = btn.querySelector("span");
+      const icon = btn.querySelector("i");
+      const originalText = labelSpan.textContent;
+      const originalIcon = icon.getAttribute("data-lucide");
+
+      btn.style.borderColor = "var(--success)";
+      labelSpan.textContent = "已复制";
+      labelSpan.style.color = "var(--success)";
+      icon.setAttribute("data-lucide", "check");
+      lucide.createIcons();
+
+      window.setTimeout(() => {
+        btn.style.borderColor = "";
+        labelSpan.textContent = originalText;
+        labelSpan.style.color = "";
+        icon.setAttribute("data-lucide", originalIcon);
         lucide.createIcons();
-        
-        // Bind actions to truncated buttons
-        prettyContainer.querySelectorAll(".copy-b64-btn").forEach((btn) => {
-          btn.addEventListener("click", async (ev) => {
-            ev.stopPropagation();
-            const key = btn.dataset.cacheKey;
-            const fullBase64 = base64Cache.get(key);
-            if (fullBase64) {
-              await navigator.clipboard.writeText(fullBase64);
-              showToast("完整 Base64 图片数据已复制到剪贴板！");
-            }
-          });
-        });
-        
-        prettyContainer.querySelectorAll(".preview-b64-btn").forEach((btn) => {
-          btn.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            const key = btn.dataset.cacheKey;
-            let fullBase64 = base64Cache.get(key);
-            if (fullBase64) {
-              // Ensure it has standard data URL header
-              if (!fullBase64.startsWith("data:")) {
-                fullBase64 = `data:image/png;base64,${fullBase64}`;
-              }
-              previewBase64Image(fullBase64);
-            }
-          });
-        });
-        
-      } catch (err) {
-        prettyContainer.textContent = `格式化 JSON 失败: ${err.message}`;
-      }
-    });
+      }, 1500);
+    } catch (err) {
+      showToast("复制失败，请手动选择复制。");
+    }
+  }
+
+  document.addEventListener("click", async (event) => {
+    const copyB64Button = event.target.closest?.(".copy-b64-btn");
+    if (!copyB64Button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const fullBase64 = base64Cache.get(copyB64Button.dataset.cacheKey);
+    if (fullBase64) {
+      await copyTextToClipboard(fullBase64);
+      showToast("完整 Base64 图片数据已复制到剪贴板！");
+    }
   });
 
-  // Global full JSON payload copier
-  document.querySelectorAll(".btn-copy-raw-payload").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      const requestId = btn.dataset.requestId;
-      const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
-      
-      if (rawJsonEl) {
-        try {
-          await navigator.clipboard.writeText(rawJsonEl.textContent);
-          
-          const labelSpan = btn.querySelector('span');
-          const icon = btn.querySelector('i');
-          const originalText = labelSpan.textContent;
-          const originalIcon = icon.getAttribute('data-lucide');
-          
-          btn.style.borderColor = 'var(--success)';
-          labelSpan.textContent = "已复制";
-          labelSpan.style.color = 'var(--success)';
-          icon.setAttribute('data-lucide', 'check');
-          lucide.createIcons();
-          
-          window.setTimeout(() => {
-            btn.style.borderColor = '';
-            labelSpan.textContent = originalText;
-            labelSpan.style.color = '';
-            icon.setAttribute('data-lucide', originalIcon);
-            lucide.createIcons();
-          }, 1500);
-        } catch (err) {
-          showToast("复制失败，请手动选择复制。");
-        }
+  document.addEventListener("click", (event) => {
+    const previewB64Button = event.target.closest?.(".preview-b64-btn");
+    if (!previewB64Button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    let fullBase64 = base64Cache.get(previewB64Button.dataset.cacheKey);
+    if (fullBase64) {
+      if (!fullBase64.startsWith("data:")) {
+        fullBase64 = `data:image/png;base64,${fullBase64}`;
       }
-    });
+      previewBase64Image(fullBase64);
+    }
   });
 
-  document.querySelectorAll(".btn-replay-log").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      const requestId = btn.dataset.requestId;
-      const resultBox = document.getElementById(`replay-result-${requestId}`);
-      const detailBlock = document.querySelector(`.log-details-block[data-request-id="${requestId}"]`);
-      if (detailBlock && !detailBlock.open) {
-        detailBlock.open = true;
+  async function replayLog(btn) {
+    const requestId = btn.dataset.requestId;
+    const resultBox = document.getElementById(`replay-result-${requestId}`);
+    const detailBlock = document.querySelector(`.log-details-block[data-request-id="${requestId}"]`);
+    if (detailBlock && !detailBlock.open) {
+      detailBlock.open = true;
+    }
+    setReplayButtonState(btn, true, "重放中");
+    renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
+
+    try {
+      const response = await fetch(`/admin/api/logs/${encodeURIComponent(requestId)}/replay`, {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message || body.detail?.message || `重放失败：HTTP ${response.status}`);
       }
-      setReplayButtonState(btn, true, "重放中");
-      renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
+      renderReplayImages(resultBox, body);
+      showToast(`重放完成：${body.images?.length || 0} 张图片`);
+    } catch (err) {
+      renderReplayStatus(resultBox, "error", err.message || "重放请求失败。");
+      showToast(err.message || "重放请求失败。");
+    } finally {
+      setReplayButtonState(btn, false, "重放");
+    }
+  }
 
-      try {
-        const response = await fetch(`/admin/api/logs/${encodeURIComponent(requestId)}/replay`, {
-          method: "POST",
-          headers: { "Accept": "application/json" },
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(body.message || body.detail?.message || `重放失败：HTTP ${response.status}`);
-        }
-        renderReplayImages(resultBox, body);
-        showToast(`重放完成：${body.images?.length || 0} 张图片`);
-      } catch (err) {
-        renderReplayStatus(resultBox, "error", err.message || "重放请求失败。");
-        showToast(err.message || "重放请求失败。");
-      } finally {
-        setReplayButtonState(btn, false, "重放");
-      }
-    });
-  });
+  async function copyHostedImageUrl(button) {
+    const imageUrl = button.dataset.imageUrl;
+    if (!imageUrl) return;
 
-  document.querySelectorAll(".hosted-image-preview").forEach((button) => {
-    button.addEventListener("click", () => {
-      const imageUrl = button.dataset.imageUrl;
-      if (imageUrl) {
-        previewBase64Image(imageUrl);
-      }
-    });
-  });
+    try {
+      await copyTextToClipboard(imageUrl);
+      const icon = button.querySelector("i");
+      if (icon) icon.setAttribute("data-lucide", "check");
+      button.classList.add("copied");
+      lucide.createIcons();
+      showToast("图床 URL 已复制到剪贴板。");
 
-  document.querySelectorAll(".hosted-image-copy-url").forEach((button) => {
-    button.addEventListener("click", async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const imageUrl = button.dataset.imageUrl;
-      if (!imageUrl) return;
-
-      try {
-        await copyTextToClipboard(imageUrl);
-        const icon = button.querySelector("i");
-        if (icon) icon.setAttribute("data-lucide", "check");
-        button.classList.add("copied");
+      window.setTimeout(() => {
+        if (icon) icon.setAttribute("data-lucide", "copy");
+        button.classList.remove("copied");
         lucide.createIcons();
-        showToast("图床 URL 已复制到剪贴板。");
-
-        window.setTimeout(() => {
-          if (icon) icon.setAttribute("data-lucide", "copy");
-          button.classList.remove("copied");
-          lucide.createIcons();
-        }, 1500);
-      } catch (err) {
-        showToast("复制失败，请手动选择复制。");
-      }
-    });
-  });
+      }, 1500);
+    } catch (err) {
+      showToast("复制失败，请手动选择复制。");
+    }
+  }
 
   function setReplayButtonState(btn, loading, label) {
     btn.disabled = loading;
@@ -517,6 +646,109 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value).replaceAll("`", "&#096;");
+  }
+
+  function escapeScriptJson(value) {
+    return JSON.stringify(value ?? null).replaceAll("</", "<\\/");
+  }
+
+  function renderLogEntry(log) {
+    const requestId = String(log.request_id ?? "");
+    const status = String(log.status ?? "unknown");
+    const statusKey = status.toLowerCase();
+    const model = log.model ? `<span class="badge badge-normal" style="font-size: 11px;">${escapeHtml(log.model)}</span>` : `<span class="muted">-</span>`;
+    const size = log.width && log.height ? `<code>${escapeHtml(log.width)}x${escapeHtml(log.height)}</code>` : `<span class="muted">-</span>`;
+    const statusHtml = renderStatus(statusKey, status);
+    const replayHtml = log.request_payload
+      ? `<button class="secondary btn-replay-log" data-request-id="${escapeAttr(requestId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
+      : `<span class="muted" style="font-size: 12px;">不可重放</span>`;
+    const errorHtml = log.error_message ? `
+          <div class="error" style="margin-bottom: 0;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i>
+              <strong style="color:#f87171;">错误 ${escapeHtml(log.error_code ?? "")}：</strong>
+              <span>${escapeHtml(log.error_message)}</span>
+            </div>
+          </div>` : "";
+
+    return `
+<tr class="log-entry-row log-status-${escapeAttr(statusKey)}">
+  <td colspan="10">
+    <article class="log-entry-card">
+      <div class="log-entry-summary-grid">
+        <div class="log-entry-cell mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}</div>
+        <div class="log-entry-cell"><span class="level level-${escapeAttr(String(log.log_level || "INFO").toLowerCase())}">${escapeHtml(log.log_level || "INFO")}</span></div>
+        <div class="log-entry-cell" style="font-weight: 700; color: #fff;">${escapeHtml(log.user_name ?? "")}</div>
+        <div class="log-entry-cell"><span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">${escapeHtml(log.action ?? "")}</span></div>
+        <div class="log-entry-cell">${model}</div>
+        <div class="log-entry-cell mono">${size}</div>
+        <div class="log-entry-cell mono"><span style="color: #94a3b8;">${escapeHtml(log.estimated_anlas_cost ?? 0)}</span><span style="color: rgba(255,255,255,0.15)">/</span><span style="color: #34d399; font-weight: 700;">${escapeHtml(log.final_anlas_cost ?? "-")}</span></div>
+        <div class="log-entry-cell">${statusHtml}</div>
+        <div class="log-entry-cell" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</div>
+        <div class="log-entry-cell">${replayHtml}</div>
+      </div>
+      <details class="log-details-block" data-request-id="${escapeAttr(requestId)}">
+        <summary>展开请求参数及输出文件</summary>
+        <div class="log-details-content">
+          <div id="replay-result-${escapeAttr(requestId)}" class="replay-result" hidden></div>
+          ${errorHtml}
+          <script type="application/json" id="raw-payload-${escapeAttr(requestId)}">${escapeScriptJson(log.request_payload)}<\/script>
+          <div>
+            <div class="payload-toolbar">
+              <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;"><i data-lucide="braces" style="width: 14px; height: 14px;"></i>请求与响应 Payload 数据 (含智能安全截断)</span>
+              <button class="secondary btn-copy-raw-payload" data-request-id="${escapeAttr(requestId)}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;"><i data-lucide="copy" style="width: 12px; height: 12px;"></i><span>复制完整 JSON</span></button>
+            </div>
+            <pre id="pretty-payload-${escapeAttr(requestId)}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+          </div>
+          <div>
+            <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">图床图片：</span>
+            ${renderHostedImages(log.image_urls)}
+          </div>
+          <div>
+            <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">本地生成的图片输出路径：</span>
+            ${renderOutputFiles(log.output_files)}
+          </div>
+        </div>
+      </details>
+    </article>
+  </td>
+</tr>`;
+  }
+
+  function renderStatus(statusKey, status) {
+    if (statusKey === "success") return `<span class="status-pill status-success">成功</span>`;
+    if (statusKey === "failed" || statusKey === "error") return `<span class="status-pill status-error">失败</span>`;
+    if (statusKey === "running") return `<span class="status-pill status-log-running">运行中</span>`;
+    return `<span class="status-pill">${escapeHtml(status)}</span>`;
+  }
+
+  function renderHostedImages(images) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return `<p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;"><i data-lucide="info" style="width: 14px; height: 14px;"></i>未上传到图床</p>`;
+    }
+    const cards = images.map((image) => {
+      const imageUrl = typeof image === "string" ? image : image?.url;
+      const imageName = typeof image === "object" && image?.filename ? image.filename : imageUrl;
+      const provider = typeof image === "object" && image?.provider ? image.provider : "image-host";
+      return `
+        <div class="hosted-image-card">
+          <button class="hosted-image-preview" data-image-url="${escapeAttr(imageUrl)}" type="button" title="${escapeAttr(imageName)}"><img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(imageName)}"></button>
+          <span><i data-lucide="image" style="width: 13px; height: 13px;"></i>${escapeHtml(provider)}</span>
+          <div class="hosted-image-url-row"><code title="${escapeAttr(imageUrl)}">${escapeHtml(imageUrl)}</code><button class="hosted-image-copy-url" data-image-url="${escapeAttr(imageUrl)}" type="button" title="复制图床 URL" aria-label="复制图床 URL"><i data-lucide="copy" style="width: 13px; height: 13px;"></i></button></div>
+        </div>`;
+    }).join("");
+    return `<div class="hosted-image-gallery">${cards}</div>`;
+  }
+
+  function renderOutputFiles(files) {
+    if (!Array.isArray(files) || files.length === 0) {
+      return `<p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;"><i data-lucide="info" style="width: 14px; height: 14px;"></i>未留存本地文件 (例如小图直传或非生图请求)</p>`;
+    }
+    return `<ul class="file-list">${files.map((path) => `<li style="display: flex; align-items: center; gap: 8px; font-size: 13px;"><i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i><code>${escapeHtml(path)}</code></li>`).join("")}</ul>`;
   }
 
   async function copyTextToClipboard(value) {

@@ -256,10 +256,12 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
     return {"ok": True}
 
 
-@api_router.get("/logs", dependencies=[Depends(require_admin)])
-async def logs(request: Request, user_id: int | None = None, limit: int = 100):
+@api_router.get("/logs", dependencies=[Depends(require_admin_or_session)])
+async def logs(request: Request, user_id: int | None = None, limit: int = 100, offset: int = 0):
     db: Database = request.app.state.db
     limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    fetch_limit = limit + 1
     if user_id is None:
         rows = db.query_all(
             """
@@ -267,9 +269,9 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100):
             FROM usage_logs l
             JOIN users u ON u.id = l.user_id
             ORDER BY l.id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (limit,),
+            (fetch_limit, offset),
         )
     else:
         rows = db.query_all(
@@ -279,11 +281,18 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100):
             JOIN users u ON u.id = l.user_id
             WHERE l.user_id = ?
             ORDER BY l.id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (user_id, limit),
+            (user_id, fetch_limit, offset),
         )
-    return {"logs": [_usage_log_to_dict(row) for row in rows]}
+    page_rows = rows[:limit]
+    return {
+        "logs": [_usage_log_to_dict(row) for row in page_rows],
+        "limit": limit,
+        "offset": offset,
+        "next_offset": offset + len(page_rows),
+        "has_more": len(rows) > limit,
+    }
 
 
 @api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])
@@ -684,7 +693,9 @@ async def logs_page(request: Request, user_id: str | None = None, limit: int = 1
             "logs": data["logs"],
             "users": [_row_to_dict(row) for row in users],
             "selected_user_id": selected_user_id,
-            "limit": limit,
+            "limit": data["limit"],
+            "has_more": data["has_more"],
+            "next_offset": data["next_offset"],
         },
     )
 
