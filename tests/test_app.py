@@ -1080,10 +1080,25 @@ def test_admin_login_page(tmp_path: Path, monkeypatch):
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"}, follow_redirects=False)
         assert login.status_code == 303
         assert "novelai_proxy_admin" in login.headers["set-cookie"]
+        assert "Max-Age=2592000" in login.headers["set-cookie"]
 
         dashboard = client.get("/admin")
         assert dashboard.status_code == 200
+        assert "novelai_proxy_admin" in dashboard.headers["set-cookie"]
+        assert "Max-Age=2592000" in dashboard.headers["set-cookie"]
         assert "仪表盘" in dashboard.text
+
+
+def test_admin_invalid_session_cookie_is_not_refreshed(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        client.cookies.set("novelai_proxy_admin", "invalid")
+        dashboard = client.get("/admin", follow_redirects=False)
+
+        assert dashboard.status_code == 303
+        assert "set-cookie" not in dashboard.headers
 
 
 def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):

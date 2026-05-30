@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .admin.routes import router as admin_router
+from .admin.routes import router as admin_router, set_admin_session_cookie, valid_admin_session
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .database import Database
@@ -67,6 +67,20 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 app.include_router(proxy_router)
 app.include_router(admin_router)
+
+
+@app.middleware("http")
+async def refresh_admin_session_cookie(request: Request, call_next):
+    response = await call_next(request)
+    if (
+        request.url.path.startswith("/admin")
+        and request.url.path != "/admin/login"
+        and request.url.path != "/admin/logout"
+        and valid_admin_session(request)
+        and response.status_code < 400
+    ):
+        set_admin_session_cookie(response, request)
+    return response
 
 
 @app.exception_handler(HTTPException)

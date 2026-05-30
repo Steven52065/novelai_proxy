@@ -9,7 +9,7 @@ import zipfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
@@ -30,6 +30,7 @@ security = HTTPBasic()
 optional_security = HTTPBasic(auto_error=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 SESSION_COOKIE = "novelai_proxy_admin"
+SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
 ALLOWED_ENDPOINT_CHOICES = {
     "generate-image": "图像生成",
@@ -469,7 +470,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     if not (constant_time_equal(username, config.admin.username) and constant_time_equal(password, config.admin.password)):
         return templates.TemplateResponse(request, "login.html", {"error": "用户名或密码错误"}, status_code=401)
     response = RedirectResponse("/admin", status_code=303)
-    response.set_cookie(SESSION_COOKIE, _session_value(request), httponly=True, samesite="lax")
+    set_admin_session_cookie(response, request)
     return response
 
 
@@ -751,6 +752,20 @@ def _session_value(request: Request) -> str:
     payload = config.admin.username
     signature = hmac.digest(config.admin.password.encode(), payload.encode(), "sha256").hex()
     return f"{payload}:{signature}"
+
+
+def set_admin_session_cookie(response: Response, request: Request) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        _session_value(request),
+        max_age=SESSION_COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def valid_admin_session(request: Request) -> bool:
+    return _has_admin_session(request)
 
 
 def _has_admin_session(request: Request) -> bool:
