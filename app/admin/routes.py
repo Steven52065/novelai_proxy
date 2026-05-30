@@ -256,13 +256,11 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
     return {"ok": True}
 
 
-@api_router.get("/logs", dependencies=[Depends(require_admin_or_session)])
-async def logs(request: Request, user_id: int | None = None, limit: int = 100, before_id: int | None = None):
+@api_router.get("/logs", dependencies=[Depends(require_admin)])
+async def logs(request: Request, user_id: int | None = None, limit: int = 100):
     db: Database = request.app.state.db
     limit = max(1, min(limit, 500))
-    before_id = before_id if before_id is not None and before_id > 0 else None
-    fetch_limit = limit + 1
-    if user_id is None and before_id is None:
+    if user_id is None:
         rows = db.query_all(
             """
             SELECT l.*, u.name AS user_name
@@ -271,21 +269,9 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100, b
             ORDER BY l.id DESC
             LIMIT ?
             """,
-            (fetch_limit,),
+            (limit,),
         )
-    elif user_id is None:
-        rows = db.query_all(
-            """
-            SELECT l.*, u.name AS user_name
-            FROM usage_logs l
-            JOIN users u ON u.id = l.user_id
-            WHERE l.id < ?
-            ORDER BY l.id DESC
-            LIMIT ?
-            """,
-            (before_id, fetch_limit),
-        )
-    elif before_id is None:
+    else:
         rows = db.query_all(
             """
             SELECT l.*, u.name AS user_name
@@ -295,28 +281,9 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100, b
             ORDER BY l.id DESC
             LIMIT ?
             """,
-            (user_id, fetch_limit),
+            (user_id, limit),
         )
-    else:
-        rows = db.query_all(
-            """
-            SELECT l.*, u.name AS user_name
-            FROM usage_logs l
-            JOIN users u ON u.id = l.user_id
-            WHERE l.user_id = ? AND l.id < ?
-            ORDER BY l.id DESC
-            LIMIT ?
-            """,
-            (user_id, before_id, fetch_limit),
-        )
-    page_rows = rows[:limit]
-    return {
-        "logs": [_usage_log_to_dict(row) for row in page_rows],
-        "limit": limit,
-        "before_id": before_id,
-        "next_before_id": int(page_rows[-1]["id"]) if page_rows else None,
-        "has_more": len(rows) > limit,
-    }
+    return {"logs": [_usage_log_to_dict(row) for row in rows]}
 
 
 @api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])
@@ -717,9 +684,7 @@ async def logs_page(request: Request, user_id: str | None = None, limit: int = 1
             "logs": data["logs"],
             "users": [_row_to_dict(row) for row in users],
             "selected_user_id": selected_user_id,
-            "limit": data["limit"],
-            "has_more": data["has_more"],
-            "next_before_id": data["next_before_id"],
+            "limit": limit,
         },
     )
 
