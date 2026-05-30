@@ -824,6 +824,9 @@ def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkey
         assert page.status_code == 200
         assert "https://files.catbox.moe/fake-image.png" in page.text
         assert "图床图片" in page.text
+        assert 'class="hosted-image-preview"' in page.text
+        assert 'class="hosted-image-copy-url"' in page.text
+        assert 'href="https://files.catbox.moe/fake-image.png"' not in page.text
 
 
 def test_generate_skips_image_host_upload_when_pending_limit_reached(tmp_path: Path, monkeypatch):

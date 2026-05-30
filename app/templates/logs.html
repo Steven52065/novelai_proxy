@@ -154,14 +154,21 @@
                     {% for image in log.image_urls %}
                     {% set image_url = image.url if image is mapping else image %}
                     {% set image_name = image.filename if image is mapping and image.filename else image_url %}
-                    <a class="hosted-image-card" href="{{ image_url }}" target="_blank" rel="noopener noreferrer">
-                      <img src="{{ image_url }}" alt="{{ image_name }}">
+                    <div class="hosted-image-card">
+                      <button class="hosted-image-preview" data-image-url="{{ image_url }}" type="button" title="{{ image_name }}">
+                        <img src="{{ image_url }}" alt="{{ image_name }}">
+                      </button>
                       <span>
-                        <i data-lucide="external-link" style="width: 13px; height: 13px;"></i>
+                        <i data-lucide="image" style="width: 13px; height: 13px;"></i>
                         {{ image.provider if image is mapping and image.provider else "image-host" }}
                       </span>
-                      <code>{{ image_url }}</code>
-                    </a>
+                      <div class="hosted-image-url-row">
+                        <code title="{{ image_url }}">{{ image_url }}</code>
+                        <button class="hosted-image-copy-url" data-image-url="{{ image_url }}" type="button" title="复制图床 URL" aria-label="复制图床 URL">
+                          <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
+                        </button>
+                      </div>
+                    </div>
                     {% endfor %}
                   </div>
                   {% else %}
@@ -406,6 +413,41 @@
     });
   });
 
+  document.querySelectorAll(".hosted-image-preview").forEach((button) => {
+    button.addEventListener("click", () => {
+      const imageUrl = button.dataset.imageUrl;
+      if (imageUrl) {
+        previewBase64Image(imageUrl);
+      }
+    });
+  });
+
+  document.querySelectorAll(".hosted-image-copy-url").forEach((button) => {
+    button.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const imageUrl = button.dataset.imageUrl;
+      if (!imageUrl) return;
+
+      try {
+        await copyTextToClipboard(imageUrl);
+        const icon = button.querySelector("i");
+        if (icon) icon.setAttribute("data-lucide", "check");
+        button.classList.add("copied");
+        lucide.createIcons();
+        showToast("图床 URL 已复制到剪贴板。");
+
+        window.setTimeout(() => {
+          if (icon) icon.setAttribute("data-lucide", "copy");
+          button.classList.remove("copied");
+          lucide.createIcons();
+        }, 1500);
+      } catch (err) {
+        showToast("复制失败，请手动选择复制。");
+      }
+    });
+  });
+
   function setReplayButtonState(btn, loading, label) {
     btn.disabled = loading;
     const labelSpan = btn.querySelector("span");
@@ -469,6 +511,30 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  async function copyTextToClipboard(value) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    try {
+      const copied = document.execCommand("copy");
+      if (!copied) {
+        throw new Error("copy command failed");
+      }
+    } finally {
+      document.body.removeChild(textarea);
+    }
   }
 })();
 </script>
