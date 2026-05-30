@@ -1251,6 +1251,46 @@ def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch
         assert "2026-05-27 08:00:00 UTC+8" in logs_page.text
 
 
+def test_admin_logs_details_are_inside_log_entry_and_status_colors(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "log-layout-user", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        now = "2026-05-27T00:00:00+00:00"
+        for request_id, status in (
+            ("layout-success", "success"),
+            ("layout-failed", "failed"),
+            ("layout-running", "running"),
+        ):
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (request_id, user_id, "generate", 0, status, "INFO", '{"input":"1girl"}', now),
+            )
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        logs_page = client.get("/admin/logs")
+
+        assert logs_page.status_code == 200
+        assert "log-detail-row" not in logs_page.text
+        assert "log-entry-card" in logs_page.text
+        assert "log-status-failed" in logs_page.text
+        assert "log-status-running" in logs_page.text
+        assert "status-log-running" in logs_page.text
+        assert "展开请求参数及输出文件" in logs_page.text
+
+
 def test_admin_logs_filter_accepts_empty_user_id(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

@@ -734,7 +734,7 @@ tr {
   transition: var(--transition);
 }
 
-tr:hover:not(.log-detail-row):not(.empty-row) {
+tr:hover:not(.log-entry-row):not(.empty-row) {
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -756,6 +756,48 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 
 .logs-table th,
 .logs-table td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-entry-row > td {
+  padding: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(10, 12, 26, 0.16);
+}
+
+.log-entry-card {
+  border-left: 4px solid var(--warning);
+  background: rgba(10, 12, 26, 0.12);
+  transition: var(--transition);
+}
+
+.log-entry-card:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.log-status-success .log-entry-card {
+  border-left-color: var(--success);
+}
+
+.log-status-failed .log-entry-card,
+.log-status-error .log-entry-card {
+  border-left-color: var(--danger);
+}
+
+.log-status-running .log-entry-card {
+  border-left-color: var(--info);
+}
+
+.log-entry-summary-grid {
+  display: grid;
+  grid-template-columns: 96px 98px 120px 132px 150px 108px 150px 100px 150px 110px;
+  align-items: center;
+  min-width: 1180px;
+}
+
+.log-entry-cell {
+  padding: 16px 20px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -785,14 +827,25 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   background: currentColor;
 }
 
-.status-running {
+.status-success {
   background: var(--success-bg);
   border-color: var(--success-border);
   color: var(--success);
   box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
 }
 
-.status-running::before {
+.status-success::before {
+  animation: pulse-glow 1.5s infinite alternate;
+}
+
+.status-log-running {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--info);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
+}
+
+.status-log-running::before {
   animation: pulse-glow 1.5s infinite alternate;
 }
 
@@ -884,15 +937,10 @@ pre {
 .level-debug { background: var(--secondary-bg); border: 1px solid var(--secondary-border); color: #94a3b8; }
 .level-error { background: var(--danger-bg); border: 1px solid var(--danger-border); color: #f87171; }
 
-.log-detail-row td {
-  padding: 0 20px;
-  background: rgba(10, 12, 26, 0.25);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  max-width: 0;
-}
-
-.log-detail-row details {
-  padding: 16px 0;
+.log-details-block {
+  margin: 0 20px 16px;
+  padding: 12px 0 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
   animation: slideDown 0.3s ease-out;
   max-width: 100%;
   min-width: 0;
@@ -904,7 +952,7 @@ pre {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.log-detail-row summary {
+.log-details-block summary {
   cursor: pointer;
   font-weight: 600;
   color: #a5b4fc;
@@ -912,7 +960,7 @@ pre {
   outline: none;
   user-select: none;
 }
-.log-detail-row summary:hover {
+.log-details-block summary:hover {
   color: #c084fc;
 }
 
