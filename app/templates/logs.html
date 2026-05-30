@@ -154,14 +154,19 @@
                     {% for image in log.image_urls %}
                     {% set image_url = image.url if image is mapping else image %}
                     {% set image_name = image.filename if image is mapping and image.filename else image_url %}
-                    <a class="hosted-image-card" href="{{ image_url }}" target="_blank" rel="noopener noreferrer">
-                      <img src="{{ image_url }}" alt="{{ image_name }}">
+                    <div class="hosted-image-card">
+                      <img class="hosted-image-preview" src="{{ image_url }}" alt="{{ image_name }}" data-image-url="{{ image_url }}" title="点击放大查看">
                       <span>
-                        <i data-lucide="external-link" style="width: 13px; height: 13px;"></i>
+                        <i data-lucide="image" style="width: 13px; height: 13px;"></i>
                         {{ image.provider if image is mapping and image.provider else "image-host" }}
                       </span>
-                      <code>{{ image_url }}</code>
-                    </a>
+                      <div class="hosted-image-url">
+                        <code>{{ image_url }}</code>
+                        <button class="hosted-image-copy" type="button" data-image-url="{{ image_url }}" title="复制图片链接" aria-label="复制图片链接">
+                          <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
+                        </button>
+                      </div>
+                    </div>
                     {% endfor %}
                   </div>
                   {% else %}
@@ -370,6 +375,42 @@
         } catch (err) {
           showToast("复制失败，请手动选择复制。");
         }
+      }
+    });
+  });
+
+  // Hosted image: click thumbnail to enlarge in the shared lightbox
+  document.querySelectorAll(".hosted-image-preview").forEach((img) => {
+    img.addEventListener("click", () => {
+      const url = img.dataset.imageUrl;
+      if (url) {
+        previewBase64Image(url);
+      }
+    });
+  });
+
+  // Hosted image: copy URL to clipboard instead of navigating to the image host
+  document.querySelectorAll(".hosted-image-copy").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const url = btn.dataset.imageUrl;
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        const icon = btn.querySelector("i");
+        const originalIcon = icon.getAttribute("data-lucide");
+        icon.setAttribute("data-lucide", "check");
+        btn.classList.add("copied");
+        lucide.createIcons();
+        showToast("图片链接已复制到剪贴板！");
+        window.setTimeout(() => {
+          icon.setAttribute("data-lucide", originalIcon);
+          btn.classList.remove("copied");
+          lucide.createIcons();
+        }, 1500);
+      } catch (err) {
+        showToast("复制失败，请手动选择复制。");
       }
     });
   });

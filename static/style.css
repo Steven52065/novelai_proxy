@@ -983,6 +983,7 @@ pre {
   object-fit: cover;
   border-radius: 6px;
   background: rgba(2, 6, 23, 0.8);
+  cursor: zoom-in;
 }
 
 .hosted-image-card span {
@@ -1002,6 +1003,44 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
+}
+
+.hosted-image-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hosted-image-url code {
+  flex: 1;
+}
+
+.hosted-image-copy {
+  flex: none;
+  min-height: auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.6);
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+.hosted-image-copy:hover {
+  transform: none;
+  filter: none;
+  border-color: rgba(165, 180, 252, 0.5);
+  background: rgba(30, 41, 59, 0.7);
+  color: #a5b4fc;
+  box-shadow: none;
+}
+
+.hosted-image-copy.copied {
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .muted { color: var(--text-muted); }
