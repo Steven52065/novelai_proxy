@@ -8,7 +8,7 @@
 </div>
 
 <section class="panel" style="padding: 20px 24px; margin-bottom: 24px;">
-  <form method="get" action="/admin/logs" class="inline-form" style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
+  <form id="logs-filter-form" method="get" action="/admin/logs" class="inline-form" style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
     <label style="flex: 1; min-width: 200px; gap: 6px;">
       筛选发起用户
       <select name="user_id">
@@ -18,12 +18,12 @@
         {% endfor %}
       </select>
     </label>
-    
+
     <label style="width: 140px; gap: 6px;">
       展示日志条数
-      <input name="limit" type="number" min="1" max="500" value="{{ limit }}" placeholder="条数上限">
+      <input id="logs-limit-input" name="limit" type="number" min="1" max="500" value="{{ limit }}" placeholder="条数上限">
     </label>
-    
+
     <button type="submit" style="min-height: 44px; padding: 0 24px;">
       <i data-lucide="search" style="width: 16px; height: 16px;"></i>
       执行筛选
@@ -48,7 +48,7 @@
           <th>操作</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="logs-table-body" data-next-before-id="{{ next_before_id if next_before_id is not none else '' }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
           <td colspan="10" style="text-align: center; padding: 48px 0;">
@@ -59,7 +59,7 @@
           </td>
         </tr>
         {% endif %}
-        
+
         {% for log in logs %}
         <tr class="log-row" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};">
           <td class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}</td>
@@ -136,7 +136,7 @@
 
                 <!-- Raw JSON payload store hidden -->
                 <script type="application/json" id="raw-payload-{{ log.request_id }}">{{ log.request_payload | tojson }}</script>
-                
+
                 <div>
                   <div class="payload-toolbar">
                     <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
@@ -211,28 +211,242 @@
       </tbody>
     </table>
   </div>
+  <div id="logs-infinite-status" class="logs-infinite-status" hidden></div>
+  <div id="logs-infinite-sentinel" class="logs-infinite-sentinel" aria-hidden="true"></div>
 </section>
 
 <!-- Advanced Lazy Loading and Base64 Truncation Engine -->
 <script>
 (() => {
-  // Safe deep clone & scan function to truncate huge Base64 strings in the object tree
+  const logsLimitStorageKey = "novelai_proxy_logs_limit";
+  const filterForm = document.getElementById("logs-filter-form");
+  const limitInput = document.getElementById("logs-limit-input");
+  const tableBody = document.getElementById("logs-table-body");
+  const infiniteStatus = document.getElementById("logs-infinite-status");
+  const infiniteSentinel = document.getElementById("logs-infinite-sentinel");
+
   // Stash large base64 values into a temporary cache map for copier and previewer
   const base64Cache = new Map();
   let cacheCounter = 0;
+  let loadingMoreLogs = false;
 
+  applyStoredLimit();
+  bindLimitPersistence();
+  bindLogInteractions();
+  setupInfiniteScroll();
+
+  // Persisted "display log count": apply the saved value on first open by reloading
+  // with an explicit limit so the server renders the desired number of rows.
+  function applyStoredLimit() {
+    const savedLimit = normalizeLimit(readStoredValue(logsLimitStorageKey));
+    const url = new URL(window.location.href);
+    if (!savedLimit || url.searchParams.has("limit")) {
+      return;
+    }
+    url.searchParams.set("limit", String(savedLimit));
+    window.location.replace(url.toString());
+  }
+
+  function bindLimitPersistence() {
+    if (!limitInput) return;
+    limitInput.addEventListener("change", () => {
+      const limit = normalizeLimit(limitInput.value);
+      if (limit) {
+        writeStoredValue(logsLimitStorageKey, String(limit));
+        limitInput.value = String(limit);
+      }
+    });
+    if (filterForm) {
+      filterForm.addEventListener("submit", () => {
+        const limit = normalizeLimit(limitInput.value) || 100;
+        writeStoredValue(logsLimitStorageKey, String(limit));
+        limitInput.value = String(limit);
+      });
+    }
+  }
+
+  function readStoredValue(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeStoredValue(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (err) {
+      // Storage may be disabled; the page should still work without persistence.
+    }
+  }
+
+  function normalizeLimit(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.max(1, Math.min(parsed, 500));
+  }
+
+  // Event delegation keeps interactions working for both server-rendered rows
+  // and rows appended by infinite scroll.
+  function bindLogInteractions() {
+    document.addEventListener("click", async (event) => {
+      const toggleBtn = event.target.closest?.(".log-toggle-btn");
+      if (toggleBtn) {
+        event.preventDefault();
+        const requestId = toggleBtn.dataset.requestId;
+        const detailRow = document.querySelector(`.log-detail-row[data-request-id="${requestId}"]`);
+        const willOpen = detailRow ? detailRow.hidden : true;
+        setLogDetailOpen(requestId, willOpen);
+        return;
+      }
+
+      const copyRawButton = event.target.closest?.(".btn-copy-raw-payload");
+      if (copyRawButton) {
+        event.preventDefault();
+        await copyRawPayload(copyRawButton);
+        return;
+      }
+
+      const replayButton = event.target.closest?.(".btn-replay-log");
+      if (replayButton) {
+        event.preventDefault();
+        await replayLog(replayButton);
+        return;
+      }
+
+      const hostedPreview = event.target.closest?.(".hosted-image-preview");
+      if (hostedPreview) {
+        const imageUrl = hostedPreview.dataset.imageUrl;
+        if (imageUrl) {
+          previewBase64Image(imageUrl);
+        }
+        return;
+      }
+
+      const hostedCopy = event.target.closest?.(".hosted-image-copy");
+      if (hostedCopy) {
+        event.preventDefault();
+        event.stopPropagation();
+        await copyHostedImageUrl(hostedCopy);
+        return;
+      }
+
+      const copyB64Button = event.target.closest?.(".copy-b64-btn");
+      if (copyB64Button) {
+        event.preventDefault();
+        event.stopPropagation();
+        const fullBase64 = base64Cache.get(copyB64Button.dataset.cacheKey);
+        if (fullBase64) {
+          await navigator.clipboard.writeText(fullBase64);
+          showToast("完整 Base64 图片数据已复制到剪贴板！");
+        }
+        return;
+      }
+
+      const previewB64Button = event.target.closest?.(".preview-b64-btn");
+      if (previewB64Button) {
+        event.preventDefault();
+        event.stopPropagation();
+        let fullBase64 = base64Cache.get(previewB64Button.dataset.cacheKey);
+        if (fullBase64) {
+          if (!fullBase64.startsWith("data:")) {
+            fullBase64 = `data:image/png;base64,${fullBase64}`;
+          }
+          previewBase64Image(fullBase64);
+        }
+      }
+    });
+  }
+
+  function setupInfiniteScroll() {
+    if (!tableBody || !infiniteSentinel || !("IntersectionObserver" in window)) {
+      return;
+    }
+    if (tableBody.dataset.hasMore !== "true") {
+      renderInfiniteStatus("", true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (entry?.isIntersecting) {
+        loadMoreLogs();
+      }
+    }, {rootMargin: "320px 0px"});
+    observer.observe(infiniteSentinel);
+  }
+
+  async function loadMoreLogs() {
+    if (loadingMoreLogs || !tableBody || tableBody.dataset.hasMore !== "true") {
+      return;
+    }
+    loadingMoreLogs = true;
+    renderInfiniteStatus("正在加载更多日志...");
+
+    const limit = normalizeLimit(limitInput?.value) || 100;
+    const beforeId = Math.max(0, Number.parseInt(tableBody.dataset.nextBeforeId || "0", 10) || 0);
+    const params = new URLSearchParams({limit: String(limit)});
+    if (beforeId > 0) {
+      params.set("before_id", String(beforeId));
+    }
+    const selectedUserId = tableBody.dataset.selectedUserId;
+    if (selectedUserId) {
+      params.set("user_id", selectedUserId);
+    }
+
+    try {
+      const response = await fetch(`/admin/api/logs?${params.toString()}`, {
+        headers: {"Accept": "application/json"},
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message || body.detail?.message || `加载失败：HTTP ${response.status}`);
+      }
+
+      const logs = Array.isArray(body.logs) ? body.logs : [];
+      appendLogs(logs);
+      tableBody.dataset.nextBeforeId = body.next_before_id ? String(body.next_before_id) : "";
+      tableBody.dataset.hasMore = body.has_more ? "true" : "false";
+      renderInfiniteStatus(body.has_more ? "" : "没有更多日志。", !body.has_more);
+    } catch (err) {
+      renderInfiniteStatus(err.message || "加载更多日志失败。");
+    } finally {
+      loadingMoreLogs = false;
+    }
+  }
+
+  function appendLogs(logs) {
+    if (!tableBody || logs.length === 0) return;
+    tableBody.querySelector(".empty-row")?.remove();
+    const fragment = document.createDocumentFragment();
+    logs.forEach((log) => {
+      const template = document.createElement("tbody");
+      template.innerHTML = renderLogEntry(log);
+      Array.from(template.children).forEach((row) => fragment.appendChild(row));
+    });
+    tableBody.appendChild(fragment);
+    lucide.createIcons();
+  }
+
+  function renderInfiniteStatus(message, hidden = false) {
+    if (!infiniteStatus) return;
+    infiniteStatus.hidden = hidden || !message;
+    infiniteStatus.textContent = message || "";
+  }
+
+  // Safe deep clone & scan function to truncate huge Base64 strings in the object tree
   function truncateBase64(obj) {
     if (typeof obj === 'string') {
       if (obj.length > 256) {
         const isBase64Image = obj.startsWith('data:image/') || obj.length > 5000;
-        
+
         if (isBase64Image) {
           cacheCounter++;
           const cacheKey = `b64_ref_${cacheCounter}`;
           base64Cache.set(cacheKey, obj);
-          
+
           const kbSize = Math.round(obj.length * 0.75 / 1024);
-          
+
           return {
             __type__: "Base64ImageTruncated",
             cacheKey: cacheKey,
@@ -244,11 +458,11 @@
       }
       return obj;
     }
-    
+
     if (Array.isArray(obj)) {
       return obj.map(truncateBase64);
     }
-    
+
     if (obj !== null && typeof obj === 'object') {
       const cloned = {};
       for (const k in obj) {
@@ -258,23 +472,26 @@
       }
       return cloned;
     }
-    
+
     return obj;
   }
 
   // Custom Formatter to render JSON with embedded Interactive Buttons for Truncated elements
   function customJsonFormatter(obj, indent = 2) {
     const jsonStr = JSON.stringify(obj, null, indent);
-    
+
     // Scan and replace our custom Base64ImageTruncated object representations with pretty interactive HTML
     const pattern = /\{\n\s+"__type__": "Base64ImageTruncated",\n\s+"cacheKey": "([^"]+)",\n\s+"lengthBytes": (\d+),\n\s+"approxSizeKb": (\d+),\n\s+"preview": "([^"]+)"\n\s+\}/g;
-    
-    return jsonStr.replace(pattern, (match, cacheKey, bytes, kbSize, preview) => {
-      let previewLabel = kbSize > 1024 
-        ? `${(kbSize / 1024).toFixed(2)} MB` 
+    let html = "";
+    let lastIndex = 0;
+
+    jsonStr.replace(pattern, (match, cacheKey, bytes, kbSize, preview, offset) => {
+      html += escapeHtml(jsonStr.slice(lastIndex, offset));
+      let previewLabel = kbSize > 1024
+        ? `${(kbSize / 1024).toFixed(2)} MB`
         : `${kbSize} KB`;
-        
-      return `\n<div class="base64-truncated">
+
+      html += `\n<div class="base64-truncated">
   <i data-lucide="image-off" style="width: 14px; height: 14px; vertical-align: middle;"></i>
   <span>[超长 Base64 图像数据 | 大小: ${previewLabel}]</span>
   <div class="base64-actions">
@@ -282,7 +499,11 @@
     <button class="base64-btn preview-b64-btn" data-cache-key="${cacheKey}" type="button">预览生成图片</button>
   </div>
 </div>\n`;
+      lastIndex = offset + match.length;
+      return match;
     });
+    html += escapeHtml(jsonStr.slice(lastIndex));
+    return html;
   }
 
   // Lazily parse and render a log's payload the first time its detail panel opens
@@ -308,35 +529,6 @@
 
       // Dynamically initialize Lucide icons for injected buttons
       lucide.createIcons();
-
-      // Bind actions to truncated buttons
-      prettyContainer.querySelectorAll(".copy-b64-btn").forEach((btn) => {
-        btn.addEventListener("click", async (ev) => {
-          ev.stopPropagation();
-          const key = btn.dataset.cacheKey;
-          const fullBase64 = base64Cache.get(key);
-          if (fullBase64) {
-            await navigator.clipboard.writeText(fullBase64);
-            showToast("完整 Base64 图片数据已复制到剪贴板！");
-          }
-        });
-      });
-
-      prettyContainer.querySelectorAll(".preview-b64-btn").forEach((btn) => {
-        btn.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          const key = btn.dataset.cacheKey;
-          let fullBase64 = base64Cache.get(key);
-          if (fullBase64) {
-            // Ensure it has standard data URL header
-            if (!fullBase64.startsWith("data:")) {
-              fullBase64 = `data:image/png;base64,${fullBase64}`;
-            }
-            previewBase64Image(fullBase64);
-          }
-        });
-      });
-
     } catch (err) {
       prettyContainer.textContent = `格式化 JSON 失败: ${err.message}`;
     }
@@ -352,117 +544,83 @@
     if (open) renderPayload(requestId);
   }
 
-  // In-row toggle: the expand control now lives inside the log entry itself
-  document.querySelectorAll(".log-toggle-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      const requestId = btn.dataset.requestId;
-      const detailRow = document.querySelector(`.log-detail-row[data-request-id="${requestId}"]`);
-      const willOpen = detailRow ? detailRow.hidden : true;
-      setLogDetailOpen(requestId, willOpen);
-    });
-  });
+  async function copyRawPayload(btn) {
+    const requestId = btn.dataset.requestId;
+    const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+    if (!rawJsonEl) return;
 
-  // Global full JSON payload copier
-  document.querySelectorAll(".btn-copy-raw-payload").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      const requestId = btn.dataset.requestId;
-      const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
-      
-      if (rawJsonEl) {
-        try {
-          await navigator.clipboard.writeText(rawJsonEl.textContent);
-          
-          const labelSpan = btn.querySelector('span');
-          const icon = btn.querySelector('i');
-          const originalText = labelSpan.textContent;
-          const originalIcon = icon.getAttribute('data-lucide');
-          
-          btn.style.borderColor = 'var(--success)';
-          labelSpan.textContent = "已复制";
-          labelSpan.style.color = 'var(--success)';
-          icon.setAttribute('data-lucide', 'check');
-          lucide.createIcons();
-          
-          window.setTimeout(() => {
-            btn.style.borderColor = '';
-            labelSpan.textContent = originalText;
-            labelSpan.style.color = '';
-            icon.setAttribute('data-lucide', originalIcon);
-            lucide.createIcons();
-          }, 1500);
-        } catch (err) {
-          showToast("复制失败，请手动选择复制。");
-        }
-      }
-    });
-  });
+    try {
+      await navigator.clipboard.writeText(rawJsonEl.textContent);
 
-  // Hosted image: click thumbnail to enlarge in the shared lightbox
-  document.querySelectorAll(".hosted-image-preview").forEach((img) => {
-    img.addEventListener("click", () => {
-      const url = img.dataset.imageUrl;
-      if (url) {
-        previewBase64Image(url);
-      }
-    });
-  });
+      const labelSpan = btn.querySelector('span');
+      const icon = btn.querySelector('i');
+      const originalText = labelSpan.textContent;
+      const originalIcon = icon.getAttribute('data-lucide');
 
-  // Hosted image: copy URL to clipboard instead of navigating to the image host
-  document.querySelectorAll(".hosted-image-copy").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const url = btn.dataset.imageUrl;
-      if (!url) return;
-      try {
-        await navigator.clipboard.writeText(url);
-        const icon = btn.querySelector("i");
-        const originalIcon = icon.getAttribute("data-lucide");
-        icon.setAttribute("data-lucide", "check");
-        btn.classList.add("copied");
+      btn.style.borderColor = 'var(--success)';
+      labelSpan.textContent = "已复制";
+      labelSpan.style.color = 'var(--success)';
+      icon.setAttribute('data-lucide', 'check');
+      lucide.createIcons();
+
+      window.setTimeout(() => {
+        btn.style.borderColor = '';
+        labelSpan.textContent = originalText;
+        labelSpan.style.color = '';
+        icon.setAttribute('data-lucide', originalIcon);
         lucide.createIcons();
-        showToast("图片链接已复制到剪贴板！");
-        window.setTimeout(() => {
-          icon.setAttribute("data-lucide", originalIcon);
-          btn.classList.remove("copied");
-          lucide.createIcons();
-        }, 1500);
-      } catch (err) {
-        showToast("复制失败，请手动选择复制。");
-      }
-    });
-  });
+      }, 1500);
+    } catch (err) {
+      showToast("复制失败，请手动选择复制。");
+    }
+  }
 
-  document.querySelectorAll(".btn-replay-log").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      const requestId = btn.dataset.requestId;
-      const resultBox = document.getElementById(`replay-result-${requestId}`);
-      setLogDetailOpen(requestId, true);
-      setReplayButtonState(btn, true, "重放中");
-      renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
+  async function copyHostedImageUrl(btn) {
+    const url = btn.dataset.imageUrl;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      const icon = btn.querySelector("i");
+      const originalIcon = icon.getAttribute("data-lucide");
+      icon.setAttribute("data-lucide", "check");
+      btn.classList.add("copied");
+      lucide.createIcons();
+      showToast("图片链接已复制到剪贴板！");
+      window.setTimeout(() => {
+        icon.setAttribute("data-lucide", originalIcon);
+        btn.classList.remove("copied");
+        lucide.createIcons();
+      }, 1500);
+    } catch (err) {
+      showToast("复制失败，请手动选择复制。");
+    }
+  }
 
-      try {
-        const response = await fetch(`/admin/api/logs/${encodeURIComponent(requestId)}/replay`, {
-          method: "POST",
-          headers: { "Accept": "application/json" },
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(body.message || body.detail?.message || `重放失败：HTTP ${response.status}`);
-        }
-        renderReplayImages(resultBox, body);
-        showToast(`重放完成：${body.images?.length || 0} 张图片`);
-      } catch (err) {
-        renderReplayStatus(resultBox, "error", err.message || "重放请求失败。");
-        showToast(err.message || "重放请求失败。");
-      } finally {
-        setReplayButtonState(btn, false, "重放");
+  async function replayLog(btn) {
+    const requestId = btn.dataset.requestId;
+    const resultBox = document.getElementById(`replay-result-${requestId}`);
+    setLogDetailOpen(requestId, true);
+    setReplayButtonState(btn, true, "重放中");
+    renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
+
+    try {
+      const response = await fetch(`/admin/api/logs/${encodeURIComponent(requestId)}/replay`, {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message || body.detail?.message || `重放失败：HTTP ${response.status}`);
       }
-    });
-  });
+      renderReplayImages(resultBox, body);
+      showToast(`重放完成：${body.images?.length || 0} 张图片`);
+    } catch (err) {
+      renderReplayStatus(resultBox, "error", err.message || "重放请求失败。");
+      showToast(err.message || "重放请求失败。");
+    } finally {
+      setReplayButtonState(btn, false, "重放");
+    }
+  }
 
   function setReplayButtonState(btn, loading, label) {
     btn.disabled = loading;
@@ -520,6 +678,145 @@
     lucide.createIcons();
   }
 
+  // Build the same two-row markup the server renders, for logs appended via infinite scroll
+  function renderLogEntry(log) {
+    const requestId = String(log.request_id ?? "");
+    const status = String(log.status ?? "");
+    const logLevel = log.log_level || "INFO";
+    const model = log.model
+      ? `<span class="badge badge-normal" style="font-size: 11px;">${escapeHtml(log.model)}</span>`
+      : `<span class="muted">-</span>`;
+    const size = (log.width && log.height)
+      ? `<code>${escapeHtml(log.width)}x${escapeHtml(log.height)}</code>`
+      : `<span class="muted">-</span>`;
+    const finalCost = (log.final_anlas_cost === null || log.final_anlas_cost === undefined) ? "-" : log.final_anlas_cost;
+    const replayCell = log.request_payload
+      ? `<button class="secondary btn-replay-log" data-request-id="${escapeAttr(requestId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
+      : `<span class="muted" style="font-size: 12px;">不可重放</span>`;
+    const errorHtml = log.error_message
+      ? `<div class="error" style="margin-bottom: 0;"><div style="display: flex; align-items: center; gap: 8px;"><i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i><strong style="color:#f87171;">错误 ${escapeHtml(log.error_code ?? "")}：</strong><span>${escapeHtml(log.error_message)}</span></div></div>`
+      : "";
+
+    return `
+        <tr class="log-row" style="border-left: 4px solid ${borderColorFor(status)};">
+          <td class="mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}</td>
+          <td>
+            <span class="level level-${escapeAttr(String(logLevel).toLowerCase())}">${escapeHtml(logLevel)}</span>
+          </td>
+          <td style="font-weight: 700; color: #fff;">${escapeHtml(log.user_name ?? "")}</td>
+          <td>
+            <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">${escapeHtml(log.action ?? "")}</span>
+          </td>
+          <td>${model}</td>
+          <td class="mono">${size}</td>
+          <td class="mono">
+            <span style="color: #94a3b8;">${escapeHtml(log.estimated_anlas_cost ?? 0)}</span>
+            <span style="color: rgba(255,255,255,0.15)">/</span>
+            <span style="color: #34d399; font-weight: 700;">${escapeHtml(finalCost)}</span>
+          </td>
+          <td>${renderStatusPill(status)}</td>
+          <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
+          <td>
+            <div class="log-actions">
+              <button class="secondary log-toggle-btn" data-request-id="${escapeAttr(requestId)}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+                <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
+                <span>详情</span>
+              </button>
+              ${replayCell}
+            </div>
+          </td>
+        </tr>
+        <tr class="log-detail-row" data-request-id="${escapeAttr(requestId)}" hidden>
+          <td colspan="10">
+            <div class="log-details-block" data-request-id="${escapeAttr(requestId)}">
+              <div class="log-details-content">
+                <div id="replay-result-${escapeAttr(requestId)}" class="replay-result" hidden></div>
+                ${errorHtml}
+                <script type="application/json" id="raw-payload-${escapeAttr(requestId)}">${escapeScriptJson(log.request_payload)}<\/script>
+                <div>
+                  <div class="payload-toolbar">
+                    <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
+                      <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
+                      请求与响应 Payload 数据 (含智能安全截断)
+                    </span>
+                    <button class="secondary btn-copy-raw-payload" data-request-id="${escapeAttr(requestId)}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
+                      <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                      <span>复制完整 JSON</span>
+                    </button>
+                  </div>
+                  <pre id="pretty-payload-${escapeAttr(requestId)}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+                </div>
+                <div>
+                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+                    图床图片：
+                  </span>
+                  ${renderHostedImages(log.image_urls)}
+                </div>
+                <div>
+                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+                    本地生成的图片输出路径：
+                  </span>
+                  ${renderOutputFiles(log.output_files)}
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+  }
+
+  function borderColorFor(status) {
+    if (status === "success") return "var(--success)";
+    if (status === "failed") return "var(--danger)";
+    if (status === "running") return "var(--info)";
+    return "var(--warning)";
+  }
+
+  function renderStatusPill(status) {
+    if (status === "success") {
+      return `<span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">成功</span>`;
+    }
+    if (status === "failed") {
+      return `<span class="status-pill status-error">失败</span>`;
+    }
+    if (status === "running") {
+      return `<span class="status-pill" style="color: var(--info); background: var(--info-bg); border-color: var(--info-border);">运行中</span>`;
+    }
+    return `<span class="status-pill">${escapeHtml(status)}</span>`;
+  }
+
+  function renderHostedImages(images) {
+    if (!Array.isArray(images) || images.length === 0) {
+      return `<p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;"><i data-lucide="info" style="width: 14px; height: 14px;"></i>未上传到图床</p>`;
+    }
+    const cards = images.map((image) => {
+      const imageUrl = typeof image === "string" ? image : (image?.url ?? "");
+      const imageName = (typeof image === "object" && image?.filename) ? image.filename : imageUrl;
+      const provider = (typeof image === "object" && image?.provider) ? image.provider : "image-host";
+      return `
+                    <div class="hosted-image-card">
+                      <img class="hosted-image-preview" src="${escapeAttr(imageUrl)}" alt="${escapeAttr(imageName)}" data-image-url="${escapeAttr(imageUrl)}" title="点击放大查看">
+                      <span>
+                        <i data-lucide="image" style="width: 13px; height: 13px;"></i>
+                        ${escapeHtml(provider)}
+                      </span>
+                      <div class="hosted-image-url">
+                        <code>${escapeHtml(imageUrl)}</code>
+                        <button class="hosted-image-copy" type="button" data-image-url="${escapeAttr(imageUrl)}" title="复制图片链接" aria-label="复制图片链接">
+                          <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
+                        </button>
+                      </div>
+                    </div>`;
+    }).join("");
+    return `<div class="hosted-image-gallery">${cards}</div>`;
+  }
+
+  function renderOutputFiles(files) {
+    if (!Array.isArray(files) || files.length === 0) {
+      return `<p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;"><i data-lucide="info" style="width: 14px; height: 14px;"></i>未留存本地文件 (例如小图直传或非生图请求)</p>`;
+    }
+    return `<ul class="file-list">${files.map((path) => `<li style="display: flex; align-items: center; gap: 8px; font-size: 13px;"><i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i><code>${escapeHtml(path)}</code></li>`).join("")}</ul>`;
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -527,6 +824,14 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value).replaceAll("`", "&#096;");
+  }
+
+  function escapeScriptJson(value) {
+    return JSON.stringify(value ?? null).replaceAll("</", "<\\/");
   }
 })();
 </script>

@@ -962,6 +962,17 @@ pre {
   color: var(--text-muted);
 }
 
+.logs-infinite-status {
+  padding: 16px 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.logs-infinite-sentinel {
+  height: 1px;
+}
+
 .hosted-image-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
