@@ -61,7 +61,7 @@
         {% endif %}
         
         {% for log in logs %}
-        <tr style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'error' %}var(--danger){% else %}var(--warning){% endif %};">
+        <tr class="log-row" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};">
           <td class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}</td>
           <td>
             <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
@@ -92,29 +92,35 @@
           <td>
             {% if log.status == 'success' %}
             <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">成功</span>
-            {% elif log.status == 'error' %}
+            {% elif log.status == 'failed' %}
             <span class="status-pill status-error">失败</span>
+            {% elif log.status == 'running' %}
+            <span class="status-pill" style="color: var(--info); background: var(--info-bg); border-color: var(--info-border);">运行中</span>
             {% else %}
             <span class="status-pill">{{ log.status }}</span>
             {% endif %}
           </td>
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
           <td>
-            {% if log.request_payload %}
-            <button class="secondary btn-replay-log" data-request-id="{{ log.request_id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
-              <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
-              <span>重放</span>
-            </button>
-            {% else %}
-            <span class="muted" style="font-size: 12px;">不可重放</span>
-            {% endif %}
+            <div class="log-actions">
+              <button class="secondary log-toggle-btn" data-request-id="{{ log.request_id }}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+                <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
+                <span>详情</span>
+              </button>
+              {% if log.request_payload %}
+              <button class="secondary btn-replay-log" data-request-id="{{ log.request_id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+                <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
+                <span>重放</span>
+              </button>
+              {% else %}
+              <span class="muted" style="font-size: 12px;">不可重放</span>
+              {% endif %}
+            </div>
           </td>
         </tr>
-        <tr class="log-detail-row">
+        <tr class="log-detail-row" data-request-id="{{ log.request_id }}" hidden>
           <td colspan="10">
-            <details class="log-details-block" data-request-id="{{ log.request_id }}">
-              <summary>展开请求参数及输出文件</summary>
-              
+            <div class="log-details-block" data-request-id="{{ log.request_id }}">
               <div class="log-details-content">
                 <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
 
@@ -198,7 +204,7 @@
                   {% endif %}
                 </div>
               </div>
-            </details>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -279,67 +285,81 @@
     });
   }
 
-  // Bind toggle events to `<details>` blocks for lazy parsing to prevent render delays on load
-  document.querySelectorAll(".log-details-block").forEach((details) => {
-    details.addEventListener("toggle", function onToggle(e) {
-      if (!details.open) return;
-      
-      const requestId = details.dataset.requestId;
-      const prettyContainer = document.getElementById(`pretty-payload-${requestId}`);
-      
-      // If already rendered, do nothing
-      if (prettyContainer && prettyContainer.getAttribute("data-loaded") === "true") {
+  // Lazily parse and render a log's payload the first time its detail panel opens
+  function renderPayload(requestId) {
+    const prettyContainer = document.getElementById(`pretty-payload-${requestId}`);
+    if (!prettyContainer || prettyContainer.getAttribute("data-loaded") === "true") {
+      return;
+    }
+
+    try {
+      const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+      if (!rawJsonEl) {
+        prettyContainer.textContent = "解析失败：找不到原始数据容器。";
         return;
       }
-      
-      try {
-        const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
-        if (!rawJsonEl) {
-          prettyContainer.textContent = "解析失败：找不到原始数据容器。";
-          return;
-        }
-        
-        const rawObj = JSON.parse(rawJsonEl.textContent);
-        const processedObj = truncateBase64(rawObj);
-        
-        // Output styled HTML inside the pre block
-        prettyContainer.innerHTML = customJsonFormatter(processedObj, 2);
-        prettyContainer.setAttribute("data-loaded", "true");
-        
-        // Dynamically initialize Lucide icons for injected buttons
-        lucide.createIcons();
-        
-        // Bind actions to truncated buttons
-        prettyContainer.querySelectorAll(".copy-b64-btn").forEach((btn) => {
-          btn.addEventListener("click", async (ev) => {
-            ev.stopPropagation();
-            const key = btn.dataset.cacheKey;
-            const fullBase64 = base64Cache.get(key);
-            if (fullBase64) {
-              await navigator.clipboard.writeText(fullBase64);
-              showToast("完整 Base64 图片数据已复制到剪贴板！");
-            }
-          });
+
+      const rawObj = JSON.parse(rawJsonEl.textContent);
+      const processedObj = truncateBase64(rawObj);
+
+      // Output styled HTML inside the pre block
+      prettyContainer.innerHTML = customJsonFormatter(processedObj, 2);
+      prettyContainer.setAttribute("data-loaded", "true");
+
+      // Dynamically initialize Lucide icons for injected buttons
+      lucide.createIcons();
+
+      // Bind actions to truncated buttons
+      prettyContainer.querySelectorAll(".copy-b64-btn").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          const key = btn.dataset.cacheKey;
+          const fullBase64 = base64Cache.get(key);
+          if (fullBase64) {
+            await navigator.clipboard.writeText(fullBase64);
+            showToast("完整 Base64 图片数据已复制到剪贴板！");
+          }
         });
-        
-        prettyContainer.querySelectorAll(".preview-b64-btn").forEach((btn) => {
-          btn.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            const key = btn.dataset.cacheKey;
-            let fullBase64 = base64Cache.get(key);
-            if (fullBase64) {
-              // Ensure it has standard data URL header
-              if (!fullBase64.startsWith("data:")) {
-                fullBase64 = `data:image/png;base64,${fullBase64}`;
-              }
-              previewBase64Image(fullBase64);
+      });
+
+      prettyContainer.querySelectorAll(".preview-b64-btn").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const key = btn.dataset.cacheKey;
+          let fullBase64 = base64Cache.get(key);
+          if (fullBase64) {
+            // Ensure it has standard data URL header
+            if (!fullBase64.startsWith("data:")) {
+              fullBase64 = `data:image/png;base64,${fullBase64}`;
             }
-          });
+            previewBase64Image(fullBase64);
+          }
         });
-        
-      } catch (err) {
-        prettyContainer.textContent = `格式化 JSON 失败: ${err.message}`;
-      }
+      });
+
+    } catch (err) {
+      prettyContainer.textContent = `格式化 JSON 失败: ${err.message}`;
+    }
+  }
+
+  // Show or hide a log's detail panel; render its payload lazily on first open
+  function setLogDetailOpen(requestId, open) {
+    const detailRow = document.querySelector(`.log-detail-row[data-request-id="${requestId}"]`);
+    const toggleBtn = document.querySelector(`.log-toggle-btn[data-request-id="${requestId}"]`);
+    if (!detailRow) return;
+    detailRow.hidden = !open;
+    if (toggleBtn) toggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) renderPayload(requestId);
+  }
+
+  // In-row toggle: the expand control now lives inside the log entry itself
+  document.querySelectorAll(".log-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const requestId = btn.dataset.requestId;
+      const detailRow = document.querySelector(`.log-detail-row[data-request-id="${requestId}"]`);
+      const willOpen = detailRow ? detailRow.hidden : true;
+      setLogDetailOpen(requestId, willOpen);
     });
   });
 
@@ -420,10 +440,7 @@
       e.preventDefault();
       const requestId = btn.dataset.requestId;
       const resultBox = document.getElementById(`replay-result-${requestId}`);
-      const detailBlock = document.querySelector(`.log-details-block[data-request-id="${requestId}"]`);
-      if (detailBlock && !detailBlock.open) {
-        detailBlock.open = true;
-      }
+      setLogDetailOpen(requestId, true);
       setReplayButtonState(btn, true, "重放中");
       renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
 
