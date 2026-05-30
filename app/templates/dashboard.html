@@ -358,6 +358,7 @@
       chart.appendChild(label);
     }
 
+    const hasRequests = Number(totals.requests || 0) > 0;
     for (const item of seriesConfig) {
       const itemValues = series[item.key] || [];
       if (!itemValues.length) continue;
@@ -377,7 +378,7 @@
       }));
       appendTrendMarkers(item, itemValues, yMax, width, height, left, top);
     }
-    appendTrendHitAreas(series, yMax, width, height, left, top, labels);
+    if (hasRequests) appendTrendHitAreas(series, yMax, width, height, left, top, labels);
   }
 
   chart.addEventListener("mouseleave", clearTrendTooltip);
