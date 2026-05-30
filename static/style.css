@@ -429,14 +429,18 @@ h2 {
   pointer-events: none;
 }
 
-.trend-points {
-  pointer-events: auto;
-}
-
 .trend-point {
   opacity: 0.9;
   pointer-events: none;
   transition: var(--transition);
+}
+
+.trend-markers {
+  pointer-events: none;
+}
+
+.trend-points {
+  pointer-events: auto;
 }
 
 .trend-point-hit {
@@ -479,15 +483,37 @@ h2 {
   transform: translateY(0);
 }
 
-.trend-tooltip span {
+.trend-tooltip-title {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   color: var(--text-muted);
   font-size: 11px;
 }
 
-.trend-tooltip strong {
-  display: block;
+.trend-tooltip-row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+}
+
+.trend-tooltip-row + .trend-tooltip-row {
+  margin-top: 4px;
+}
+
+.trend-tooltip-row i {
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+}
+
+.trend-tooltip-row span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.trend-tooltip-row strong {
   font-size: 13px;
   line-height: 1.2;
 }

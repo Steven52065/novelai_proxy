@@ -135,8 +135,8 @@
     {key: "rejected", label: "拒绝数量", color: "#f59e0b", fill: "rgba(245, 158, 11, 0.06)"},
   ];
   let trends = {};
-  let activeTrendPoint = null;
-  let activeTrendMarker = null;
+  let activeTrendHit = null;
+  let activeTrendMarkers = [];
 
   function svgEl(name, attrs = {}) {
     const node = document.createElementNS("http://www.w3.org/2000/svg", name);
@@ -194,38 +194,61 @@
   }
 
   function clearTrendTooltip() {
-    activeTrendPoint?.classList.remove("active");
-    activeTrendMarker?.classList.remove("active");
-    activeTrendPoint = null;
-    activeTrendMarker = null;
+    activeTrendHit?.classList.remove("active");
+    for (const marker of activeTrendMarkers) marker.classList.remove("active");
+    activeTrendHit = null;
+    activeTrendMarkers = [];
     tooltip.classList.remove("show");
     tooltip.setAttribute("aria-hidden", "true");
   }
 
-  function showTrendTooltip(event, point, item, label, marker) {
-    activeTrendPoint?.classList.remove("active");
-    activeTrendMarker?.classList.remove("active");
-    activeTrendPoint = event.currentTarget;
-    activeTrendMarker = marker;
-    activeTrendPoint.classList.add("active");
-    activeTrendMarker.classList.add("active");
+  function svgPointToCard(point) {
+    const matrix = chart.getScreenCTM();
+    if (!matrix) return null;
+    const svgPoint = chart.createSVGPoint();
+    svgPoint.x = point.x;
+    svgPoint.y = point.y;
+    const screenPoint = svgPoint.matrixTransform(matrix);
+    const cardRect = chartCard.getBoundingClientRect();
+    return {
+      x: screenPoint.x - cardRect.left,
+      y: screenPoint.y - cardRect.top,
+    };
+  }
+
+  function showTrendTooltip(event, point, label, values, markers) {
+    activeTrendHit?.classList.remove("active");
+    for (const marker of activeTrendMarkers) marker.classList.remove("active");
+    activeTrendHit = event.currentTarget;
+    activeTrendMarkers = markers;
+    activeTrendHit.classList.add("active");
+    for (const marker of activeTrendMarkers) marker.classList.add("active");
 
     const title = document.createElement("span");
-    const value = document.createElement("strong");
+    title.className = "trend-tooltip-title";
     title.textContent = label;
-    value.textContent = `${item.label}: ${point.value}`;
-    value.style.color = item.color;
-    tooltip.replaceChildren(title, value);
+    const rows = seriesConfig.map((item) => {
+      const row = document.createElement("div");
+      const swatch = document.createElement("i");
+      const name = document.createElement("span");
+      const value = document.createElement("strong");
+      row.className = "trend-tooltip-row";
+      swatch.style.background = item.color;
+      name.textContent = item.label;
+      value.textContent = Number(values[item.key] || 0);
+      value.style.color = item.color;
+      row.append(swatch, name, value);
+      return row;
+    });
+    tooltip.replaceChildren(title, ...rows);
     tooltip.classList.add("show");
     tooltip.setAttribute("aria-hidden", "false");
 
-    const chartRect = chart.getBoundingClientRect();
     const cardRect = chartCard.getBoundingClientRect();
-    const scaleX = chartRect.width / 960;
-    const scaleY = chartRect.height / 360;
+    const cardPoint = svgPointToCard(point);
     const tooltipRect = tooltip.getBoundingClientRect();
-    const rawLeft = chartRect.left - cardRect.left + point.x * scaleX - tooltipRect.width / 2;
-    const rawTop = chartRect.top - cardRect.top + point.y * scaleY - tooltipRect.height - 14;
+    const rawLeft = (cardPoint?.x || 0) - tooltipRect.width / 2;
+    const rawTop = (cardPoint?.y || 0) - tooltipRect.height - 14;
     const left = Math.max(8, Math.min(rawLeft, cardRect.width - tooltipRect.width - 8));
     const top = Math.max(8, rawTop);
 
@@ -233,10 +256,9 @@
     tooltip.style.top = `${top}px`;
   }
 
-  function appendTrendPoints(item, itemValues, yMax, width, height, left, top, labels) {
-    const group = svgEl("g", {class: "trend-points"});
+  function appendTrendMarkers(item, itemValues, yMax, width, height, left, top) {
+    const group = svgEl("g", {class: "trend-markers"});
     for (const point of pointCoordinates(itemValues, yMax, width, height, left, top)) {
-      const label = labels[point.index] || "";
       const visiblePoint = svgEl("circle", {
         cx: point.x,
         cy: point.y,
@@ -246,23 +268,54 @@
         "stroke-width": 2,
         class: "trend-point",
       });
-      const hitArea = svgEl("circle", {
-        cx: point.x,
-        cy: point.y,
-        r: 14,
+      group.appendChild(visiblePoint);
+    }
+    chart.appendChild(group);
+  }
+
+  function appendTrendHitAreas(series, yMax, width, height, left, top, labels) {
+    const group = svgEl("g", {class: "trend-points"});
+    const plotWidth = width - left - 28;
+    const plotHeight = height - top - 54;
+    const count = labels.length;
+    const markerGroups = Array.from(chart.querySelectorAll(".trend-markers"));
+    const xStep = count > 1 ? plotWidth / (count - 1) : plotWidth;
+
+    for (let index = 0; index < count; index += 1) {
+      const x = left + (count === 1 ? plotWidth / 2 : xStep * index);
+      const hitX = Math.max(left, x - xStep / 2);
+      const hitWidth = Math.min(width - 28, x + xStep / 2) - hitX;
+      const values = Object.fromEntries(seriesConfig.map((item) => [
+        item.key,
+        Number((series[item.key] || [])[index] || 0),
+      ]));
+      const points = seriesConfig.map((item) => ({
+        key: item.key,
+        x,
+        y: top + plotHeight - (values[item.key] / yMax) * plotHeight,
+      }));
+      const anchor = points.reduce((best, point) => point.y < best.y ? point : best, points[0]);
+      const markers = markerGroups
+        .map((markerGroup) => markerGroup.children[index])
+        .filter(Boolean);
+      const label = labels[index] || "";
+      const hitArea = svgEl("rect", {
+        x: hitX,
+        y: top,
+        width: Math.max(hitWidth, 18),
+        height: plotHeight,
         fill: "transparent",
         class: "trend-point-hit",
         tabindex: "0",
-        "aria-label": `${label} ${item.label} ${point.value}`,
+        "aria-label": `${label} 请求数量 ${values.requests} 失败数量 ${values.failed} 拒绝数量 ${values.rejected}`,
       });
 
-      hitArea.addEventListener("mouseenter", (event) => showTrendTooltip(event, point, item, label, visiblePoint));
-      hitArea.addEventListener("focus", (event) => showTrendTooltip(event, point, item, label, visiblePoint));
-      hitArea.addEventListener("pointerdown", (event) => showTrendTooltip(event, point, item, label, visiblePoint));
+      hitArea.addEventListener("mouseenter", (event) => showTrendTooltip(event, anchor, label, values, markers));
+      hitArea.addEventListener("focus", (event) => showTrendTooltip(event, anchor, label, values, markers));
+      hitArea.addEventListener("pointerdown", (event) => showTrendTooltip(event, anchor, label, values, markers));
       hitArea.addEventListener("mouseleave", clearTrendTooltip);
       hitArea.addEventListener("blur", clearTrendTooltip);
       group.appendChild(hitArea);
-      group.appendChild(visiblePoint);
     }
     chart.appendChild(group);
   }
@@ -322,8 +375,9 @@
         "stroke-linejoin": "round",
         class: "trend-line",
       }));
-      appendTrendPoints(item, itemValues, yMax, width, height, left, top, labels);
+      appendTrendMarkers(item, itemValues, yMax, width, height, left, top);
     }
+    appendTrendHitAreas(series, yMax, width, height, left, top, labels);
   }
 
   chart.addEventListener("mouseleave", clearTrendTooltip);
