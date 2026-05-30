@@ -1291,6 +1291,13 @@ def test_admin_logs_details_are_inside_log_entry_and_status_colors(tmp_path: Pat
         assert "展开请求参数及输出文件" in logs_page.text
 
 
+def test_admin_logs_payload_formatter_escapes_non_base64_json_html():
+    script = Path("app/templates/logs.html").read_text(encoding="utf-8")
+
+    assert "html += escapeHtml(jsonStr.slice(lastIndex, offset));" in script
+    assert "html += escapeHtml(jsonStr.slice(lastIndex));" in script
+
+
 def test_admin_logs_filter_accepts_empty_user_id(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

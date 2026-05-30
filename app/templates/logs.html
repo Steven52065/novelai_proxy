@@ -452,13 +452,16 @@
     
     // Scan and replace our custom Base64ImageTruncated object representations with pretty interactive HTML
     const pattern = /\{\n\s+"__type__": "Base64ImageTruncated",\n\s+"cacheKey": "([^"]+)",\n\s+"lengthBytes": (\d+),\n\s+"approxSizeKb": (\d+),\n\s+"preview": "([^"]+)"\n\s+\}/g;
-    
-    return jsonStr.replace(pattern, (match, cacheKey, bytes, kbSize, preview) => {
+    let html = "";
+    let lastIndex = 0;
+
+    jsonStr.replace(pattern, (match, cacheKey, bytes, kbSize, preview, offset) => {
+      html += escapeHtml(jsonStr.slice(lastIndex, offset));
       let previewLabel = kbSize > 1024 
         ? `${(kbSize / 1024).toFixed(2)} MB` 
         : `${kbSize} KB`;
         
-      return `\n<div class="base64-truncated">
+      html += `\n<div class="base64-truncated">
   <i data-lucide="image-off" style="width: 14px; height: 14px; vertical-align: middle;"></i>
   <span>[超长 Base64 图像数据 | 大小: ${previewLabel}]</span>
   <div class="base64-actions">
@@ -466,7 +469,11 @@
     <button class="base64-btn preview-b64-btn" data-cache-key="${cacheKey}" type="button">预览生成图片</button>
   </div>
 </div>\n`;
+      lastIndex = offset + match.length;
+      return match;
     });
+    html += escapeHtml(jsonStr.slice(lastIndex));
+    return html;
   }
 
   function renderPrettyPayload(details) {
