@@ -126,6 +126,9 @@ server:
 queue:
   max_concurrent_upstream: 1
   max_queue_size: 50
+  upstream_interval_min_seconds: 2
+  upstream_interval_max_seconds: 5
+  upstream_error_extra_delay_seconds: 5
 
 novelai:
   api_key: ""  # 上游 NovelAI 账号的 JWT token

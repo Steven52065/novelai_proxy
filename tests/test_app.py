@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from novelai_python._exceptions import APIError
 
 from app.upstream import UpstreamClient
 
@@ -70,6 +71,20 @@ class FakeUpstream:
         return {"tags": []}
 
 
+class FailingThenSuccessfulUpstream(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(time.monotonic())
+        if len(self.generate_started_at) == 1:
+            raise APIError(
+                "Too many requests",
+                request=payload,
+                response={"message": "Too many requests"},
+                code="429",
+            )
+        self.last_generate_payload = payload
+        return await self.generate_image_zip(payload)
+
+
 class FakeQueueSnapshot:
     def qsize(self):
         return 1
@@ -127,7 +142,14 @@ class FakeImageHosting:
         ]
 
 
-def write_test_config(tmp_path: Path, min_upstream_interval_seconds: float = 0) -> Path:
+def write_test_config(
+    tmp_path: Path,
+    upstream_interval_min_seconds: float = 0,
+    upstream_interval_max_seconds: float | None = None,
+    upstream_error_extra_delay_seconds: float = 0,
+) -> Path:
+    if upstream_interval_max_seconds is None:
+        upstream_interval_max_seconds = upstream_interval_min_seconds
     db_path = tmp_path / "test.db"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -141,7 +163,9 @@ server:
 queue:
   max_concurrent_upstream: 1
   max_queue_size: 2
-  min_upstream_interval_seconds: {min_upstream_interval_seconds}
+  upstream_interval_min_seconds: {upstream_interval_min_seconds}
+  upstream_interval_max_seconds: {upstream_interval_max_seconds}
+  upstream_error_extra_delay_seconds: {upstream_error_extra_delay_seconds}
 novelai:
   api_key: ""
   account_tier: 3
@@ -946,7 +970,7 @@ def test_generate_can_force_official_image_format(tmp_path: Path, monkeypatch):
 
 
 def test_queue_waits_between_upstream_requests(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path, min_upstream_interval_seconds=0.05)))
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path, upstream_interval_min_seconds=0.05)))
     from app.main import app
 
     with TestClient(app) as client:
@@ -967,6 +991,39 @@ def test_queue_waits_between_upstream_requests(tmp_path: Path, monkeypatch):
         assert second.status_code == 201
         assert len(fake_upstream.generate_started_at) == 2
         assert fake_upstream.generate_started_at[1] - fake_upstream.generate_started_at[0] >= 0.045
+
+
+def test_queue_adds_extra_delay_after_upstream_api_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(
+            write_test_config(
+                tmp_path,
+                upstream_interval_min_seconds=0.02,
+                upstream_error_extra_delay_seconds=0.05,
+            )
+        ),
+    )
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FailingThenSuccessfulUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "upstream-error-delay-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        first = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        second = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+
+        assert first.status_code == 429
+        assert second.status_code == 201
+        assert len(fake_upstream.generate_started_at) == 2
+        assert fake_upstream.generate_started_at[1] - fake_upstream.generate_started_at[0] >= 0.065
 
 
 def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeypatch):

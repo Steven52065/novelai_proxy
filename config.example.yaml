@@ -28,9 +28,12 @@ queue:
   max_concurrent_upstream: 1
   # 本地等待队列最大长度。超过后新请求会返回 503。
   max_queue_size: 50
-  # 相邻两次发往 NovelAI 上游请求之间的最小间隔，单位秒。
-  # 0 表示不额外等待；如需降低风控风险，可按实际情况设置为 1、2.5 等。
-  min_upstream_interval_seconds: 0
+  # 相邻两次发往 NovelAI 上游请求之间的随机间隔范围，单位秒。
+  # 每次请求都会在 min 和 max 之间随机选择一个间隔；两者相同则为固定间隔。
+  upstream_interval_min_seconds: 2
+  upstream_interval_max_seconds: 5
+  # 如果上一个上游请求返回 API 报错，则下一次请求在随机队列间隔基础上额外等待的秒数。
+  upstream_error_extra_delay_seconds: 5
 
 # NovelAI 上游账号配置。
 novelai:

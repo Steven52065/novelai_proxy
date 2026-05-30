@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol
@@ -44,15 +45,23 @@ class ProxyQueue:
         db: Database,
         quota_manager: QuotaManager,
         max_queue_size: int,
-        min_upstream_interval_seconds: float = 0,
+        upstream_interval_min_seconds: float = 2,
+        upstream_interval_max_seconds: float = 5,
+        upstream_error_extra_delay_seconds: float = 5,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
         self.db = db
         self.quota_manager = quota_manager
         self.image_hosting = image_hosting
         self.queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=max_queue_size)
-        self.min_upstream_interval_seconds = max(0.0, float(min_upstream_interval_seconds))
+        self.upstream_interval_min_seconds = max(0.0, float(upstream_interval_min_seconds))
+        self.upstream_interval_max_seconds = max(0.0, float(upstream_interval_max_seconds))
+        if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
+            raise ValueError("upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
+        self.upstream_error_extra_delay_seconds = max(0.0, float(upstream_error_extra_delay_seconds))
         self._last_upstream_started_at: float | None = None
+        self._last_upstream_interval_seconds = 0.0
+        self._apply_error_extra_delay_next = False
         self._sequence = itertools.count()
         self._worker: asyncio.Task | None = None
         self._image_upload_tasks: set[asyncio.Task] = set()
@@ -158,6 +167,8 @@ class ProxyQueue:
                 await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
             except Exception as exc:
+                if isinstance(exc, APIError):
+                    self._apply_error_extra_delay_next = True
                 if item.manage_quota:
                     self.quota_manager.release(item.user_id, item.estimated_cost)
                 code, message = self._error_details(exc)
@@ -234,15 +245,32 @@ class ProxyQueue:
         return exc.__class__.__name__, str(exc)
 
     async def _wait_for_upstream_interval(self, request_id: str) -> None:
-        if self.min_upstream_interval_seconds <= 0 or self._last_upstream_started_at is None:
+        interval = self._next_upstream_interval()
+        extra_delay = self.upstream_error_extra_delay_seconds if self._apply_error_extra_delay_next else 0.0
+        self._apply_error_extra_delay_next = False
+        required_interval = interval + extra_delay
+        if required_interval <= 0 or self._last_upstream_started_at is None:
             self._last_upstream_started_at = time.monotonic()
+            self._last_upstream_interval_seconds = interval
             return
         elapsed = time.monotonic() - self._last_upstream_started_at
-        delay = self.min_upstream_interval_seconds - elapsed
+        delay = required_interval - elapsed
         if delay > 0:
-            logger.info("proxy request waiting before upstream request_id=%s delay_seconds=%.3f", request_id, delay)
+            logger.info(
+                "proxy request waiting before upstream request_id=%s delay_seconds=%.3f interval_seconds=%.3f error_extra_delay_seconds=%.3f",
+                request_id,
+                delay,
+                interval,
+                extra_delay,
+            )
             await asyncio.sleep(delay)
         self._last_upstream_started_at = time.monotonic()
+        self._last_upstream_interval_seconds = interval
+
+    def _next_upstream_interval(self) -> float:
+        if self.upstream_interval_max_seconds == self.upstream_interval_min_seconds:
+            return self.upstream_interval_min_seconds
+        return random.uniform(self.upstream_interval_min_seconds, self.upstream_interval_max_seconds)
 
     def _schedule_image_upload(self, *, zip_payload: bytes, request_id: str) -> None:
         if self.image_hosting is None:

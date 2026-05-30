@@ -40,7 +40,9 @@ async def lifespan(app: FastAPI):
         db=db,
         quota_manager=quota_manager,
         max_queue_size=config.queue.max_queue_size,
-        min_upstream_interval_seconds=config.queue.min_upstream_interval_seconds,
+        upstream_interval_min_seconds=config.queue.upstream_interval_min_seconds,
+        upstream_interval_max_seconds=config.queue.upstream_interval_max_seconds,
+        upstream_error_extra_delay_seconds=config.queue.upstream_error_extra_delay_seconds,
         image_hosting=ImageHostingService(config.image_hosting),
     )
 

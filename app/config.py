@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AdminConfig(BaseModel):
@@ -20,7 +20,15 @@ class ServerConfig(BaseModel):
 class QueueConfig(BaseModel):
     max_concurrent_upstream: int = 1
     max_queue_size: int = 50
-    min_upstream_interval_seconds: float = Field(default=0, ge=0)
+    upstream_interval_min_seconds: float = Field(default=2, ge=0)
+    upstream_interval_max_seconds: float = Field(default=5, ge=0)
+    upstream_error_extra_delay_seconds: float = Field(default=5, ge=0)
+
+    @model_validator(mode="after")
+    def validate_upstream_interval_range(self):
+        if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
+            raise ValueError("queue.upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
+        return self
 
 
 class NovelAIConfig(BaseModel):
