@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from app.database import Database, utc_now_iso
+from app.quota_manager import InsufficientQuota, QuotaManager
+
+
+def _quota_manager(tmp_path):
+    db = Database(str(tmp_path / "quota.db"))
+    db.init_schema()
+    db.execute(
+        """
+        INSERT INTO users (api_key_hash, api_key, name, tier, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("hash", "key", "quota-user", "normal", utc_now_iso()),
+    )
+    manager = QuotaManager(db)
+    return db, manager, 1
+
+
+def test_quota_reserve_confirm_and_release_update_snapshot(tmp_path):
+    db, manager, user_id = _quota_manager(tmp_path)
+    try:
+        manager.create_or_update(user_id, total=10)
+
+        reserved = manager.reserve(user_id, 4)
+        assert reserved.available == 6
+        assert reserved.reserved == 4
+
+        manager.confirm(user_id, 4)
+        after_confirm = manager.get_snapshot(user_id)
+        assert after_confirm.used == 4
+        assert after_confirm.reserved == 0
+        assert after_confirm.available == 6
+
+        manager.reserve(user_id, 3)
+        manager.release(user_id, 3)
+        after_release = manager.get_snapshot(user_id)
+        assert after_release.used == 4
+        assert after_release.reserved == 0
+        assert after_release.available == 6
+    finally:
+        db.close()
+
+
+def test_quota_rejects_when_available_anlas_is_insufficient(tmp_path):
+    db, manager, user_id = _quota_manager(tmp_path)
+    try:
+        manager.create_or_update(user_id, total=2)
+
+        with pytest.raises(InsufficientQuota) as exc_info:
+            manager.reserve(user_id, 3)
+
+        assert exc_info.value.need == 3
+        assert exc_info.value.have == 2
+        assert manager.get_snapshot(user_id).reserved == 0
+    finally:
+        db.close()
+
+
+def test_quota_reset_if_due_clears_used_and_reserved(tmp_path):
+    db, manager, user_id = _quota_manager(tmp_path)
+    try:
+        manager.create_or_update(user_id, total=10, reset_period="day")
+        manager.reserve(user_id, 5)
+        manager.confirm(user_id, 5)
+        manager.reserve(user_id, 2)
+        old_reset_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        db.execute(
+            "UPDATE user_anlas_quota SET last_reset_at = ? WHERE user_id = ?",
+            (old_reset_at, user_id),
+        )
+
+        assert manager.reset_if_due(user_id) is True
+
+        snapshot = manager.get_snapshot(user_id)
+        assert snapshot.used == 0
+        assert snapshot.reserved == 0
+        assert snapshot.available == 10
+    finally:
+        db.close()
