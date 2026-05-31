@@ -9,11 +9,11 @@ from novelai_python._exceptions import APIError
 
 from ..auth import UserContext
 from ..config import LoggingConfig
-from ..database import Database, utc_now_iso
 from ..logging_utils import json_dumps, logger
 from ..queue_manager import ProxyQueue, QueueFull
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
+from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 
 @dataclass(frozen=True)
@@ -44,16 +44,16 @@ class ProxyRequestService:
     def __init__(
         self,
         *,
-        db: Database,
         rate_limiter: RateLimiter,
         quota_manager: QuotaManager,
         proxy_queue: ProxyQueue,
+        usage_logs: UsageLogRepository,
         logging_config: LoggingConfig,
     ):
-        self.db = db
         self.rate_limiter = rate_limiter
         self.quota_manager = quota_manager
         self.proxy_queue = proxy_queue
+        self.usage_logs = usage_logs
         self.logging_config = logging_config
 
     async def submit_zip(self, task: ProxyTaskRequest) -> ProxyTaskResult:
@@ -83,10 +83,9 @@ class ProxyRequestService:
         if rejected is not None:
             return rejected
 
-        self._insert_usage_log(
+        self._insert_queued(
             request_id,
             task,
-            status="queued",
             error_code=None,
             error_message=None,
             log_level="INFO",
@@ -112,7 +111,7 @@ class ProxyRequestService:
             )
         except QueueFull:
             self.quota_manager.release(task.user.id, task.estimated_cost)
-            self._mark_rejected_after_queue(
+            self.usage_logs.mark_rejected(
                 request_id,
                 error_code="queue_full",
                 error_message="Queue full, please retry later",
@@ -144,10 +143,9 @@ class ProxyRequestService:
     def _reject_before_queue(self, request_id: str, task: ProxyTaskRequest) -> ProxyTaskResult | None:
         # These checks happen before queue submission so rejected requests never reserve upstream capacity.
         if task.user.free_small_only and not task.free_small_only_allowed:
-            self._insert_usage_log(
+            self._insert_rejected(
                 request_id,
                 task,
-                status="rejected",
                 error_code="free_small_only_blocked",
                 error_message="User is limited to definitely free small image generations",
                 log_level="INFO",
@@ -166,11 +164,10 @@ class ProxyRequestService:
 
         rate = self.rate_limiter.check(task.user.id)
         if not rate.allowed:
-            self._insert_usage_log(
+            self._insert_rejected(
                 request_id,
                 task,
                 estimated_cost=0,
-                status="rejected",
                 error_code="rate_limited",
                 error_message=rate.message,
                 log_level="INFO",
@@ -183,10 +180,9 @@ class ProxyRequestService:
             )
 
         if task.estimated_cost < 0:
-            self._insert_usage_log(
+            self._insert_rejected(
                 request_id,
                 task,
-                status="rejected",
                 error_code="unsupported_cost",
                 error_message="Request exceeds supported cost bounds",
                 log_level="ERROR",
@@ -200,10 +196,9 @@ class ProxyRequestService:
         try:
             self.quota_manager.reserve(task.user.id, task.estimated_cost)
         except InsufficientQuota as exc:
-            self._insert_usage_log(
+            self._insert_rejected(
                 request_id,
                 task,
-                status="rejected",
                 error_code="insufficient_anlas",
                 error_message=str(exc),
                 log_level="INFO",
@@ -222,63 +217,72 @@ class ProxyRequestService:
 
         return None
 
-    def _insert_usage_log(
+    def _insert_queued(
         self,
         request_id: str,
         task: ProxyTaskRequest,
         *,
-        status: str,
         error_code: str | None,
         error_message: str | None,
         log_level: str,
         estimated_cost: int | None = None,
     ) -> None:
-        self.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, error_code, error_message, log_level, request_payload, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+        self.usage_logs.insert_queued(
+            self._usage_log_create(
                 request_id,
-                task.user.id,
-                task.action,
-                task.metadata.get("model"),
-                _optional_int(task.metadata.get("width")),
-                _optional_int(task.metadata.get("height")),
-                _optional_int(task.metadata.get("steps")),
-                _optional_int(task.metadata.get("n_samples")),
-                int(task.estimated_cost if estimated_cost is None else estimated_cost),
-                status,
-                error_code,
-                error_message,
-                log_level,
-                json_dumps(task.request_payload),
-                utc_now_iso(),
-            ),
+                task,
+                error_code=error_code,
+                error_message=error_message,
+                log_level=log_level,
+                estimated_cost=estimated_cost,
+            )
         )
 
-    def _mark_rejected_after_queue(
+    def _insert_rejected(
         self,
         request_id: str,
+        task: ProxyTaskRequest,
         *,
-        error_code: str,
-        error_message: str,
+        error_code: str | None,
+        error_message: str | None,
         log_level: str,
+        estimated_cost: int | None = None,
     ) -> None:
-        self.db.execute(
-            """
-            UPDATE usage_logs
-            SET status = 'rejected',
-                error_code = ?,
-                error_message = ?,
-                log_level = ?,
-                completed_at = ?
-            WHERE request_id = ?
-            """,
-            (error_code, error_message, log_level, utc_now_iso(), request_id),
+        self.usage_logs.insert_rejected(
+            self._usage_log_create(
+                request_id,
+                task,
+                error_code=error_code,
+                error_message=error_message,
+                log_level=log_level,
+                estimated_cost=estimated_cost,
+            )
+        )
+
+    def _usage_log_create(
+        self,
+        request_id: str,
+        task: ProxyTaskRequest,
+        *,
+        error_code: str | None,
+        error_message: str | None,
+        log_level: str,
+        estimated_cost: int | None,
+    ) -> UsageLogCreate:
+        return UsageLogCreate(
+            request_id=request_id,
+            user_id=task.user.id,
+            action=task.action,
+            model=task.metadata.get("model"),
+            width=_optional_int(task.metadata.get("width")),
+            height=_optional_int(task.metadata.get("height")),
+            steps=_optional_int(task.metadata.get("steps")),
+            n_samples=_optional_int(task.metadata.get("n_samples")),
+            estimated_anlas_cost=int(task.estimated_cost if estimated_cost is None else estimated_cost),
+            error_code=error_code,
+            error_message=error_message,
+            log_level=log_level,
+            request_payload=task.request_payload,
         )
 
 

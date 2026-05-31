@@ -27,6 +27,7 @@ from .queue_manager import ProxyQueue
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
 from .upstream import UpstreamClient
+from .usage_logs import UsageLogRepository
 
 
 @asynccontextmanager
@@ -36,10 +37,11 @@ async def lifespan(app: FastAPI):
     db = Database(config.database.path)
     db.init_schema()
     quota_manager = QuotaManager(db)
+    usage_logs = UsageLogRepository(db)
     upstream = UpstreamClient(config.novelai.api_key)
     proxy_queue = ProxyQueue(
-        db=db,
         quota_manager=quota_manager,
+        usage_logs=usage_logs,
         max_queue_size=config.queue.max_queue_size,
         upstream_interval_min_seconds=config.queue.upstream_interval_min_seconds,
         upstream_interval_max_seconds=config.queue.upstream_interval_max_seconds,
@@ -50,14 +52,15 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.db = db
     app.state.quota_manager = quota_manager
+    app.state.usage_logs = usage_logs
     app.state.rate_limiter = RateLimiter(db)
     app.state.upstream = upstream
     app.state.proxy_queue = proxy_queue
     app.state.proxy_service = ProxyRequestService(
-        db=db,
         rate_limiter=app.state.rate_limiter,
         quota_manager=quota_manager,
         proxy_queue=proxy_queue,
+        usage_logs=usage_logs,
         logging_config=config.logging,
     )
 

@@ -10,9 +10,9 @@ from typing import Awaitable, Callable, Protocol
 from novelai_python._exceptions import APIError
 
 from .config import LoggingConfig
-from .database import Database, utc_now_iso
-from .logging_utils import archive_zip_images, json_dumps, logger
+from .logging_utils import archive_zip_images, logger
 from .quota_manager import QuotaManager
+from .usage_logs import UsageLogRepository
 
 
 class ImageHostingServiceLike(Protocol):
@@ -42,16 +42,16 @@ class QueueItem:
 class ProxyQueue:
     def __init__(
         self,
-        db: Database,
         quota_manager: QuotaManager,
+        usage_logs: UsageLogRepository,
         max_queue_size: int,
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
-        self.db = db
         self.quota_manager = quota_manager
+        self.usage_logs = usage_logs
         self.image_hosting = image_hosting
         self.queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=max_queue_size)
         self.upstream_interval_min_seconds = max(0.0, float(upstream_interval_min_seconds))
@@ -155,14 +155,7 @@ class ProxyQueue:
             self._running_started_at = time.monotonic()
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
             try:
-                self.db.execute(
-                    """
-                    UPDATE usage_logs
-                    SET status = 'running', queued_ms = ?
-                    WHERE request_id = ?
-                    """,
-                    (queued_ms, item.request_id),
-                )
+                self.usage_logs.mark_running(item.request_id, queued_ms)
                 logger.info("proxy request running request_id=%s queued_ms=%s", item.request_id, queued_ms)
                 await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
@@ -172,18 +165,11 @@ class ProxyQueue:
                 if item.manage_quota:
                     self.quota_manager.release(item.user_id, item.estimated_cost)
                 code, message = self._error_details(exc)
-                self.db.execute(
-                    """
-                    UPDATE usage_logs
-                    SET status = 'failed',
-                        queued_ms = COALESCE(queued_ms, ?),
-                        error_code = ?,
-                        error_message = ?,
-                        log_level = 'ERROR',
-                        completed_at = ?
-                    WHERE request_id = ?
-                    """,
-                    (queued_ms, code, message[:500], utc_now_iso(), item.request_id),
+                self.usage_logs.mark_failed(
+                    item.request_id,
+                    queued_ms=queued_ms,
+                    error_code=code,
+                    error_message=message,
                 )
                 logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
                 if not item.future.done():
@@ -203,25 +189,11 @@ class ProxyQueue:
                         saved_files = []
                 if item.manage_quota:
                     self.quota_manager.confirm(item.user_id, item.estimated_cost)
-                self.db.execute(
-                    """
-                    UPDATE usage_logs
-                    SET status = 'success',
-                        queued_ms = COALESCE(queued_ms, ?),
-                        final_anlas_cost = ?,
-                        output_files = ?,
-                        image_urls = COALESCE(image_urls, ?),
-                        completed_at = ?
-                    WHERE request_id = ?
-                    """,
-                    (
-                        queued_ms,
-                        item.estimated_cost,
-                        json_dumps(saved_files),
-                        json_dumps([]),
-                        utc_now_iso(),
-                        item.request_id,
-                    ),
+                self.usage_logs.mark_success(
+                    item.request_id,
+                    queued_ms=queued_ms,
+                    final_cost=item.estimated_cost,
+                    output_files=saved_files,
                 )
                 logger.info(
                     "proxy request succeeded request_id=%s final_cost=%s output_files=%s",
@@ -304,14 +276,7 @@ class ProxyQueue:
             return
         if not image_urls:
             return
-        self.db.execute(
-            """
-            UPDATE usage_logs
-            SET image_urls = ?
-            WHERE request_id = ?
-            """,
-            (json_dumps(image_urls), request_id),
-        )
+        self.usage_logs.update_image_urls(request_id, image_urls)
         logger.info("image host upload succeeded request_id=%s image_urls=%s", request_id, len(image_urls))
 
     @staticmethod

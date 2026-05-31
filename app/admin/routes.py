@@ -17,10 +17,10 @@ from novelai_python._exceptions import APIError
 from pydantic import BaseModel, Field
 
 from ..database import Database, utc_now_iso
-from ..logging_utils import json_dumps
 from ..quota_manager import QuotaManager
 from ..queue_manager import QueueFull
 from ..security import constant_time_equal, generate_api_key, hash_api_key
+from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 
 router = APIRouter(tags=["admin"])
@@ -258,57 +258,10 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
 
 @api_router.get("/logs", dependencies=[Depends(require_admin_or_session)])
 async def logs(request: Request, user_id: int | None = None, limit: int = 100, before_id: int | None = None):
-    db: Database = request.app.state.db
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
     limit = max(1, min(limit, 500))
     before_id = before_id if before_id is not None and before_id > 0 else None
-    fetch_limit = limit + 1
-    if user_id is None and before_id is None:
-        rows = db.query_all(
-            """
-            SELECT l.*, u.name AS user_name
-            FROM usage_logs l
-            JOIN users u ON u.id = l.user_id
-            ORDER BY l.id DESC
-            LIMIT ?
-            """,
-            (fetch_limit,),
-        )
-    elif user_id is None:
-        rows = db.query_all(
-            """
-            SELECT l.*, u.name AS user_name
-            FROM usage_logs l
-            JOIN users u ON u.id = l.user_id
-            WHERE l.id < ?
-            ORDER BY l.id DESC
-            LIMIT ?
-            """,
-            (before_id, fetch_limit),
-        )
-    elif before_id is None:
-        rows = db.query_all(
-            """
-            SELECT l.*, u.name AS user_name
-            FROM usage_logs l
-            JOIN users u ON u.id = l.user_id
-            WHERE l.user_id = ?
-            ORDER BY l.id DESC
-            LIMIT ?
-            """,
-            (user_id, fetch_limit),
-        )
-    else:
-        rows = db.query_all(
-            """
-            SELECT l.*, u.name AS user_name
-            FROM usage_logs l
-            JOIN users u ON u.id = l.user_id
-            WHERE l.user_id = ? AND l.id < ?
-            ORDER BY l.id DESC
-            LIMIT ?
-            """,
-            (user_id, before_id, fetch_limit),
-        )
+    rows = usage_logs.list_logs(user_id=user_id, limit=limit, before_id=before_id)
     page_rows = rows[:limit]
     return {
         "logs": [_usage_log_to_dict(row) for row in page_rows],
@@ -321,15 +274,8 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100, b
 
 @api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])
 async def replay_log_request(request_id: str, request: Request):
-    db: Database = request.app.state.db
-    source = db.query_one(
-        """
-        SELECT *
-        FROM usage_logs
-        WHERE request_id = ?
-        """,
-        (request_id,),
-    )
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
+    source = usage_logs.get_by_request_id(request_id)
     if source is None:
         raise HTTPException(status_code=404, detail={"message": "Log not found"})
 
@@ -342,28 +288,20 @@ async def replay_log_request(request_id: str, request: Request):
         raise HTTPException(status_code=400, detail={"message": "This log action is not replayable"})
 
     replay_request_id = uuid.uuid4().hex
-    now = utc_now_iso()
     action = f"replay:{source['action']}"
-    db.execute(
-        """
-        INSERT INTO usage_logs (
-            request_id, user_id, action, model, width, height, steps, n_samples,
-            estimated_anlas_cost, status, error_code, error_message, log_level, request_payload, created_at
+    usage_logs.insert_queued(
+        UsageLogCreate(
+            request_id=replay_request_id,
+            user_id=int(source["user_id"]),
+            action=action,
+            model=source["model"],
+            width=source["width"],
+            height=source["height"],
+            steps=source["steps"],
+            n_samples=source["n_samples"],
+            estimated_anlas_cost=0,
+            request_payload=request_payload,
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'queued', NULL, NULL, 'INFO', ?, ?)
-        """,
-        (
-            replay_request_id,
-            int(source["user_id"]),
-            action,
-            source["model"],
-            source["width"],
-            source["height"],
-            source["steps"],
-            source["n_samples"],
-            json_dumps(request_payload),
-            now,
-        ),
     )
 
     try:
@@ -380,17 +318,11 @@ async def replay_log_request(request_id: str, request: Request):
             manage_quota=False,
         )
     except QueueFull:
-        db.execute(
-            """
-            UPDATE usage_logs
-            SET status = 'rejected',
-                error_code = 'queue_full',
-                error_message = 'Queue full, please retry later',
-                log_level = 'ERROR',
-                completed_at = ?
-            WHERE request_id = ?
-            """,
-            (utc_now_iso(), replay_request_id),
+        usage_logs.mark_rejected(
+            replay_request_id,
+            error_code="queue_full",
+            error_message="Queue full, please retry later",
+            log_level="ERROR",
         )
         raise HTTPException(status_code=503, detail={"message": "Queue full, please retry later"}) from None
     except APIError as exc:
