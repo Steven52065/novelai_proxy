@@ -22,6 +22,7 @@ from .database import Database
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .proxy.routes import router as proxy_router
+from .proxy.service import ProxyRequestService
 from .queue_manager import ProxyQueue
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
@@ -52,6 +53,13 @@ async def lifespan(app: FastAPI):
     app.state.rate_limiter = RateLimiter(db)
     app.state.upstream = upstream
     app.state.proxy_queue = proxy_queue
+    app.state.proxy_service = ProxyRequestService(
+        db=db,
+        rate_limiter=app.state.rate_limiter,
+        quota_manager=quota_manager,
+        proxy_queue=proxy_queue,
+        logging_config=config.logging,
+    )
 
     proxy_queue.start()
     try:

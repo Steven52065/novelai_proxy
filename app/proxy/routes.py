@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -14,11 +13,8 @@ from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
 from ..auth import UserContext, get_current_user
-from ..database import Database, utc_now_iso
-from ..logging_utils import dump_model_payload, json_dumps, logger
-from ..queue_manager import ProxyQueue, QueueFull
-from ..quota_manager import InsufficientQuota, QuotaManager
-from ..rate_limiter import RateLimiter
+from ..logging_utils import dump_model_payload, logger
+from .service import ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 
 
 router = APIRouter()
@@ -255,19 +251,19 @@ async def _submit_zip_task(
     handler: Callable[[], Awaitable[bytes]],
     free_small_only_allowed: bool = False,
 ):
-    return await _submit_binary_task(
-        request=request,
-        user=user,
-        action=action,
-        metadata=metadata,
-        request_payload=request_payload,
-        estimated_cost=estimated_cost,
-        handler=handler,
-        free_small_only_allowed=free_small_only_allowed,
-        media_type="application/zip",
-        response_headers={"Content-Disposition": "attachment;filename=image.zip"},
-        process_zip_response=True,
+    result = await _proxy_service(request).submit_zip(
+        ProxyTaskRequest(
+            user=user,
+            action=action,
+            metadata=metadata,
+            request_payload=request_payload,
+            estimated_cost=estimated_cost,
+            handler=handler,
+            free_small_only_allowed=free_small_only_allowed,
+            process_zip_response=True,
+        )
     )
+    return _task_result_to_response(result)
 
 
 async def _submit_binary_task(
@@ -284,165 +280,21 @@ async def _submit_binary_task(
     response_headers: dict[str, str] | None = None,
     process_zip_response: bool = True,
 ):
-    db: Database = request.app.state.db
-    rate_limiter: RateLimiter = request.app.state.rate_limiter
-    quota_manager: QuotaManager = request.app.state.quota_manager
-    proxy_queue: ProxyQueue = request.app.state.proxy_queue
-    request_id = uuid.uuid4().hex
-    logger.debug(
-        "proxy request received request_id=%s user_id=%s action=%s payload=%s",
-        request_id,
-        user.id,
-        action,
-        json_dumps(request_payload),
-    )
-
-    if user.free_small_only and not free_small_only_allowed:
-        _insert_usage_log(
-            db,
-            request_id,
-            user.id,
-            action,
-            metadata,
-            request_payload,
-            estimated_cost,
-            "rejected",
-            "free_small_only_blocked",
-            "User is limited to definitely free small image generations",
-            "INFO",
-        )
-        logger.info(
-            "proxy request rejected by free small only request_id=%s user_id=%s action=%s estimated_cost=%s",
-            request_id,
-            user.id,
-            action,
-            estimated_cost,
-        )
-        return JSONResponse(
-            status_code=403,
-            content={"message": "User is limited to definitely free small image generations"},
-        )
-
-    rate = rate_limiter.check(user.id)
-    if not rate.allowed:
-        _insert_usage_log(
-            db,
-            request_id,
-            user.id,
-            action,
-            metadata,
-            request_payload,
-            0,
-            "rejected",
-            "rate_limited",
-            rate.message,
-            "INFO",
-        )
-        logger.info("proxy request rate limited request_id=%s user_id=%s", request_id, user.id)
-        return JSONResponse(
-            status_code=429,
-            content={"message": rate.message, "retry_after": rate.retry_after},
-            headers={"Retry-After": str(rate.retry_after)},
-        )
-
-    if estimated_cost < 0:
-        _insert_usage_log(
-            db,
-            request_id,
-            user.id,
-            action,
-            metadata,
-            request_payload,
-            estimated_cost,
-            "rejected",
-            "unsupported_cost",
-            "Request exceeds supported cost bounds",
-            "ERROR",
-        )
-        logger.error("proxy request has unsupported cost request_id=%s estimated_cost=%s", request_id, estimated_cost)
-        return JSONResponse(status_code=400, content={"message": "Request exceeds supported cost bounds"})
-
-    try:
-        quota_manager.reserve(user.id, estimated_cost)
-    except InsufficientQuota as exc:
-        _insert_usage_log(
-            db,
-            request_id,
-            user.id,
-            action,
-            metadata,
-            request_payload,
-            estimated_cost,
-            "rejected",
-            "insufficient_anlas",
-            str(exc),
-            "INFO",
-        )
-        logger.info("proxy request rejected for quota request_id=%s user_id=%s need=%s have=%s", request_id, user.id, exc.need, exc.have)
-        return JSONResponse(
-            status_code=402,
-            content={"message": str(exc), "need": exc.need, "have": exc.have},
-        )
-
-    _insert_usage_log(
-        db,
-        request_id,
-        user.id,
-        action,
-        metadata,
-        request_payload,
-        estimated_cost,
-        "queued",
-        None,
-        None,
-        "INFO",
-    )
-    logger.info("proxy request queued request_id=%s user_id=%s action=%s estimated_cost=%s", request_id, user.id, action, estimated_cost)
-
-    try:
-        binary_payload = await proxy_queue.submit(
-            request_id=request_id,
-            user_id=user.id,
-            tier=user.tier,
+    result = await _proxy_service(request).submit_binary(
+        ProxyTaskRequest(
+            user=user,
             action=action,
-            logging_config=request.app.state.config.logging,
+            metadata=metadata,
+            request_payload=request_payload,
             estimated_cost=estimated_cost,
             handler=handler,
+            free_small_only_allowed=free_small_only_allowed,
             process_zip_response=process_zip_response,
-        )
-    except QueueFull:
-        quota_manager.release(user.id, estimated_cost)
-        db.execute(
-            """
-            UPDATE usage_logs
-            SET status = 'rejected',
-                error_code = 'queue_full',
-                error_message = 'Queue full, please retry later',
-                log_level = 'ERROR',
-                completed_at = ?
-            WHERE request_id = ?
-            """,
-            (utc_now_iso(), request_id),
-        )
-        logger.error("proxy queue full request_id=%s user_id=%s", request_id, user.id)
-        return JSONResponse(status_code=503, content={"message": "Queue full, please retry later"})
-    except APIError as exc:
-        status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
-        logger.error("upstream API error request_id=%s code=%s message=%s", request_id, exc.code, exc.message)
-        return JSONResponse(
-            status_code=status_code,
-            content=exc.response if isinstance(exc.response, dict) else {"message": exc.message},
-        )
-    except Exception as exc:
-        logger.exception("proxy request failed request_id=%s", request_id)
-        return JSONResponse(status_code=502, content={"message": str(exc)})
-
-    return Response(
-        content=binary_payload,
-        status_code=201,
+        ),
         media_type=media_type,
-        headers=response_headers,
+        response_headers=response_headers,
     )
+    return _task_result_to_response(result)
 
 
 @router.get("/ai/generate-image/suggest-tags")
@@ -515,44 +367,22 @@ async def subscription(
     }
 
 
-def _insert_usage_log(
-    db: Database,
-    request_id: str,
-    user_id: int,
-    action: str,
-    metadata: dict[str, Any],
-    request_payload: dict[str, Any],
-    estimated_cost: int,
-    status: str,
-    error_code: str | None,
-    error_message: str | None,
-    log_level: str,
-) -> None:
-    db.execute(
-        """
-        INSERT INTO usage_logs (
-            request_id, user_id, action, model, width, height, steps, n_samples,
-            estimated_anlas_cost, status, error_code, error_message, log_level, request_payload, created_at
+def _proxy_service(request: Request) -> ProxyRequestService:
+    return request.app.state.proxy_service
+
+
+def _task_result_to_response(result: ProxyTaskResult) -> Response | JSONResponse:
+    if result.is_binary:
+        return Response(
+            content=result.content,
+            status_code=result.status_code,
+            media_type=result.media_type,
+            headers=result.headers,
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            request_id,
-            user_id,
-            action,
-            metadata.get("model"),
-            _optional_int(metadata.get("width")),
-            _optional_int(metadata.get("height")),
-            _optional_int(metadata.get("steps")),
-            _optional_int(metadata.get("n_samples")),
-            int(estimated_cost),
-            status,
-            error_code,
-            error_message,
-            log_level,
-            json_dumps(request_payload),
-            utc_now_iso(),
-        ),
+    return JSONResponse(
+        status_code=result.status_code,
+        content=result.content,
+        headers=result.headers,
     )
 
 
@@ -759,9 +589,3 @@ def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:
         return normalized
     normalized["parameters"] = dict(parameters)
     return normalized
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    return int(value)
