@@ -167,4 +167,3 @@ def _optional_sampler(value: Any) -> tuple[Sampler | None, bool]:
         return Sampler(value), True
     except ValueError:
         return None, False
-

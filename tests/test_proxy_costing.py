@@ -129,4 +129,3 @@ def test_free_small_only_parameter_policy_allows_empty_forbidden_transport_field
 
     assert policy.parameters_are_safe(FREE_SMALL_PAYLOAD["parameters"] | {"reference_image_multiple_cached": []}) is True
     assert policy.parameters_are_safe(FREE_SMALL_PAYLOAD["parameters"] | {"reference_image_multiple_cached": ["cache-id"]}) is False
-

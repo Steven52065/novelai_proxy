@@ -130,4 +130,3 @@ def _parameter_has_value(value: Any) -> bool:
     if isinstance(value, (str, bytes, list, dict, tuple, set)):
         return len(value) > 0
     return True
-
