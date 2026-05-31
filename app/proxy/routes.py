@@ -1,106 +1,27 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from novelai_python._exceptions import APIError
-from novelai_python.sdk.ai._cost import CostCalculator
-from novelai_python.sdk.ai._enum import Action, Model, Sampler
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
 from ..auth import UserContext, get_current_user
+from ..costing import GenerateCostEstimator, GenerateCostInputs, IMAGE_ANLAS_PER_VIBE_ENCODING
 from ..logging_utils import dump_model_payload, logger
 from .service import ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 
 
 router = APIRouter()
-
-IMAGE_ANLAS_PER_PRECISE_REFERENCE = 5
-IMAGE_ANLAS_PER_VIBE_ENCODING = 2
-FREE_VIBE_REFERENCES_PER_GENERATION = 4
-IMAGE_ANLAS_PER_EXTRA_VIBE_REFERENCE = 2
+_generate_cost_estimator = GenerateCostEstimator()
 ENDPOINT_GENERATE_IMAGE = "generate-image"
 ENDPOINT_UPSCALE = "upscale"
 ENDPOINT_AUGMENT_IMAGE = "augment-image"
 ENDPOINT_ENCODE_VIBE = "encode-vibe"
 ENDPOINT_SUGGEST_TAGS = "suggest-tags"
-FREE_SMALL_ONLY_ALLOWED_PARAMETERS = {
-    "width",
-    "height",
-    "scale",
-    "sampler",
-    "steps",
-    "n_samples",
-    "ucPreset",
-    "qualityToggle",
-    "sm",
-    "sm_dyn",
-    "seed",
-    "negative_prompt",
-    "noise_schedule",
-    "cfg_rescale",
-    "dynamic_thresholding",
-    "controlnet_strength",
-    "legacy",
-    "legacy_v3_extend",
-    "uncond_scale",
-    "deliberate_euler_ancestral_bug",
-    "prefer_brownian",
-    "image_format",
-    "inpaintImg2ImgStrength",
-    "normalize_reference_strength_multiple",
-    "skip_cfg_above_sigma",
-    "stream",
-    "characterPrompts",
-    "v4_prompt",
-    "v4_negative_prompt",
-    "use_coords",
-    "legacy_uc",
-    "add_original_image",
-    "autoSmea",
-    "params_version",
-}
-FREE_SMALL_ONLY_FORBIDDEN_PARAMETERS = {
-    "image",
-    "mask",
-    "strength",
-    "noise",
-    "extra_noise_seed",
-    "reference_image",
-    "reference_image_multiple",
-    "reference_image_multiple_cached",
-    "reference_strength_multiple",
-    "reference_information_extracted_multiple",
-    "director_reference_images",
-    "director_reference_descriptions",
-    "director_reference_strength_values",
-    "director_reference_secondary_strength_values",
-    "director_reference_information_extracted",
-    "controlnet_condition",
-    "controlnet_model",
-}
-
-
-@dataclass(frozen=True)
-class GenerateCostInputs:
-    model: str
-    action: str
-    width: int
-    height: int
-    steps: int
-    n_samples: int
-    sampler: Sampler | None
-    sampler_was_known: bool
-    sm: bool
-    sm_dyn: bool
-    image: bool
-    strength: float | None
-    reference_cost: int
-    free_small_only_parameters_safe: bool
 
 
 @router.get("/health")
@@ -123,14 +44,14 @@ async def generate_image(
     payload = await request.json()
     try:
         request_payload = _normalize_generate_image_payload(payload)
-        cost_inputs = _extract_generate_cost_inputs(request_payload)
+        cost_inputs = _generate_cost_estimator.extract_inputs(request_payload)
     except Exception as exc:
         logger.error("generate-image payload validation failed errors=%s", str(exc))
         return JSONResponse(status_code=400, content={"message": "Invalid request", "details": str(exc)})
 
     _apply_image_format_policy(request_payload, request.app.state.config.image_format)
     try:
-        estimated_cost, cost_is_certainly_free = _calculate_generate_cost(
+        estimated_cost, cost_is_certainly_free = _generate_cost_estimator.calculate(
             cost_inputs,
             is_opus=request.app.state.config.novelai.account_tier >= 3,
         )
@@ -396,72 +317,6 @@ def _generate_metadata(params: GenerateCostInputs) -> dict[str, Any]:
     }
 
 
-def _calculate_generate_cost(params: GenerateCostInputs, *, is_opus: bool) -> tuple[int, bool]:
-    base_cost = int(
-        CostCalculator.calculate(
-            width=params.width,
-            height=params.height,
-            steps=params.steps,
-            model=params.model,
-            image=params.image,
-            n_samples=params.n_samples,
-            account_tier=3 if is_opus else 1,
-            strength=params.strength,
-            sampler=params.sampler,
-            is_sm_enabled=params.sm,
-            is_sm_dynamic=params.sm_dyn,
-            is_account_active=True,
-        )
-    )
-    total_cost = base_cost + params.reference_cost
-    is_certainly_free = (
-        is_opus
-        and total_cost == 0
-        and base_cost == 0
-        and params.reference_cost == 0
-        and _is_known_text_to_image_model(params.model)
-        and params.action == Action.GENERATE.value
-        and params.free_small_only_parameters_safe
-        and params.n_samples == 1
-        and params.steps <= 28
-        and params.width * params.height <= 1048576
-        and params.sampler_was_known
-        and not params.image
-    )
-    return total_cost, is_certainly_free
-
-
-def _extract_generate_cost_inputs(payload: dict[str, Any]) -> GenerateCostInputs:
-    model = payload.get("model")
-    action = payload.get("action", "generate")
-    parameters = payload.get("parameters")
-    if not isinstance(model, str) or not model:
-        raise ValueError("model is required")
-    if not isinstance(action, str) or not action:
-        raise ValueError("action is required")
-    if not isinstance(parameters, dict):
-        raise ValueError("parameters is required")
-
-    sampler_value = parameters.get("sampler")
-    sampler, sampler_was_known = _optional_sampler(sampler_value)
-    return GenerateCostInputs(
-        model=model,
-        action=action,
-        width=_required_int(parameters, "width", minimum=64),
-        height=_required_int(parameters, "height", minimum=64),
-        steps=_required_int(parameters, "steps", minimum=1),
-        n_samples=_required_int(parameters, "n_samples", minimum=1),
-        sampler=sampler,
-        sampler_was_known=sampler_was_known,
-        sm=_optional_bool(parameters.get("sm")),
-        sm_dyn=_optional_bool(parameters.get("sm_dyn")),
-        image=bool(parameters.get("image")),
-        strength=_optional_float(parameters.get("strength")),
-        reference_cost=_reference_anlas_cost(parameters),
-        free_small_only_parameters_safe=_free_small_only_parameters_are_safe(parameters),
-    )
-
-
 def _reject_disallowed_endpoint(user: UserContext, endpoint: str) -> JSONResponse | None:
     if endpoint in user.allowed_endpoints:
         return None
@@ -469,106 +324,6 @@ def _reject_disallowed_endpoint(user: UserContext, endpoint: str) -> JSONRespons
         status_code=403,
         content={"message": f"User is not allowed to access endpoint: {endpoint}"},
     )
-
-
-def _is_known_text_to_image_model(model: str) -> bool:
-    try:
-        parsed = Model(model)
-    except ValueError:
-        return False
-    return parsed not in {
-        Model.NAI_DIFFUSION_4_5_FULL_INPAINTING,
-        Model.NAI_DIFFUSION_4_5_CURATED_INPAINTING,
-        Model.NAI_DIFFUSION_4_FULL_INPAINTING,
-        Model.NAI_DIFFUSION_4_CURATED_INPAINTING,
-        Model.NAI_DIFFUSION_3_INPAINTING,
-        Model.NAI_DIFFUSION_FURRY_3_INPAINTING,
-        Model.NAI_DIFFUSION_INPAINTING,
-        Model.SAFE_DIFFUSION_INPAINTING,
-        Model.FURRY_DIFFUSION_INPAINTING,
-    }
-
-
-def _free_small_only_parameters_are_safe(parameters: dict[str, Any]) -> bool:
-    unknown_keys = set(parameters) - FREE_SMALL_ONLY_ALLOWED_PARAMETERS - FREE_SMALL_ONLY_FORBIDDEN_PARAMETERS
-    if unknown_keys:
-        return False
-    return not any(_parameter_has_value(parameters.get(key)) for key in FREE_SMALL_ONLY_FORBIDDEN_PARAMETERS)
-
-
-def _parameter_has_value(value: Any) -> bool:
-    if value is None:
-        return False
-    if value is False:
-        return False
-    if isinstance(value, (str, bytes, list, dict, tuple, set)):
-        return len(value) > 0
-    return True
-
-
-def _reference_anlas_cost(parameters: dict[str, Any]) -> int:
-    precise_references = _reference_count(parameters, "director_reference_images")
-
-    vibe_references = _reference_count(parameters, "reference_image")
-    vibe_references += _reference_count(parameters, "reference_image_multiple")
-    extra_vibes = max(vibe_references - FREE_VIBE_REFERENCES_PER_GENERATION, 0)
-    return (
-        precise_references * IMAGE_ANLAS_PER_PRECISE_REFERENCE
-        + extra_vibes * IMAGE_ANLAS_PER_EXTRA_VIBE_REFERENCE
-    )
-
-
-def _reference_count(parameters: dict[str, Any], key: str) -> int:
-    value = parameters.get(key)
-    if isinstance(value, list):
-        return sum(1 for item in value if item)
-    if value:
-        return 1
-    return 0
-
-
-def _required_int(parameters: dict[str, Any], key: str, *, minimum: int) -> int:
-    value = parameters.get(key)
-    if value is None or isinstance(value, bool):
-        raise ValueError(f"parameters.{key} is required")
-    try:
-        number = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"parameters.{key} must be an integer") from exc
-    if number < minimum:
-        raise ValueError(f"parameters.{key} must be >= {minimum}")
-    return number
-
-
-def _optional_float(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _optional_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
-def _optional_sampler(value: Any) -> tuple[Sampler | None, bool]:
-    if value is None:
-        return None, False
-    try:
-        return Sampler(value), True
-    except ValueError:
-        return None, False
-
-
-def _payload_parameters(payload: dict[str, Any]) -> dict[str, Any]:
-    parameters = payload.get("parameters")
-    return parameters if isinstance(parameters, dict) else {}
 
 
 def _apply_image_format_policy(payload: dict[str, Any], config) -> None:
