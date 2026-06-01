@@ -51,10 +51,21 @@
       </h2>
       <p class="muted" style="margin-top: 4px;">统计全部代理请求、上游失败请求和中转拒绝请求</p>
     </div>
-    <div class="segmented-control" role="tablist" aria-label="统计时间范围">
-      <button type="button" class="secondary active" data-trend-range="today">今天</button>
-      <button type="button" class="secondary" data-trend-range="week">本周</button>
-      <button type="button" class="secondary" data-trend-range="month">本月</button>
+    <div class="dashboard-controls">
+      <label class="inline-filter">
+        <span>上游 Key</span>
+        <select id="trend-upstream-filter" aria-label="请求趋势上游 Key 筛选">
+          <option value="">全部</option>
+          {% for upstream_id in upstream_choices %}
+          <option value="{{ upstream_id }}">{{ upstream_id }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="segmented-control" role="tablist" aria-label="统计时间范围">
+        <button type="button" class="secondary active" data-trend-range="today">今天</button>
+        <button type="button" class="secondary" data-trend-range="week">本周</button>
+        <button type="button" class="secondary" data-trend-range="month">本月</button>
+      </div>
     </div>
   </div>
   <div class="trend-summary" aria-label="请求趋势汇总">
@@ -92,7 +103,18 @@
       </h2>
       <p class="muted" style="margin-top: 4px;">当前上游并发处理队列，自动每 2 秒更新一次</p>
     </div>
-    <span class="status-pill" id="queue-running-state">空闲</span>
+    <div class="dashboard-controls">
+      <label class="inline-filter">
+        <span>上游 Key</span>
+        <select id="queue-upstream-filter" aria-label="生成队列上游 Key 筛选">
+          <option value="">全部</option>
+          {% for upstream_id in upstream_choices %}
+          <option value="{{ upstream_id }}">{{ upstream_id }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <span class="status-pill" id="queue-running-state">空闲</span>
+    </div>
   </div>
 
   <div class="table-wrap" style="margin-top: 20px;">
@@ -126,6 +148,8 @@
   const tooltip = document.getElementById("trend-tooltip");
   const empty = document.getElementById("trend-empty");
   const trendsEl = document.getElementById("request-trends");
+  const upstreamFilter = document.getElementById("trend-upstream-filter");
+  const syncStatus = document.getElementById("queue-updated");
   const rangeButtons = document.querySelectorAll("[data-trend-range]");
   const totalRequests = document.getElementById("trend-total-requests");
   const totalFailed = document.getElementById("trend-total-failed");
@@ -136,6 +160,7 @@
     {key: "rejected", label: "拒绝数量", color: "#f59e0b", fill: "rgba(245, 158, 11, 0.06)"},
   ];
   let trends = {};
+  let activeRange = "today";
   let activeTrendHit = null;
   let activeTrendMarkers = [];
 
@@ -393,9 +418,25 @@
   for (const button of rangeButtons) {
     button.addEventListener("click", () => {
       for (const item of rangeButtons) item.classList.toggle("active", item === button);
-      renderTrend(button.dataset.trendRange);
+      activeRange = button.dataset.trendRange;
+      renderTrend(activeRange);
     });
   }
+
+  async function refreshTrends() {
+    const params = new URLSearchParams();
+    if (upstreamFilter.value) params.set("upstream_id", upstreamFilter.value);
+    try {
+      const response = await fetch(`/admin/api/request-trends?${params.toString()}`, {headers: {"Accept": "application/json"}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      trends = await response.json();
+      renderTrend(activeRange);
+    } catch (error) {
+      syncStatus.textContent = "请求趋势同步失败";
+    }
+  }
+
+  upstreamFilter.addEventListener("change", refreshTrends);
   renderTrend("today");
 })();
 </script>
@@ -406,6 +447,7 @@
   const queueUpdated = document.getElementById("queue-updated");
   const runningState = document.getElementById("queue-running-state");
   const initialQueue = document.getElementById("initial-queue");
+  const upstreamFilter = document.getElementById("queue-upstream-filter");
 
   function formatSeconds(seconds) {
     const value = Number(seconds || 0);
@@ -535,7 +577,9 @@
 
   async function refreshQueue() {
     try {
-      const response = await fetch("/admin/api/queue", {headers: {"Accept": "application/json"}});
+      const params = new URLSearchParams();
+      if (upstreamFilter.value) params.set("upstream_id", upstreamFilter.value);
+      const response = await fetch(`/admin/api/queue?${params.toString()}`, {headers: {"Accept": "application/json"}});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       renderQueue(await response.json());
     } catch (error) {
@@ -544,6 +588,8 @@
       runningState.className = "status-pill status-error";
     }
   }
+
+  upstreamFilter.addEventListener("change", refreshQueue);
 
   try {
     renderQueue(JSON.parse(initialQueue.textContent));

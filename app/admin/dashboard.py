@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..database import Database
@@ -22,8 +22,14 @@ web_router = APIRouter(prefix="/admin")
 
 
 @api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
-async def queue_status(request: Request):
-    return queue_status_payload(request)
+async def queue_status(request: Request, upstream_id: str | None = None):
+    return queue_status_payload(request, upstream_id=_normalize_upstream_filter(request, upstream_id))
+
+
+@api_router.get("/request-trends", dependencies=[Depends(require_admin_or_session)])
+async def request_trends(request: Request, upstream_id: str | None = None):
+    db: Database = request.app.state.db
+    return _request_trend_stats(db, upstream_id=_normalize_upstream_filter(request, upstream_id))
 
 
 @web_router.get("", response_class=HTMLResponse)
@@ -61,13 +67,16 @@ async def dashboard(request: Request):
             },
             "queue": queue_status_payload(request),
             "request_trends": _request_trend_stats(db),
+            "upstream_choices": _upstream_choices(request),
         },
     )
 
 
-def queue_status_payload(request: Request):
+def queue_status_payload(request: Request, upstream_id: str | None = None):
     db: Database = request.app.state.db
     snapshot = request.app.state.proxy_queue.snapshot()
+    if upstream_id:
+        snapshot = _filter_queue_snapshot(snapshot, upstream_id)
     request_ids = [
         item["request_id"]
         for item in (snapshot.get("running_items") or ([snapshot["running"]] if snapshot["running"] else [])) + snapshot["queued"]
@@ -81,7 +90,7 @@ def queue_status_payload(request: Request):
     return snapshot
 
 
-def _request_trend_stats(db: Database) -> dict:
+def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
     now = datetime.now(DISPLAY_TIMEZONE)
     today_start, today_end = local_day_range(now)
     week_start = today_start - timedelta(days=today_start.weekday())
@@ -121,26 +130,27 @@ def _request_trend_stats(db: Database) -> dict:
             FROM usage_logs
             WHERE datetime(created_at) >= datetime(?)
               AND datetime(created_at) < datetime(?)
+              AND (? IS NULL OR upstream_id = ?)
             GROUP BY bucket
             """,
-            (to_utc_iso(today_start), to_utc_iso(today_end)),
+            (to_utc_iso(today_start), to_utc_iso(today_end), upstream_id, upstream_id),
         ),
     )
     _fill_trend_range_from_rows(
         ranges["week"],
-        _date_bucket_rows(db, week_start, week_end),
+        _date_bucket_rows(db, week_start, week_end, upstream_id=upstream_id),
         _date_index_map(week_start, 7),
     )
     _fill_trend_range_from_rows(
         ranges["month"],
-        _date_bucket_rows(db, month_start, month_end),
+        _date_bucket_rows(db, month_start, month_end, upstream_id=upstream_id),
         _date_index_map(month_start, (month_end - month_start).days),
     )
 
     return ranges
 
 
-def _date_bucket_rows(db: Database, start: datetime, end: datetime) -> list:
+def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
     return db.query_all(
         """
         SELECT date(datetime(created_at, '+8 hours')) AS bucket,
@@ -150,9 +160,10 @@ def _date_bucket_rows(db: Database, start: datetime, end: datetime) -> list:
         FROM usage_logs
         WHERE datetime(created_at) >= datetime(?)
           AND datetime(created_at) < datetime(?)
+          AND (? IS NULL OR upstream_id = ?)
         GROUP BY bucket
         """,
-        (to_utc_iso(start), to_utc_iso(end)),
+        (to_utc_iso(start), to_utc_iso(end), upstream_id, upstream_id),
     )
 
 
@@ -219,3 +230,44 @@ def _merge_queue_log_details(item: dict, details: dict[str, dict]) -> dict:
     merged = dict(item)
     merged.update(details.get(item["request_id"], {}))
     return merged
+
+
+def _upstream_choices(request: Request) -> list[str]:
+    clients = getattr(request.app.state, "upstream_clients", None)
+    if isinstance(clients, dict) and clients:
+        return list(clients.keys())
+    return ["default"]
+
+
+def _normalize_upstream_filter(request: Request, upstream_id: str | None) -> str | None:
+    normalized = (upstream_id or "").strip()
+    if not normalized:
+        return None
+    if normalized not in set(_upstream_choices(request)):
+        raise HTTPException(status_code=400, detail={"message": f"Unknown upstream id: {normalized}"})
+    return normalized
+
+
+def _filter_queue_snapshot(snapshot: dict, upstream_id: str) -> dict:
+    filtered = dict(snapshot)
+    running_items = [
+        item
+        for item in (snapshot.get("running_items") or ([snapshot["running"]] if snapshot.get("running") else []))
+        if item.get("upstream_id") == upstream_id
+    ]
+    queued = [
+        dict(item, position=index)
+        for index, item in enumerate(
+            [item for item in snapshot.get("queued", []) if item.get("upstream_id") == upstream_id],
+            start=1,
+        )
+    ]
+    filtered["running_items"] = running_items
+    filtered["running"] = running_items[0] if len(running_items) == 1 else None
+    filtered["queued"] = queued
+    filtered["queue_size"] = len(queued)
+    if "dispatch_queue_size" in filtered:
+        filtered["dispatch_queue_size"] = 0
+    if "upstreams" in filtered:
+        filtered["upstreams"] = [item for item in filtered["upstreams"] if item.get("id") == upstream_id]
+    return filtered
