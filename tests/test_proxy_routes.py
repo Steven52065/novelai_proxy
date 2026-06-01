@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from novelai_python._exceptions import APIError
 
 from helpers import (
     PAYLOAD,
@@ -13,6 +14,32 @@ from helpers import (
     write_test_config_with_image_format_policy,
     _wait_for_log_image_urls,
 )
+
+
+class UpstreamApiErrorFake(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        raise APIError(
+            "secret upstream detail",
+            request=payload,
+            response={"message": "secret upstream response", "token": "secret-token"},
+            code="418",
+        )
+
+    async def suggest_tags(self, model: str, prompt: str, lang: str = "en"):
+        raise APIError(
+            "secret suggest detail",
+            request={"model": model, "prompt": prompt, "lang": lang},
+            response={"message": "secret suggest response", "token": "secret-token"},
+            code="429",
+        )
+
+
+class InternalErrorFake(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        raise RuntimeError("secret internal detail")
+
+    async def suggest_tags(self, model: str, prompt: str, lang: str = "en"):
+        raise RuntimeError("secret suggest internal detail")
 
 
 def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
@@ -122,7 +149,105 @@ def test_generate_rejects_missing_cost_fields(tmp_path: Path, monkeypatch):
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
 
         assert resp.status_code == 400
-        assert "n_samples" in resp.json()["details"]
+        assert resp.json() == {"message": "Invalid request"}
+
+
+def test_generate_upstream_api_error_returns_generic_message(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = UpstreamApiErrorFake()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "upstream-error-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 418
+        assert resp.json() == {"message": "Upstream request failed"}
+        assert "secret" not in resp.text
+
+
+def test_generate_internal_error_returns_generic_message(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = InternalErrorFake()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "internal-error-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 502
+        assert resp.json() == {"message": "Proxy request failed"}
+        assert "secret" not in resp.text
+
+
+def test_suggest_tags_upstream_api_error_returns_generic_message(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = UpstreamApiErrorFake()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "suggest-upstream-error-user",
+                "tier": "normal",
+                "anlas_total": 100,
+                "allowed_endpoints": ["generate-image", "suggest-tags"],
+            },
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.get(
+            "/ai/generate-image/suggest-tags",
+            headers={"Authorization": f"Bearer {api_key}"},
+            params={"model": "nai-diffusion-3", "prompt": "1girl"},
+        )
+
+        assert resp.status_code == 429
+        assert resp.json() == {"message": "Upstream request failed"}
+        assert "secret" not in resp.text
+
+
+def test_suggest_tags_internal_error_returns_generic_message(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = InternalErrorFake()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "suggest-internal-error-user",
+                "tier": "normal",
+                "anlas_total": 100,
+                "allowed_endpoints": ["generate-image", "suggest-tags"],
+            },
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.get(
+            "/ai/generate-image/suggest-tags",
+            headers={"Authorization": f"Bearer {api_key}"},
+            params={"model": "nai-diffusion-3", "prompt": "1girl"},
+        )
+
+        assert resp.status_code == 503
+        assert resp.json() == {"message": "Suggest tags request failed"}
+        assert "secret" not in resp.text
 
 def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))

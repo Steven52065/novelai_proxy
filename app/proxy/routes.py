@@ -12,7 +12,7 @@ from novelai_python.sdk.ai.upscale import Upscale
 from ..auth import UserContext, get_current_user
 from ..costing import GenerateCostEstimator, GenerateCostInputs, IMAGE_ANLAS_PER_VIBE_ENCODING
 from ..logging_utils import dump_model_payload, logger
-from .service import ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
+from .service import MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 
 
 router = APIRouter()
@@ -47,7 +47,7 @@ async def generate_image(
         cost_inputs = _generate_cost_estimator.extract_inputs(request_payload)
     except Exception as exc:
         logger.error("generate-image payload validation failed errors=%s", str(exc))
-        return JSONResponse(status_code=400, content={"message": "Invalid request", "details": str(exc)})
+        return JSONResponse(status_code=400, content={"message": "Invalid request"})
 
     _apply_image_format_policy(request_payload, request.app.state.config.image_format)
     try:
@@ -238,12 +238,14 @@ async def suggest_tags(
         return await upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
     except APIError as exc:
         status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
+        logger.error("suggest-tags upstream API error code=%s message=%s", exc.code, exc.message)
         return JSONResponse(
             status_code=status_code,
-            content=exc.response if isinstance(exc.response, dict) else {"message": exc.message},
+            content={"message": MESSAGE_UPSTREAM_REQUEST_FAILED},
         )
     except Exception as exc:
-        return JSONResponse(status_code=503, content={"message": str(exc)})
+        logger.exception("suggest-tags request failed")
+        return JSONResponse(status_code=503, content={"message": "Suggest tags request failed"})
 
 
 @router.get("/ai/generate-image/suggest_tags")

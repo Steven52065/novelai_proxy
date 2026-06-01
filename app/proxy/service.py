@@ -16,6 +16,10 @@ from ..rate_limiter import RateLimiter
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 
+MESSAGE_UPSTREAM_REQUEST_FAILED = "Upstream request failed"
+MESSAGE_PROXY_REQUEST_FAILED = "Proxy request failed"
+
+
 @dataclass(frozen=True)
 class ProxyTaskRequest:
     user: UserContext
@@ -141,11 +145,11 @@ class ProxyRequestService:
             logger.error("upstream API error request_id=%s code=%s message=%s", request_id, exc.code, exc.message)
             return ProxyTaskResult(
                 status_code=status_code,
-                content=exc.response if isinstance(exc.response, dict) else {"message": exc.message},
+                content={"message": MESSAGE_UPSTREAM_REQUEST_FAILED},
             )
         except Exception as exc:
             logger.exception("proxy request failed request_id=%s", request_id)
-            return ProxyTaskResult(status_code=502, content={"message": str(exc)})
+            return ProxyTaskResult(status_code=502, content={"message": MESSAGE_PROXY_REQUEST_FAILED})
 
         return ProxyTaskResult(
             status_code=201,
