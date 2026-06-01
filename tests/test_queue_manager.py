@@ -148,6 +148,41 @@ def test_multi_upstream_round_robin_routes_requests(tmp_path: Path, monkeypatch)
         assert sorted(success_upstreams) == ["opus-a", "opus-a", "opus-b"]
 
 
+def test_suggest_tags_does_not_advance_round_robin_routing(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        upstream_a = FakeUpstream()
+        upstream_b = FakeUpstream()
+        app.state.upstream = upstream_a
+        app.state.upstream_clients["opus-b"] = upstream_b
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "suggest-user",
+                "tier": "normal",
+                "anlas_total": 100,
+                "allowed_endpoints": ["generate-image", "suggest-tags"],
+            },
+        )
+        headers = {"Authorization": f"Bearer {create_resp.json()['api_key']}"}
+
+        suggest = client.get(
+            "/ai/generate-image/suggest-tags",
+            headers=headers,
+            params={"model": "nai-diffusion-3", "prompt": "1girl"},
+        )
+        generated = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+
+        assert suggest.status_code == 200
+        assert generated.status_code == 201
+        assert len(upstream_a.suggest_tags_calls) == 1
+        assert len(upstream_a.generate_started_at) == 1
+        assert len(upstream_b.generate_started_at) == 0
+
+
 def test_user_allowed_upstreams_limits_routing(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
     from app.main import app
@@ -237,6 +272,61 @@ def test_routing_tries_other_allowed_upstream_when_selected_queue_is_full(tmp_pa
             assert queued.result(timeout=3).status_code == 201
 
 
+def test_queue_snapshot_orders_queued_items_by_actual_dispatch_sequence(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"], max_queue_size=2)),
+    )
+    from app.main import app
+
+    release_a = threading.Event()
+    release_b = threading.Event()
+    with TestClient(app) as client:
+        upstream_a = BlockingFakeUpstream(release_a)
+        upstream_b = BlockingFakeUpstream(release_b)
+        app.state.upstream = upstream_a
+        app.state.upstream_clients["opus-b"] = upstream_b
+
+        user_a = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "queued-a", "tier": "normal", "anlas_total": 100, "allowed_upstreams": ["opus-a"]},
+        ).json()["api_key"]
+        user_b = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "queued-b", "tier": "normal", "anlas_total": 100, "allowed_upstreams": ["opus-b"]},
+        ).json()["api_key"]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            running_a = pool.submit(client.post, "/ai/generate-image", headers={"Authorization": f"Bearer {user_a}"}, json=PAYLOAD)
+            _wait_until(lambda: len(upstream_a.generate_started_at) == 1)
+
+            queued_a = pool.submit(client.post, "/ai/generate-image", headers={"Authorization": f"Bearer {user_a}"}, json=PAYLOAD)
+            _wait_until(lambda: _queued_user_names(client) == ["queued-a"])
+
+            running_b = pool.submit(client.post, "/ai/generate-image", headers={"Authorization": f"Bearer {user_b}"}, json=PAYLOAD)
+            _wait_until(lambda: len(upstream_b.generate_started_at) == 1)
+
+            queued_b = pool.submit(client.post, "/ai/generate-image", headers={"Authorization": f"Bearer {user_b}"}, json=PAYLOAD)
+            _wait_until(lambda: _queued_user_names(client) == ["queued-a", "queued-b"])
+
+            queue = client.get("/admin/api/queue", auth=("admin", "admin123")).json()
+            queued_names = [item["user_name"] for item in queue["queued"]]
+            queued_positions = [item["position"] for item in queue["queued"]]
+
+            assert queued_names == ["queued-a", "queued-b"]
+            assert queued_positions == [1, 2]
+            assert all("sequence" not in item for item in queue["queued"])
+
+            release_a.set()
+            release_b.set()
+            assert running_a.result(timeout=3).status_code == 201
+            assert queued_a.result(timeout=3).status_code == 201
+            assert running_b.result(timeout=3).status_code == 201
+            assert queued_b.result(timeout=3).status_code == 201
+
+
 def test_dispatch_queue_default_size_is_sum_of_upstream_queue_sizes():
     queue = RoutingProxyQueue(
         targets=[
@@ -293,3 +383,17 @@ def test_dispatch_queue_full_raises_queue_full():
             await asyncio.gather(first, return_exceptions=True)
 
     asyncio.run(run_test())
+
+
+def _queued_user_names(client: TestClient) -> list[str]:
+    queue = client.get("/admin/api/queue", auth=("admin", "admin123")).json()
+    return [item["user_name"] for item in queue["queued"]]
+
+
+def _wait_until(predicate, timeout: float = 3) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("timed out waiting for condition")

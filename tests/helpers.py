@@ -36,6 +36,7 @@ class FakeUpstream:
         self.last_post_binary_url = None
         self.last_post_binary_payload = None
         self.generate_started_at = []
+        self.suggest_tags_calls = []
 
     async def generate_image_zip(self, req):
         buffer = io.BytesIO()
@@ -63,6 +64,7 @@ class FakeUpstream:
         return b"fake-augment-zip"
 
     async def suggest_tags(self, model: str, prompt: str, lang: str = "en"):
+        self.suggest_tags_calls.append({"model": model, "prompt": prompt, "lang": lang})
         return {"tags": []}
 
 

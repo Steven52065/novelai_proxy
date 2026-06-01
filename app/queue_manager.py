@@ -149,14 +149,16 @@ class ProxyQueue:
         handler: Callable[[], Awaitable[bytes]],
         process_zip_response: bool = True,
         priority_override: int | None = None,
+        sequence_override: int | None = None,
         manage_quota: bool = True,
     ) -> asyncio.Future:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
+        sequence = sequence_override if sequence_override is not None else next(self._sequence)
         item = QueueItem(
             priority=priority,
-            sequence=next(self._sequence),
+            sequence=sequence,
             enqueued_at=time.monotonic(),
             request_id=request_id,
             user_id=user_id,
@@ -350,6 +352,7 @@ class ProxyQueue:
             "upstream_id": item.upstream_id,
             "estimated_anlas_cost": item.estimated_cost,
             "priority": item.priority,
+            "sequence": item.sequence,
             "position": position,
             "status": status,
             "queued_seconds": max(0, int(now - item.enqueued_at)),
@@ -362,6 +365,12 @@ class QueueFull(Exception):
 
 class NoAvailableUpstream(Exception):
     pass
+
+
+def _without_sequence(item: dict[str, object]) -> dict[str, object]:
+    clean = dict(item)
+    clean.pop("sequence", None)
+    return clean
 
 
 class RoutingProxyQueue:
@@ -450,14 +459,17 @@ class RoutingProxyQueue:
         for upstream_id in self._target_order:
             upstream_snapshot = self._queues[upstream_id].snapshot()
             upstream_snapshot = {"id": upstream_id, **upstream_snapshot}
-            upstream_snapshots.append(upstream_snapshot)
             if upstream_snapshot["running"] is not None:
+                upstream_snapshot["running"].pop("sequence", None)
                 flattened_running.append(upstream_snapshot["running"])
             flattened_queued.extend(upstream_snapshot["queued"])
+            upstream_snapshot["queued"] = [_without_sequence(item) for item in upstream_snapshot["queued"]]
+            upstream_snapshots.append(upstream_snapshot)
 
-        flattened_queued = sorted(dispatch_queued + flattened_queued, key=lambda item: (item["priority"], item["queued_seconds"]))
+        flattened_queued = sorted(dispatch_queued + flattened_queued, key=lambda item: (item["priority"], item["sequence"]))
         for index, item in enumerate(flattened_queued, start=1):
             item["position"] = index
+            item.pop("sequence", None)
 
         return {
             "queue_size": len(flattened_queued),
@@ -524,7 +536,7 @@ class RoutingProxyQueue:
 
     def _dispatch_to_upstream(self, item: DispatchQueueItem) -> None:
         errors = []
-        for upstream_id in self._candidate_upstreams(item.allowed_upstreams):
+        for upstream_id in self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=True):
             target = self._targets[upstream_id]
             queue = self._queues[upstream_id]
             try:
@@ -538,6 +550,7 @@ class RoutingProxyQueue:
                     handler=lambda target=target: item.handler(target.client_provider()),
                     process_zip_response=item.process_zip_response,
                     priority_override=item.priority,
+                    sequence_override=item.sequence,
                     manage_quota=item.manage_quota,
                 )
             except QueueFull as exc:
@@ -549,7 +562,12 @@ class RoutingProxyQueue:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("No enabled upstream is available for this user")
 
-    def _candidate_upstreams(self, allowed_upstreams: frozenset[str] | set[str] | list[str] | None) -> list[str]:
+    def _candidate_upstreams(
+        self,
+        allowed_upstreams: frozenset[str] | set[str] | list[str] | None,
+        *,
+        advance_round_robin: bool,
+    ) -> list[str]:
         allowed = {item for item in (allowed_upstreams or []) if item}
         candidates = [upstream_id for upstream_id in self._target_order if not allowed or upstream_id in allowed]
         if not candidates:
@@ -558,11 +576,11 @@ class RoutingProxyQueue:
             shuffled = list(candidates)
             random.shuffle(shuffled)
             return shuffled
-        start = next(self._round_robin)
+        start = next(self._round_robin) if advance_round_robin else 0
         return [candidates[(start + offset) % len(candidates)] for offset in range(len(candidates))]
 
     def select_client(self, allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None) -> Any:
-        candidates = self._candidate_upstreams(allowed_upstreams)
+        candidates = self._candidate_upstreams(allowed_upstreams, advance_round_robin=False)
         if not candidates:
             raise NoAvailableUpstream("No enabled upstream is available for this user")
         return self._targets[candidates[0]].client_provider()
@@ -590,6 +608,7 @@ class RoutingProxyQueue:
             "upstream_id": None,
             "estimated_anlas_cost": item.estimated_cost,
             "priority": item.priority,
+            "sequence": item.sequence,
             "position": position,
             "status": "dispatch_queued",
             "queued_seconds": max(0, int(now - item.enqueued_at)),
