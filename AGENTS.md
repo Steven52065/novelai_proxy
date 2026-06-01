@@ -35,21 +35,43 @@ SQLite 运行数据库默认是 `novelai_proxy.db`，以及对应的 `*.db-shm`�
 
 ## 虚拟环境
 
-项目使用根目录下的 `.venv` 虚拟环境。
+项目使用根目录下的 `.venv` 虚拟环境，通过 `uv` 管理依赖。
 
-在 PowerShell 中优先使用虚拟环境里的 Python：
+### 初始化环境
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+uv venv
+uv pip install -r requirements-dev.txt
+```
+
+注意：`novelai-python` 是本地 Git 子模块，需要先拉取子模块后才能安装：
+
+```powershell
+git submodule update --init --recursive
+```
+
+### 日常运行
+
+在 PowerShell 中优先使用虚拟环境里的 Python，或使用 `uv run`：
+
+```powershell
+# 方式一：直接使用 venv 中的 Python
 .\.venv\Scripts\python.exe run.py
+.\.venv\Scripts\python.exe -m pytest
+
+# 方式二：通过 uv run 自动使用 venv 环境
+uv run python run.py
+uv run python -m pytest
 ```
 
 不要默认使用系统 Python，因为系统 Python 可能没有安装项目依赖。
 
-如需安装依赖，使用：
+### 依赖同步
+
+如果拉取了新代码，依赖有更新，重新执行安装命令即可同步：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+uv pip install -r requirements-dev.txt
 ```
 
 ## 运行方式
