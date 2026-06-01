@@ -21,6 +21,7 @@ class UserContext:
     is_active: bool
     free_small_only: bool
     allowed_endpoints: frozenset[str]
+    allowed_upstreams: frozenset[str]
 
 
 def _extract_bearer(value: str | None) -> str | None:
@@ -44,7 +45,7 @@ async def get_current_user(
     api_key_hash = hash_api_key(api_key)
     row = db.query_one(
         """
-        SELECT id, api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints
+        SELECT id, api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams
         FROM users
         WHERE api_key_hash = ?
         """,
@@ -61,6 +62,7 @@ async def get_current_user(
         is_active=bool(row["is_active"]),
         free_small_only=bool(row["free_small_only"]),
         allowed_endpoints=_parse_allowed_endpoints(row["allowed_endpoints"]),
+        allowed_upstreams=_parse_allowed_upstreams(row["allowed_upstreams"]),
     )
 
 
@@ -69,3 +71,10 @@ def _parse_allowed_endpoints(value: str | None) -> frozenset[str]:
         return frozenset({"generate-image"})
     endpoints = {item.strip() for item in value.split(",") if item.strip()}
     return frozenset(endpoints or {"generate-image"})
+
+
+def _parse_allowed_upstreams(value: str | None) -> frozenset[str]:
+    if not value:
+        return frozenset()
+    upstreams = {item.strip() for item in value.split(",") if item.strip()}
+    return frozenset(upstreams)

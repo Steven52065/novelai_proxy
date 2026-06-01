@@ -23,6 +23,7 @@ class UsageLogCreate:
     error_code: str | None = None
     error_message: str | None = None
     log_level: str = "INFO"
+    upstream_id: str | None = None
 
 
 class UsageLogRepository:
@@ -36,9 +37,9 @@ class UsageLogRepository:
             """
             INSERT INTO usage_logs (
                 request_id, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, error_code, error_message, log_level, request_payload, created_at
+                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id, request_payload, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -53,6 +54,7 @@ class UsageLogRepository:
                 log.error_code,
                 log.error_message,
                 log.log_level,
+                log.upstream_id,
                 self._payload_json(log.request_payload),
                 utc_now_iso(),
             ),
@@ -63,9 +65,9 @@ class UsageLogRepository:
             """
             INSERT INTO usage_logs (
                 request_id, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, error_code, error_message, log_level, request_payload, created_at
+                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id, request_payload, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -80,19 +82,20 @@ class UsageLogRepository:
                 log.error_code,
                 log.error_message,
                 log.log_level,
+                log.upstream_id,
                 self._payload_json(log.request_payload),
                 utc_now_iso(),
             ),
         )
 
-    def mark_running(self, request_id: str, queued_ms: int) -> None:
+    def mark_running(self, request_id: str, queued_ms: int, upstream_id: str | None = None) -> None:
         self.db.execute(
             """
             UPDATE usage_logs
-            SET status = 'running', queued_ms = ?
+            SET status = 'running', queued_ms = ?, upstream_id = COALESCE(?, upstream_id)
             WHERE request_id = ?
             """,
-            (queued_ms, request_id),
+            (queued_ms, upstream_id, request_id),
         )
 
     def mark_success(

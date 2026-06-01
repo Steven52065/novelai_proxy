@@ -70,11 +70,13 @@ def queue_status_payload(request: Request):
     snapshot = request.app.state.proxy_queue.snapshot()
     request_ids = [
         item["request_id"]
-        for item in ([snapshot["running"]] if snapshot["running"] else []) + snapshot["queued"]
+        for item in (snapshot.get("running_items") or ([snapshot["running"]] if snapshot["running"] else [])) + snapshot["queued"]
     ]
     log_details = _queue_log_details(db, request_ids)
     if snapshot["running"]:
         snapshot["running"] = _merge_queue_log_details(snapshot["running"], log_details)
+    if snapshot.get("running_items"):
+        snapshot["running_items"] = [_merge_queue_log_details(item, log_details) for item in snapshot["running_items"]]
     snapshot["queued"] = [_merge_queue_log_details(item, log_details) for item in snapshot["queued"]]
     return snapshot
 

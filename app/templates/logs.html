@@ -40,6 +40,7 @@
           <th>记录级别</th>
           <th>操作用户</th>
           <th>API动作</th>
+          <th>上游</th>
           <th>使用模型</th>
           <th>图像尺寸</th>
           <th>Anlas (预估/实际)</th>
@@ -51,7 +52,7 @@
       <tbody id="logs-table-body" data-next-before-id="{{ next_before_id if next_before_id is not none else '' }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
-          <td colspan="10" style="text-align: center; padding: 48px 0;">
+          <td colspan="11" style="text-align: center; padding: 48px 0;">
             <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
               <i data-lucide="info" style="width:32px; height:32px; stroke:#64748b;"></i>
               <span class="muted">当前没有任何符合条件的日志记录</span>
@@ -69,6 +70,13 @@
           <td style="font-weight: 700; color: #fff;">{{ log.user_name }}</td>
           <td>
             <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">{{ log.action }}</span>
+          </td>
+          <td class="mono">
+            {% if log.upstream_id %}
+            <code>{{ log.upstream_id }}</code>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
           </td>
           <td>
             {% if log.model %}
@@ -119,7 +127,7 @@
           </td>
         </tr>
         <tr class="log-detail-row" data-request-id="{{ log.request_id }}" hidden>
-          <td colspan="10">
+          <td colspan="11">
             <div class="log-details-block" data-request-id="{{ log.request_id }}">
               <div class="log-details-content">
                 <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
@@ -707,6 +715,7 @@
           <td>
             <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">${escapeHtml(log.action ?? "")}</span>
           </td>
+          <td class="mono">${log.upstream_id ? `<code>${escapeHtml(log.upstream_id)}</code>` : `<span class="muted">-</span>`}</td>
           <td>${model}</td>
           <td class="mono">${size}</td>
           <td class="mono">
@@ -727,7 +736,7 @@
           </td>
         </tr>
         <tr class="log-detail-row" data-request-id="${escapeAttr(requestId)}" hidden>
-          <td colspan="10">
+          <td colspan="11">
             <div class="log-details-block" data-request-id="${escapeAttr(requestId)}">
               <div class="log-details-content">
                 <div id="replay-result-${escapeAttr(requestId)}" class="replay-result" hidden></div>

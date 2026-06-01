@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from novelai_python._exceptions import APIError
 
-from ..queue_manager import QueueFull
+from ..queue_manager import NoAvailableUpstream, QueueFull
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 from .auth import has_admin_session, require_admin_or_session
 from .common import json_or_none, optional_query_int, row_to_dict, templates, usage_log_to_dict
@@ -85,10 +85,11 @@ async def replay_log_request(request_id: str, request: Request):
             action=action,
             logging_config=request.app.state.config.logging,
             estimated_cost=0,
-            handler=lambda: request.app.state.upstream.post_binary(endpoint, request_payload),
+            handler=lambda upstream: upstream.post_binary(endpoint, request_payload),
             process_zip_response=endpoint != _encode_vibe_endpoint(),
             priority_override=REPLAY_PRIORITY,
             manage_quota=False,
+            allowed_upstreams=[source["upstream_id"]] if source["upstream_id"] else None,
         )
     except QueueFull:
         usage_logs.mark_rejected(
@@ -98,6 +99,14 @@ async def replay_log_request(request_id: str, request: Request):
             log_level="ERROR",
         )
         raise HTTPException(status_code=503, detail={"message": "Queue full, please retry later"}) from None
+    except NoAvailableUpstream as exc:
+        usage_logs.mark_rejected(
+            replay_request_id,
+            error_code="no_available_upstream",
+            error_message=str(exc),
+            log_level="ERROR",
+        )
+        raise HTTPException(status_code=503, detail={"message": "No enabled upstream is available for this replay"}) from exc
     except APIError as exc:
         status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
         raise HTTPException(status_code=status_code, detail={"message": exc.message}) from exc

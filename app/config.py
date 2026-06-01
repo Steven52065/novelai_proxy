@@ -31,10 +31,35 @@ class QueueConfig(BaseModel):
         return self
 
 
+class NovelAIUpstreamConfig(BaseModel):
+    id: str
+    api_key: str = ""
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_id(self):
+        if not self.id.strip():
+            raise ValueError("novelai.upstreams[].id must not be empty")
+        self.id = self.id.strip()
+        return self
+
+
 class NovelAIConfig(BaseModel):
     api_key: str = ""
+    upstreams: list[NovelAIUpstreamConfig] = Field(default_factory=list)
     account_tier: int = Field(default=3, ge=0, le=3)
     upscale_anlas_cost: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_upstream_ids(self):
+        ids = [upstream.id for upstream in self.upstreams]
+        if len(ids) != len(set(ids)):
+            raise ValueError("novelai.upstreams[].id must be unique")
+        return self
+
+
+class RoutingConfig(BaseModel):
+    strategy: Literal["round_robin", "random"] = "round_robin"
 
 
 class DatabaseConfig(BaseModel):
@@ -83,6 +108,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
     novelai: NovelAIConfig = Field(default_factory=NovelAIConfig)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)

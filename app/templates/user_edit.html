@@ -198,6 +198,19 @@
           </div>
         </div>
 
+        <div style="padding: 6px 0;">
+          <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许使用的上游 Key</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+            {% for upstream_id in upstream_choices %}
+            <label class="check" style="color: #cbd5e1; font-weight: 500;">
+              <input name="allowed_upstreams" type="checkbox" value="{{ upstream_id }}" {{ "checked" if upstream_id in user.allowed_upstreams_list else "" }}>
+              {{ upstream_id }}
+            </label>
+            {% endfor %}
+          </div>
+          <p class="muted" style="font-size: 12px; margin-top: 6px;">不勾选表示允许使用全部已启用上游。</p>
+        </div>
+
         <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
           <button type="submit" style="min-height: 42px; padding: 0 24px;">
             <i data-lucide="save" style="width: 16px; height: 16px;"></i>

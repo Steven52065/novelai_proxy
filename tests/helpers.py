@@ -66,6 +66,18 @@ class FakeUpstream:
         return {"tags": []}
 
 
+class BlockingFakeUpstream(FakeUpstream):
+    def __init__(self, release_event: threading.Event):
+        super().__init__()
+        self.release_event = release_event
+
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(time.monotonic())
+        self.last_generate_payload = payload
+        await asyncio.to_thread(self.release_event.wait)
+        return await self.generate_image_zip(payload)
+
+
 class FailingThenSuccessfulUpstream(FakeUpstream):
     async def generate_image_payload_zip(self, payload):
         self.generate_started_at.append(time.monotonic())
@@ -163,6 +175,60 @@ queue:
   upstream_error_extra_delay_seconds: {upstream_error_extra_delay_seconds}
 novelai:
   api_key: ""
+  account_tier: 3
+database:
+  path: "{db_path.as_posix()}"
+logging:
+  level: DEBUG
+  directory: "{(tmp_path / "logs").as_posix()}"
+cors:
+  enabled: true
+  allow_origins:
+    - "https://client.example"
+  allow_methods:
+    - "*"
+  allow_headers:
+    - "*"
+  expose_headers:
+    - Content-Disposition
+""",
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def write_test_config_with_upstreams(
+    tmp_path: Path,
+    upstream_ids: list[str],
+    max_queue_size: int = 2,
+    routing_strategy: str = "round_robin",
+    upstream_interval_min_seconds: float = 0,
+) -> Path:
+    db_path = tmp_path / "test.db"
+    config_path = tmp_path / "config.yaml"
+    upstreams_yaml = "\n".join(
+        f"    - id: {upstream_id}\n      api_key: \"\"\n      enabled: true"
+        for upstream_id in upstream_ids
+    )
+    config_path.write_text(
+        f"""
+admin:
+  username: admin
+  password: admin123
+server:
+  host: 127.0.0.1
+  port: 8080
+queue:
+  max_concurrent_upstream: 1
+  max_queue_size: {max_queue_size}
+  upstream_interval_min_seconds: {upstream_interval_min_seconds}
+  upstream_interval_max_seconds: {upstream_interval_min_seconds}
+  upstream_error_extra_delay_seconds: 0
+routing:
+  strategy: {routing_strategy}
+novelai:
+  upstreams:
+{upstreams_yaml}
   account_tier: 3
 database:
   path: "{db_path.as_posix()}"

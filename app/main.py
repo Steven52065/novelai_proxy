@@ -23,7 +23,7 @@ from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .proxy.routes import router as proxy_router
 from .proxy.service import ProxyRequestService
-from .queue_manager import ProxyQueue
+from .queue_manager import RoutingProxyQueue, UpstreamQueueTarget
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
 from .upstream import UpstreamClient
@@ -38,11 +38,23 @@ async def lifespan(app: FastAPI):
     db.init_schema()
     quota_manager = QuotaManager(db)
     usage_logs = UsageLogRepository(db)
-    upstream = UpstreamClient(config.novelai.api_key)
-    proxy_queue = ProxyQueue(
+    upstream_clients = _build_upstream_clients(config)
+    default_upstream_id = next(iter(upstream_clients))
+    upstream = upstream_clients[default_upstream_id]
+    proxy_queue = RoutingProxyQueue(
+        targets=[
+            UpstreamQueueTarget(
+                id=upstream_id,
+                client_provider=lambda upstream_id=upstream_id: app.state.upstream
+                if upstream_id == app.state.default_upstream_id
+                else app.state.upstream_clients[upstream_id],
+            )
+            for upstream_id in upstream_clients
+        ],
         quota_manager=quota_manager,
         usage_logs=usage_logs,
         max_queue_size=config.queue.max_queue_size,
+        routing_strategy=config.routing.strategy,
         upstream_interval_min_seconds=config.queue.upstream_interval_min_seconds,
         upstream_interval_max_seconds=config.queue.upstream_interval_max_seconds,
         upstream_error_extra_delay_seconds=config.queue.upstream_error_extra_delay_seconds,
@@ -55,6 +67,8 @@ async def lifespan(app: FastAPI):
     app.state.usage_logs = usage_logs
     app.state.rate_limiter = RateLimiter(db)
     app.state.upstream = upstream
+    app.state.upstream_clients = upstream_clients
+    app.state.default_upstream_id = default_upstream_id
     app.state.proxy_queue = proxy_queue
     app.state.proxy_service = ProxyRequestService(
         rate_limiter=app.state.rate_limiter,
@@ -70,6 +84,16 @@ async def lifespan(app: FastAPI):
     finally:
         await proxy_queue.stop()
         db.close()
+
+
+def _build_upstream_clients(config) -> dict[str, UpstreamClient]:
+    enabled_upstreams = [upstream for upstream in config.novelai.upstreams if upstream.enabled]
+    if enabled_upstreams:
+        return {
+            upstream.id: UpstreamClient(upstream.api_key)
+            for upstream in enabled_upstreams
+        }
+    return {"default": UpstreamClient(config.novelai.api_key)}
 
 
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)

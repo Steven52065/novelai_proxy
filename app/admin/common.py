@@ -31,6 +31,7 @@ def user_row_to_dict(row):
         ALLOWED_ENDPOINT_CHOICES.get(endpoint, endpoint)
         for endpoint in data["allowed_endpoints_list"]
     ]
+    data["allowed_upstreams_list"] = parse_allowed_upstreams(data.get("allowed_upstreams"))
     return data
 
 
@@ -49,6 +50,23 @@ def serialize_allowed_endpoints(value: list[str] | None) -> str:
         if endpoint in ALLOWED_ENDPOINT_CHOICES and endpoint not in valid:
             valid.append(endpoint)
     return ",".join(valid or [DEFAULT_ALLOWED_ENDPOINTS])
+
+
+def parse_allowed_upstreams(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def serialize_allowed_upstreams(value: list[str] | None) -> str | None:
+    if not value:
+        return None
+    valid = []
+    for upstream_id in value:
+        upstream_id = upstream_id.strip()
+        if upstream_id and upstream_id not in valid:
+            valid.append(upstream_id)
+    return ",".join(valid) if valid else None
 
 
 def usage_log_to_dict(row):

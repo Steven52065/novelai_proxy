@@ -5,7 +5,7 @@ import itertools
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Literal, Protocol
 
 from novelai_python._exceptions import APIError
 
@@ -31,6 +31,7 @@ class QueueItem:
     user_id: int = field(compare=False)
     action: str = field(compare=False)
     tier: str = field(compare=False)
+    upstream_id: str | None = field(compare=False)
     estimated_cost: int = field(compare=False)
     manage_quota: bool = field(compare=False)
     logging_config: LoggingConfig = field(compare=False)
@@ -39,9 +40,34 @@ class QueueItem:
     future: asyncio.Future = field(compare=False)
 
 
+@dataclass(frozen=True)
+class UpstreamQueueTarget:
+    id: str
+    client_provider: Callable[[], Any]
+
+
+@dataclass(order=True)
+class DispatchQueueItem:
+    priority: int
+    sequence: int
+    enqueued_at: float = field(compare=False)
+    request_id: str = field(compare=False)
+    user_id: int = field(compare=False)
+    action: str = field(compare=False)
+    tier: str = field(compare=False)
+    estimated_cost: int = field(compare=False)
+    manage_quota: bool = field(compare=False)
+    logging_config: LoggingConfig = field(compare=False)
+    process_zip_response: bool = field(compare=False)
+    allowed_upstreams: frozenset[str] | set[str] | list[str] | None = field(compare=False)
+    handler: Callable[[Any], Awaitable[bytes]] = field(compare=False)
+    future: asyncio.Future = field(compare=False)
+
+
 class ProxyQueue:
     def __init__(
         self,
+        upstream_id: str,
         quota_manager: QuotaManager,
         usage_logs: UsageLogRepository,
         max_queue_size: int,
@@ -50,6 +76,7 @@ class ProxyQueue:
         upstream_error_extra_delay_seconds: float = 5,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
+        self.upstream_id = upstream_id
         self.quota_manager = quota_manager
         self.usage_logs = usage_logs
         self.image_hosting = image_hosting
@@ -110,6 +137,45 @@ class ProxyQueue:
             "queued": queued,
         }
 
+    def enqueue(
+        self,
+        *,
+        request_id: str,
+        user_id: int,
+        tier: str,
+        action: str,
+        logging_config: LoggingConfig,
+        estimated_cost: int,
+        handler: Callable[[], Awaitable[bytes]],
+        process_zip_response: bool = True,
+        priority_override: int | None = None,
+        manage_quota: bool = True,
+    ) -> asyncio.Future:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
+        item = QueueItem(
+            priority=priority,
+            sequence=next(self._sequence),
+            enqueued_at=time.monotonic(),
+            request_id=request_id,
+            user_id=user_id,
+            action=action,
+            tier=tier,
+            upstream_id=self.upstream_id,
+            estimated_cost=estimated_cost,
+            manage_quota=manage_quota,
+            logging_config=logging_config,
+            process_zip_response=process_zip_response,
+            handler=handler,
+            future=future,
+        )
+        try:
+            self.queue.put_nowait(item)
+        except asyncio.QueueFull as exc:
+            raise QueueFull from exc
+        return future
+
     async def submit(
         self,
         *,
@@ -124,28 +190,18 @@ class ProxyQueue:
         priority_override: int | None = None,
         manage_quota: bool = True,
     ) -> bytes:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
-        item = QueueItem(
-            priority=priority,
-            sequence=next(self._sequence),
-            enqueued_at=time.monotonic(),
+        future = self.enqueue(
             request_id=request_id,
             user_id=user_id,
-            action=action,
             tier=tier,
-            estimated_cost=estimated_cost,
-            manage_quota=manage_quota,
+            action=action,
             logging_config=logging_config,
-            process_zip_response=process_zip_response,
+            estimated_cost=estimated_cost,
             handler=handler,
-            future=future,
+            process_zip_response=process_zip_response,
+            priority_override=priority_override,
+            manage_quota=manage_quota,
         )
-        try:
-            self.queue.put_nowait(item)
-        except asyncio.QueueFull as exc:
-            raise QueueFull from exc
         return await future
 
     async def _run(self) -> None:
@@ -155,8 +211,13 @@ class ProxyQueue:
             self._running_started_at = time.monotonic()
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
             try:
-                self.usage_logs.mark_running(item.request_id, queued_ms)
-                logger.info("proxy request running request_id=%s queued_ms=%s", item.request_id, queued_ms)
+                self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id)
+                logger.info(
+                    "proxy request running request_id=%s upstream_id=%s queued_ms=%s",
+                    item.request_id,
+                    item.upstream_id,
+                    queued_ms,
+                )
                 await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
             except Exception as exc:
@@ -286,6 +347,7 @@ class ProxyQueue:
             "user_id": item.user_id,
             "action": item.action,
             "tier": item.tier,
+            "upstream_id": item.upstream_id,
             "estimated_anlas_cost": item.estimated_cost,
             "priority": item.priority,
             "position": position,
@@ -296,3 +358,233 @@ class ProxyQueue:
 
 class QueueFull(Exception):
     pass
+
+
+class NoAvailableUpstream(Exception):
+    pass
+
+
+class RoutingProxyQueue:
+    def __init__(
+        self,
+        *,
+        targets: list[UpstreamQueueTarget],
+        quota_manager: QuotaManager,
+        usage_logs: UsageLogRepository,
+        max_queue_size: int,
+        routing_strategy: Literal["round_robin", "random"] = "round_robin",
+        upstream_interval_min_seconds: float = 2,
+        upstream_interval_max_seconds: float = 5,
+        upstream_error_extra_delay_seconds: float = 5,
+        image_hosting: ImageHostingServiceLike | None = None,
+    ):
+        enabled_targets = [target for target in targets if target.id]
+        if not enabled_targets:
+            raise ValueError("at least one upstream target is required")
+        self.routing_strategy = routing_strategy
+        self._image_hosting = image_hosting
+        self._targets = {target.id: target for target in enabled_targets}
+        self._target_order = [target.id for target in enabled_targets]
+        self._round_robin = itertools.count()
+        self._sequence = itertools.count()
+        self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue()
+        self._dispatch_worker: asyncio.Task | None = None
+        self._dispatch_running_item: DispatchQueueItem | None = None
+        self._queues = {
+            target.id: ProxyQueue(
+                upstream_id=target.id,
+                quota_manager=quota_manager,
+                usage_logs=usage_logs,
+                max_queue_size=max_queue_size,
+                upstream_interval_min_seconds=upstream_interval_min_seconds,
+                upstream_interval_max_seconds=upstream_interval_max_seconds,
+                upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
+                image_hosting=image_hosting,
+            )
+            for target in enabled_targets
+        }
+
+    @property
+    def image_hosting(self) -> ImageHostingServiceLike | None:
+        return self._image_hosting
+
+    @image_hosting.setter
+    def image_hosting(self, value: ImageHostingServiceLike | None) -> None:
+        self._image_hosting = value
+        for queue in self._queues.values():
+            queue.image_hosting = value
+
+    def start(self) -> None:
+        if self._dispatch_worker is None or self._dispatch_worker.done():
+            self._dispatch_worker = asyncio.create_task(self._run_dispatcher())
+        for queue in self._queues.values():
+            queue.start()
+
+    async def stop(self) -> None:
+        if self._dispatch_worker is not None:
+            self._dispatch_worker.cancel()
+            try:
+                await self._dispatch_worker
+            except asyncio.CancelledError:
+                pass
+        await asyncio.gather(*(queue.stop() for queue in self._queues.values()))
+
+    async def wait_for_image_uploads(self) -> None:
+        await asyncio.gather(*(queue.wait_for_image_uploads() for queue in self._queues.values()))
+
+    def qsize(self) -> int:
+        return self._dispatch_queue.qsize() + sum(queue.qsize() for queue in self._queues.values())
+
+    def snapshot(self) -> dict[str, object]:
+        upstream_snapshots = []
+        flattened_running = []
+        flattened_queued = []
+        now = time.monotonic()
+        dispatch_queued = [
+            self._dispatch_item_snapshot(item, now, position=index)
+            for index, item in enumerate(sorted(self._dispatch_queue._queue), start=1)
+        ]
+        for upstream_id in self._target_order:
+            upstream_snapshot = self._queues[upstream_id].snapshot()
+            upstream_snapshot = {"id": upstream_id, **upstream_snapshot}
+            upstream_snapshots.append(upstream_snapshot)
+            if upstream_snapshot["running"] is not None:
+                flattened_running.append(upstream_snapshot["running"])
+            flattened_queued.extend(upstream_snapshot["queued"])
+
+        flattened_queued = sorted(dispatch_queued + flattened_queued, key=lambda item: (item["priority"], item["queued_seconds"]))
+        for index, item in enumerate(flattened_queued, start=1):
+            item["position"] = index
+
+        return {
+            "queue_size": len(flattened_queued),
+            "running": flattened_running[0] if len(flattened_running) == 1 else None,
+            "running_items": flattened_running,
+            "queued": flattened_queued,
+            "dispatch_queue_size": len(dispatch_queued),
+            "upstreams": upstream_snapshots,
+        }
+
+    async def submit(
+        self,
+        *,
+        request_id: str,
+        user_id: int,
+        tier: str,
+        action: str,
+        logging_config: LoggingConfig,
+        estimated_cost: int,
+        handler: Callable[[Any], Awaitable[bytes]],
+        process_zip_response: bool = True,
+        priority_override: int | None = None,
+        manage_quota: bool = True,
+        allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
+    ) -> bytes:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
+        self._dispatch_queue.put_nowait(
+            DispatchQueueItem(
+                priority=priority,
+                sequence=next(self._sequence),
+                enqueued_at=time.monotonic(),
+                request_id=request_id,
+                user_id=user_id,
+                action=action,
+                tier=tier,
+                estimated_cost=estimated_cost,
+                manage_quota=manage_quota,
+                logging_config=logging_config,
+                process_zip_response=process_zip_response,
+                allowed_upstreams=allowed_upstreams,
+                handler=handler,
+                future=future,
+            )
+        )
+        return await future
+
+    async def _run_dispatcher(self) -> None:
+        while True:
+            item = await self._dispatch_queue.get()
+            self._dispatch_running_item = item
+            try:
+                self._dispatch_to_upstream(item)
+            except Exception as exc:
+                if not item.future.done():
+                    item.future.set_exception(exc)
+            finally:
+                self._dispatch_running_item = None
+                self._dispatch_queue.task_done()
+
+    def _dispatch_to_upstream(self, item: DispatchQueueItem) -> None:
+        errors = []
+        for upstream_id in self._candidate_upstreams(item.allowed_upstreams):
+            target = self._targets[upstream_id]
+            queue = self._queues[upstream_id]
+            try:
+                upstream_future = queue.enqueue(
+                    request_id=item.request_id,
+                    user_id=item.user_id,
+                    tier=item.tier,
+                    action=item.action,
+                    logging_config=item.logging_config,
+                    estimated_cost=item.estimated_cost,
+                    handler=lambda target=target: item.handler(target.client_provider()),
+                    process_zip_response=item.process_zip_response,
+                    priority_override=item.priority,
+                    manage_quota=item.manage_quota,
+                )
+            except QueueFull as exc:
+                errors.append(exc)
+                continue
+            upstream_future.add_done_callback(lambda completed, future=item.future: self._copy_future_result(completed, future))
+            return
+        if errors:
+            raise QueueFull from errors[-1]
+        raise NoAvailableUpstream("No enabled upstream is available for this user")
+
+    def _candidate_upstreams(self, allowed_upstreams: frozenset[str] | set[str] | list[str] | None) -> list[str]:
+        allowed = {item for item in (allowed_upstreams or []) if item}
+        candidates = [upstream_id for upstream_id in self._target_order if not allowed or upstream_id in allowed]
+        if not candidates:
+            return []
+        if self.routing_strategy == "random":
+            shuffled = list(candidates)
+            random.shuffle(shuffled)
+            return shuffled
+        start = next(self._round_robin)
+        return [candidates[(start + offset) % len(candidates)] for offset in range(len(candidates))]
+
+    def select_client(self, allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None) -> Any:
+        candidates = self._candidate_upstreams(allowed_upstreams)
+        if not candidates:
+            raise NoAvailableUpstream("No enabled upstream is available for this user")
+        return self._targets[candidates[0]].client_provider()
+
+    @staticmethod
+    def _copy_future_result(completed: asyncio.Future, future: asyncio.Future) -> None:
+        if future.done():
+            return
+        if completed.cancelled():
+            future.cancel()
+            return
+        exc = completed.exception()
+        if exc is not None:
+            future.set_exception(exc)
+            return
+        future.set_result(completed.result())
+
+    @staticmethod
+    def _dispatch_item_snapshot(item: DispatchQueueItem, now: float, position: int) -> dict[str, object]:
+        return {
+            "request_id": item.request_id,
+            "user_id": item.user_id,
+            "action": item.action,
+            "tier": item.tier,
+            "upstream_id": None,
+            "estimated_anlas_cost": item.estimated_cost,
+            "priority": item.priority,
+            "position": position,
+            "status": "dispatch_queued",
+            "queued_seconds": max(0, int(now - item.enqueued_at)),
+        }

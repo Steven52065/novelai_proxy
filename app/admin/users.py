@@ -13,6 +13,7 @@ from .common import (
     DEFAULT_ALLOWED_ENDPOINTS,
     row_to_dict,
     serialize_allowed_endpoints,
+    serialize_allowed_upstreams,
     templates,
     user_row_to_dict,
 )
@@ -27,6 +28,7 @@ class CreateUserRequest(BaseModel):
     tier: str = Field(default="normal", pattern="^(normal|vip)$")
     free_small_only: bool = False
     allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
+    allowed_upstreams: list[str] = Field(default_factory=list)
     anlas_total: int = Field(default=0, ge=0)
     reset_period: str = Field(default="month", pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -38,6 +40,7 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
     free_small_only: bool | None = None
     allowed_endpoints: list[str] | None = None
+    allowed_upstreams: list[str] | None = None
     anlas_total: int | None = Field(default=None, ge=0)
     reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -54,7 +57,7 @@ async def list_users(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.created_at,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.created_at,
                u.api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -76,8 +79,8 @@ async def create_user(payload: CreateUserRequest, request: Request):
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (api_key_hash, api_key, name, tier, is_active, free_small_only, allowed_endpoints, created_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            INSERT INTO users (api_key_hash, api_key, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams, created_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
             """,
             (
                 hash_api_key(api_key),
@@ -86,6 +89,7 @@ async def create_user(payload: CreateUserRequest, request: Request):
                 payload.tier,
                 1 if payload.free_small_only else 0,
                 serialize_allowed_endpoints(payload.allowed_endpoints),
+                serialize_allowed_upstreams(payload.allowed_upstreams),
                 now,
             ),
         )
@@ -114,6 +118,9 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
     if payload.allowed_endpoints is not None:
         fields.append("allowed_endpoints = ?")
         params.append(serialize_allowed_endpoints(payload.allowed_endpoints))
+    if payload.allowed_upstreams is not None:
+        fields.append("allowed_upstreams = ?")
+        params.append(serialize_allowed_upstreams(payload.allowed_upstreams))
     if fields:
         params.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
@@ -203,7 +210,7 @@ async def users_page(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.created_at,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.created_at,
                u.api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -222,6 +229,7 @@ async def users_page(request: Request):
             "active": "users",
             "users": [user_row_to_dict(row) for row in rows],
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
+            "upstream_choices": _upstream_choices(request),
         },
     )
 
@@ -236,6 +244,7 @@ async def create_user_form(
     reset_day: int | None = Form(None),
     free_small_only: str | None = Form(None),
     allowed_endpoints: list[str] | None = Form(None),
+    allowed_upstreams: list[str] | None = Form(None),
 ):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -248,6 +257,7 @@ async def create_user_form(
             reset_day=reset_day,
             free_small_only=free_small_only == "on",
             allowed_endpoints=allowed_endpoints or [DEFAULT_ALLOWED_ENDPOINTS],
+            allowed_upstreams=allowed_upstreams or [],
         ),
         request,
     )
@@ -261,7 +271,7 @@ async def user_edit_page(user_id: int, request: Request):
     db: Database = request.app.state.db
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.api_key,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
@@ -284,6 +294,7 @@ async def user_edit_page(user_id: int, request: Request):
             "user": user_row_to_dict(user),
             "rules": [row_to_dict(row) for row in rules],
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
+            "upstream_choices": _upstream_choices(request),
         },
     )
 
@@ -300,6 +311,7 @@ async def update_user_form(
     reset_day: int = Form(1),
     free_small_only: str | None = Form(None),
     allowed_endpoints: list[str] | None = Form(None),
+    allowed_upstreams: list[str] | None = Form(None),
 ):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
@@ -314,6 +326,7 @@ async def update_user_form(
             reset_period=reset_period,
             reset_day=reset_day,
             allowed_endpoints=allowed_endpoints or [DEFAULT_ALLOWED_ENDPOINTS],
+            allowed_upstreams=allowed_upstreams or [],
         ),
         request,
     )
@@ -382,3 +395,10 @@ async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: i
         return RedirectResponse("/admin/login", status_code=303)
     await delete_rate_limit_rule(rule_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+def _upstream_choices(request: Request) -> list[str]:
+    clients = getattr(request.app.state, "upstream_clients", None)
+    if isinstance(clients, dict) and clients:
+        return list(clients.keys())
+    return ["default"]

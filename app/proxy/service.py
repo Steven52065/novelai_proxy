@@ -10,7 +10,7 @@ from novelai_python._exceptions import APIError
 from ..auth import UserContext
 from ..config import LoggingConfig
 from ..logging_utils import json_dumps, logger
-from ..queue_manager import ProxyQueue, QueueFull
+from ..queue_manager import NoAvailableUpstream, QueueFull, RoutingProxyQueue
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
 from ..usage_logs import UsageLogCreate, UsageLogRepository
@@ -23,7 +23,7 @@ class ProxyTaskRequest:
     metadata: dict[str, Any]
     request_payload: dict[str, Any]
     estimated_cost: int
-    handler: Callable[[], Awaitable[bytes]]
+    handler: Callable[[Any], Awaitable[bytes]]
     free_small_only_allowed: bool = False
     process_zip_response: bool = True
 
@@ -46,7 +46,7 @@ class ProxyRequestService:
         *,
         rate_limiter: RateLimiter,
         quota_manager: QuotaManager,
-        proxy_queue: ProxyQueue,
+        proxy_queue: RoutingProxyQueue,
         usage_logs: UsageLogRepository,
         logging_config: LoggingConfig,
     ):
@@ -108,6 +108,7 @@ class ProxyRequestService:
                 estimated_cost=task.estimated_cost,
                 handler=task.handler,
                 process_zip_response=task.process_zip_response,
+                allowed_upstreams=task.user.allowed_upstreams,
             )
         except QueueFull:
             self.quota_manager.release(task.user.id, task.estimated_cost)
@@ -121,6 +122,19 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=503,
                 content={"message": "Queue full, please retry later"},
+            )
+        except NoAvailableUpstream as exc:
+            self.quota_manager.release(task.user.id, task.estimated_cost)
+            self.usage_logs.mark_rejected(
+                request_id,
+                error_code="no_available_upstream",
+                error_message=str(exc),
+                log_level="ERROR",
+            )
+            logger.error("no available upstream request_id=%s user_id=%s", request_id, task.user.id)
+            return ProxyTaskResult(
+                status_code=503,
+                content={"message": "No enabled upstream is available for this user"},
             )
         except APIError as exc:
             status_code = int(exc.code) if str(exc.code or "").isdigit() else 502

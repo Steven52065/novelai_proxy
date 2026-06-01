@@ -66,7 +66,7 @@ async def generate_image(
         request_payload=request_payload,
         estimated_cost=estimated_cost,
         free_small_only_allowed=cost_is_certainly_free,
-        handler=lambda: request.app.state.upstream.generate_image_payload_zip(request_payload),
+        handler=lambda upstream: upstream.generate_image_payload_zip(request_payload),
     )
 
 
@@ -93,7 +93,7 @@ async def upscale(
         },
         request_payload=dump_model_payload(req),
         estimated_cost=request.app.state.config.novelai.upscale_anlas_cost,
-        handler=lambda: request.app.state.upstream.upscale_zip(req),
+        handler=lambda upstream: upstream.upscale_zip(req),
     )
 
 
@@ -125,7 +125,7 @@ async def augment_image(
         },
         request_payload=dump_model_payload(req),
         estimated_cost=estimated_cost,
-        handler=lambda: request.app.state.upstream.augment_image_zip(req),
+        handler=lambda upstream: upstream.augment_image_zip(req),
     )
 
 
@@ -155,7 +155,7 @@ async def encode_vibe(
         },
         request_payload=payload,
         estimated_cost=IMAGE_ANLAS_PER_VIBE_ENCODING,
-        handler=lambda: request.app.state.upstream.encode_vibe_binary(payload),
+        handler=lambda upstream: upstream.encode_vibe_binary(payload),
         media_type="application/binary",
         process_zip_response=False,
     )
@@ -169,7 +169,7 @@ async def _submit_zip_task(
     metadata: dict[str, Any],
     request_payload: dict[str, Any],
     estimated_cost: int,
-    handler: Callable[[], Awaitable[bytes]],
+    handler: Callable[[Any], Awaitable[bytes]],
     free_small_only_allowed: bool = False,
 ):
     result = await _proxy_service(request).submit_zip(
@@ -195,7 +195,7 @@ async def _submit_binary_task(
     metadata: dict[str, Any],
     request_payload: dict[str, Any],
     estimated_cost: int,
-    handler: Callable[[], Awaitable[bytes]],
+    handler: Callable[[Any], Awaitable[bytes]],
     media_type: str,
     free_small_only_allowed: bool = False,
     response_headers: dict[str, str] | None = None,
@@ -230,15 +230,17 @@ async def suggest_tags(
     if endpoint_denied is not None:
         return endpoint_denied
 
-    del user
     try:
-        return await request.app.state.upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
+        upstream = request.app.state.proxy_queue.select_client(user.allowed_upstreams)
+        return await upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
     except APIError as exc:
         status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
         return JSONResponse(
             status_code=status_code,
             content=exc.response if isinstance(exc.response, dict) else {"message": exc.message},
         )
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={"message": str(exc)})
 
 
 @router.get("/ai/generate-image/suggest_tags")
