@@ -74,6 +74,7 @@ async def list_users(request: Request):
 async def create_user(payload: CreateUserRequest, request: Request):
     db: Database = request.app.state.db
     quota_manager: QuotaManager = request.app.state.quota_manager
+    _validate_allowed_upstreams(payload.allowed_upstreams, request)
     api_key = generate_api_key()
     now = utc_now_iso()
     with db.transaction() as conn:
@@ -101,6 +102,8 @@ async def create_user(payload: CreateUserRequest, request: Request):
 @api_router.patch("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def update_user(user_id: int, payload: UpdateUserRequest, request: Request):
     db: Database = request.app.state.db
+    if payload.allowed_upstreams is not None:
+        _validate_allowed_upstreams(payload.allowed_upstreams, request)
     fields = []
     params = []
     if payload.name is not None:
@@ -402,3 +405,15 @@ def _upstream_choices(request: Request) -> list[str]:
     if isinstance(clients, dict) and clients:
         return list(clients.keys())
     return ["default"]
+
+
+def _validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Request) -> None:
+    if not allowed_upstreams:
+        return
+    valid_upstreams = set(_upstream_choices(request))
+    unknown = sorted({item.strip() for item in allowed_upstreams if item.strip()} - valid_upstreams)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": f"Unknown upstream id: {', '.join(unknown)}"},
+        )

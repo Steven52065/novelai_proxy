@@ -231,6 +231,9 @@ async def suggest_tags(
         return endpoint_denied
 
     try:
+        # suggest-tags is kept as a lightweight compatibility endpoint for now:
+        # it only selects a user-allowed upstream client and does not enter the
+        # generation queue, so it is not protected by per-upstream queue delays.
         upstream = request.app.state.proxy_queue.select_client(user.allowed_upstreams)
         return await upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
     except APIError as exc:

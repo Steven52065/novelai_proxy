@@ -29,6 +29,9 @@ queue:
   # 每个上游 key 的本地等待队列最大长度。超过后调度层会尝试该用户允许的其他上游；
   # 如果全部允许的上游队列都满，新请求会返回 503。
   max_queue_size: 50
+  # 调度队列最大长度。留空时默认等于 max_queue_size * 已启用上游 key 数量。
+  # 该队列位于用户请求入口和各上游独立队列之间，用于避免突发请求无限堆积。
+  dispatch_max_queue_size:
   # 相邻两次发往 NovelAI 上游请求之间的随机间隔范围，单位秒。
   # 每次请求都会在 min 和 max 之间随机选择一个间隔；两者相同则为固定间隔。
   upstream_interval_min_seconds: 2

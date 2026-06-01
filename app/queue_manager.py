@@ -372,6 +372,7 @@ class RoutingProxyQueue:
         quota_manager: QuotaManager,
         usage_logs: UsageLogRepository,
         max_queue_size: int,
+        dispatch_max_queue_size: int | None = None,
         routing_strategy: Literal["round_robin", "random"] = "round_robin",
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
@@ -387,7 +388,9 @@ class RoutingProxyQueue:
         self._target_order = [target.id for target in enabled_targets]
         self._round_robin = itertools.count()
         self._sequence = itertools.count()
-        self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue()
+        if dispatch_max_queue_size is None:
+            dispatch_max_queue_size = max_queue_size * len(enabled_targets)
+        self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
         self._dispatch_running_item: DispatchQueueItem | None = None
         self._queues = {
@@ -483,24 +486,27 @@ class RoutingProxyQueue:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
-        self._dispatch_queue.put_nowait(
-            DispatchQueueItem(
-                priority=priority,
-                sequence=next(self._sequence),
-                enqueued_at=time.monotonic(),
-                request_id=request_id,
-                user_id=user_id,
-                action=action,
-                tier=tier,
-                estimated_cost=estimated_cost,
-                manage_quota=manage_quota,
-                logging_config=logging_config,
-                process_zip_response=process_zip_response,
-                allowed_upstreams=allowed_upstreams,
-                handler=handler,
-                future=future,
+        try:
+            self._dispatch_queue.put_nowait(
+                DispatchQueueItem(
+                    priority=priority,
+                    sequence=next(self._sequence),
+                    enqueued_at=time.monotonic(),
+                    request_id=request_id,
+                    user_id=user_id,
+                    action=action,
+                    tier=tier,
+                    estimated_cost=estimated_cost,
+                    manage_quota=manage_quota,
+                    logging_config=logging_config,
+                    process_zip_response=process_zip_response,
+                    allowed_upstreams=allowed_upstreams,
+                    handler=handler,
+                    future=future,
+                )
             )
-        )
+        except asyncio.QueueFull as exc:
+            raise QueueFull from exc
         return await future
 
     async def _run_dispatcher(self) -> None:

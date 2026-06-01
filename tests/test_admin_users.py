@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from helpers import write_test_config
+from helpers import write_test_config, write_test_config_with_upstreams
 
 
 def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
@@ -71,3 +71,31 @@ def test_admin_can_copy_and_reset_user_key(tmp_path: Path, monkeypatch):
         users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
         updated = next(row for row in users if row["id"] == user_id)
         assert updated["api_key"] == new_key
+
+
+def test_admin_rejects_unknown_allowed_upstream(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "bad-upstream", "tier": "normal", "anlas_total": 100, "allowed_upstreams": ["missing"]},
+        )
+        assert create_resp.status_code == 400
+        assert create_resp.json()["message"] == "Unknown upstream id: missing"
+
+        ok_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "good-upstream", "tier": "normal", "anlas_total": 100, "allowed_upstreams": ["opus-a"]},
+        )
+        user_id = ok_resp.json()["user_id"]
+        update_resp = client.patch(
+            f"/admin/api/users/{user_id}",
+            auth=("admin", "admin123"),
+            json={"allowed_upstreams": ["missing"]},
+        )
+        assert update_resp.status_code == 400
+        assert update_resp.json()["message"] == "Unknown upstream id: missing"

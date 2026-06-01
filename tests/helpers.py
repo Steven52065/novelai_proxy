@@ -201,6 +201,7 @@ def write_test_config_with_upstreams(
     tmp_path: Path,
     upstream_ids: list[str],
     max_queue_size: int = 2,
+    dispatch_max_queue_size: int | None = None,
     routing_strategy: str = "round_robin",
     upstream_interval_min_seconds: float = 0,
 ) -> Path:
@@ -210,6 +211,7 @@ def write_test_config_with_upstreams(
         f"    - id: {upstream_id}\n      api_key: \"\"\n      enabled: true"
         for upstream_id in upstream_ids
     )
+    dispatch_max_queue_size_yaml = "" if dispatch_max_queue_size is None else f"  dispatch_max_queue_size: {dispatch_max_queue_size}\n"
     config_path.write_text(
         f"""
 admin:
@@ -221,6 +223,7 @@ server:
 queue:
   max_concurrent_upstream: 1
   max_queue_size: {max_queue_size}
+{dispatch_max_queue_size_yaml.rstrip()}
   upstream_interval_min_seconds: {upstream_interval_min_seconds}
   upstream_interval_max_seconds: {upstream_interval_min_seconds}
   upstream_error_extra_delay_seconds: 0

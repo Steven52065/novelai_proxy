@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import threading
 import time
@@ -16,6 +17,7 @@ from helpers import (
     write_test_config,
     write_test_config_with_upstreams,
 )
+from app.queue_manager import QueueFull, RoutingProxyQueue, UpstreamQueueTarget
 
 
 def test_queue_waits_between_upstream_requests(tmp_path: Path, monkeypatch):
@@ -233,3 +235,61 @@ def test_routing_tries_other_allowed_upstream_when_selected_queue_is_full(tmp_pa
             release_a.set()
             assert running.result(timeout=3).status_code == 201
             assert queued.result(timeout=3).status_code == 201
+
+
+def test_dispatch_queue_default_size_is_sum_of_upstream_queue_sizes():
+    queue = RoutingProxyQueue(
+        targets=[
+            UpstreamQueueTarget(id="opus-a", client_provider=FakeUpstream),
+            UpstreamQueueTarget(id="opus-b", client_provider=FakeUpstream),
+            UpstreamQueueTarget(id="opus-c", client_provider=FakeUpstream),
+        ],
+        quota_manager=object(),
+        usage_logs=object(),
+        max_queue_size=7,
+    )
+
+    assert queue._dispatch_queue.maxsize == 21
+
+
+def test_dispatch_queue_full_raises_queue_full():
+    async def run_test():
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=FakeUpstream)],
+            quota_manager=object(),
+            usage_logs=object(),
+            max_queue_size=10,
+            dispatch_max_queue_size=1,
+        )
+        first = asyncio.create_task(
+            queue.submit(
+                request_id="queued",
+                user_id=1,
+                tier="normal",
+                action="generate",
+                logging_config=object(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip(PAYLOAD),
+            )
+        )
+        await asyncio.sleep(0)
+        try:
+            try:
+                await queue.submit(
+                    request_id="overflow",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip(PAYLOAD),
+                )
+            except QueueFull:
+                pass
+            else:
+                raise AssertionError("expected QueueFull")
+        finally:
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+
+    asyncio.run(run_test())
