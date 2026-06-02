@@ -46,6 +46,11 @@ class UpstreamQueueTarget:
     client_provider: Callable[[], Any]
 
 
+@dataclass
+class AdaptiveUpstreamScore:
+    score: float
+
+
 @dataclass(order=True)
 class DispatchQueueItem:
     priority: int
@@ -382,7 +387,10 @@ class RoutingProxyQueue:
         usage_logs: UsageLogRepository,
         max_queue_size: int,
         dispatch_max_queue_size: int | None = None,
-        routing_strategy: Literal["round_robin", "random"] = "round_robin",
+        routing_strategy: Literal["round_robin", "random", "adaptive_weighted_random"] = "round_robin",
+        adaptive_initial_score: float = 0.8,
+        adaptive_alpha: float = 0.4,
+        adaptive_min_weight: float = 0.15,
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
@@ -397,6 +405,13 @@ class RoutingProxyQueue:
         self._target_order = [target.id for target in enabled_targets]
         self._round_robin = itertools.count()
         self._sequence = itertools.count()
+        self._adaptive_alpha = max(0.0, min(1.0, float(adaptive_alpha)))
+        self._adaptive_min_weight = max(0.0, float(adaptive_min_weight))
+        initial_score = max(0.0, min(1.0, float(adaptive_initial_score)))
+        self._adaptive_scores = {
+            target.id: AdaptiveUpstreamScore(score=initial_score)
+            for target in enabled_targets
+        }
         if dispatch_max_queue_size is None:
             dispatch_max_queue_size = max_queue_size * len(enabled_targets)
         self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
@@ -557,6 +572,9 @@ class RoutingProxyQueue:
                 errors.append(exc)
                 continue
             upstream_future.add_done_callback(lambda completed, future=item.future: self._copy_future_result(completed, future))
+            upstream_future.add_done_callback(
+                lambda completed, upstream_id=upstream_id: self._record_adaptive_result(upstream_id, completed)
+            )
             return
         if errors:
             raise QueueFull from errors[-1]
@@ -576,6 +594,8 @@ class RoutingProxyQueue:
             shuffled = list(candidates)
             random.shuffle(shuffled)
             return shuffled
+        if self.routing_strategy == "adaptive_weighted_random" and advance_round_robin:
+            return self._weighted_random_candidates(candidates)
         start = next(self._round_robin) if advance_round_robin else 0
         return [candidates[(start + offset) % len(candidates)] for offset in range(len(candidates))]
 
@@ -584,6 +604,42 @@ class RoutingProxyQueue:
         if not candidates:
             raise NoAvailableUpstream("No enabled upstream is available for this user")
         return self._targets[candidates[0]].client_provider()
+
+    def _record_adaptive_result(self, upstream_id: str, completed: asyncio.Future) -> None:
+        if self.routing_strategy != "adaptive_weighted_random" or completed.cancelled():
+            return
+        score = self._adaptive_scores.get(upstream_id)
+        if score is None:
+            return
+        success_value = 0.0 if completed.exception() is not None else 1.0
+        score.score = score.score * (1.0 - self._adaptive_alpha) + success_value * self._adaptive_alpha
+
+    def _weighted_random_candidates(self, candidates: list[str]) -> list[str]:
+        remaining = list(candidates)
+        ordered = []
+        while remaining:
+            weights = [self._adaptive_weight(upstream_id) for upstream_id in remaining]
+            total_weight = sum(weights)
+            if total_weight <= 0:
+                random.shuffle(remaining)
+                ordered.extend(remaining)
+                break
+            cursor = random.uniform(0, total_weight)
+            running = 0.0
+            selected_index = len(remaining) - 1
+            for index, weight in enumerate(weights):
+                running += weight
+                if cursor <= running:
+                    selected_index = index
+                    break
+            ordered.append(remaining.pop(selected_index))
+        return ordered
+
+    def _adaptive_weight(self, upstream_id: str) -> float:
+        score = self._adaptive_scores.get(upstream_id)
+        if score is None:
+            return self._adaptive_min_weight
+        return self._adaptive_min_weight + score.score
 
     @staticmethod
     def _copy_future_result(completed: asyncio.Future, future: asyncio.Future) -> None:

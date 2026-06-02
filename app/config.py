@@ -59,8 +59,15 @@ class NovelAIConfig(BaseModel):
         return self
 
 
+class AdaptiveRoutingConfig(BaseModel):
+    initial_score: float = Field(default=0.8, ge=0, le=1)
+    alpha: float = Field(default=0.4, gt=0, le=1)
+    min_weight: float = Field(default=0.15, ge=0)
+
+
 class RoutingConfig(BaseModel):
-    strategy: Literal["round_robin", "random"] = "round_robin"
+    strategy: Literal["round_robin", "random", "adaptive_weighted_random"] = "round_robin"
+    adaptive: AdaptiveRoutingConfig = Field(default_factory=AdaptiveRoutingConfig)
 
 
 class DatabaseConfig(BaseModel):

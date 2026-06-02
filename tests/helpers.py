@@ -206,6 +206,7 @@ def write_test_config_with_upstreams(
     dispatch_max_queue_size: int | None = None,
     routing_strategy: str = "round_robin",
     upstream_interval_min_seconds: float = 0,
+    routing_adaptive_yaml: str = "",
 ) -> Path:
     db_path = tmp_path / "test.db"
     config_path = tmp_path / "config.yaml"
@@ -231,6 +232,7 @@ queue:
   upstream_error_extra_delay_seconds: 0
 routing:
   strategy: {routing_strategy}
+{routing_adaptive_yaml.rstrip()}
 novelai:
   upstreams:
 {upstreams_yaml}

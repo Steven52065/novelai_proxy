@@ -385,6 +385,74 @@ def test_dispatch_queue_full_raises_queue_full():
     asyncio.run(run_test())
 
 
+def test_adaptive_weighted_random_lowers_failed_upstream_weight(monkeypatch):
+    async def run_test():
+        queue = RoutingProxyQueue(
+            targets=[
+                UpstreamQueueTarget(id="opus-a", client_provider=FakeUpstream),
+                UpstreamQueueTarget(id="opus-b", client_provider=FakeUpstream),
+            ],
+            quota_manager=object(),
+            usage_logs=object(),
+            max_queue_size=10,
+            routing_strategy="adaptive_weighted_random",
+            adaptive_initial_score=0.8,
+            adaptive_alpha=0.5,
+            adaptive_min_weight=0.15,
+        )
+        monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.56)
+
+        assert queue._candidate_upstreams(None, advance_round_robin=True)[0] == "opus-a"
+
+        failed = asyncio.get_running_loop().create_future()
+        failed.set_exception(RuntimeError("upstream failed"))
+        queue._record_adaptive_result("opus-a", failed)
+
+        assert queue._candidate_upstreams(None, advance_round_robin=True)[0] == "opus-b"
+
+    asyncio.run(run_test())
+
+
+def test_adaptive_weighted_random_keeps_minimum_weight_for_failed_upstream(monkeypatch):
+    queue = RoutingProxyQueue(
+        targets=[
+            UpstreamQueueTarget(id="opus-a", client_provider=FakeUpstream),
+            UpstreamQueueTarget(id="opus-b", client_provider=FakeUpstream),
+        ],
+        quota_manager=object(),
+        usage_logs=object(),
+        max_queue_size=10,
+        routing_strategy="adaptive_weighted_random",
+        adaptive_initial_score=0,
+        adaptive_alpha=0.5,
+        adaptive_min_weight=0.15,
+    )
+    queue._adaptive_scores["opus-b"].score = 1
+    monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.1)
+
+    assert queue._candidate_upstreams(None, advance_round_robin=True)[0] == "opus-a"
+
+
+def test_select_client_does_not_use_adaptive_weighted_random_for_query_routes(monkeypatch):
+    queue = RoutingProxyQueue(
+        targets=[
+            UpstreamQueueTarget(id="opus-a", client_provider=lambda: "client-a"),
+            UpstreamQueueTarget(id="opus-b", client_provider=lambda: "client-b"),
+        ],
+        quota_manager=object(),
+        usage_logs=object(),
+        max_queue_size=10,
+        routing_strategy="adaptive_weighted_random",
+        adaptive_initial_score=0,
+        adaptive_alpha=0.5,
+        adaptive_min_weight=0.15,
+    )
+    queue._adaptive_scores["opus-b"].score = 1
+    monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.2)
+
+    assert queue.select_client() == "client-a"
+
+
 def _queued_user_names(client: TestClient) -> list[str]:
     queue = client.get("/admin/api/queue", auth=("admin", "admin123")).json()
     return [item["user_name"] for item in queue["queued"]]
