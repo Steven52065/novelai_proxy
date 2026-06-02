@@ -24,14 +24,14 @@
       <i data-lucide="activity" style="width: 16px; height: 16px; stroke: #3b82f6;"></i>
       今日生成请求
     </span>
-    <strong>{{ stats.today_requests }}</strong>
+    <strong id="stat-today-requests">{{ stats.today_requests }}</strong>
   </div>
   <div>
     <span>
       <i data-lucide="coins" style="width: 16px; height: 16px; stroke: #10b981;"></i>
       累计消耗 Anlas
     </span>
-    <strong>{{ stats.total_anlas }}</strong>
+    <strong id="stat-total-anlas">{{ stats.total_anlas }}</strong>
   </div>
   <div>
     <span>
@@ -134,6 +134,38 @@
       </thead>
       <tbody id="queue-body">
         <tr class="empty-row"><td colspan="9" class="muted" style="text-align: center; padding: 32px 0;">正在加载队列数据...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-head" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
+    <div>
+      <h2 style="font-size: 18px; font-weight: 700;">
+        <i data-lucide="sliders-horizontal" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        上游渠道权重
+      </h2>
+      <p class="muted" style="margin-top: 4px;">自适应分流权重与上游状态，自动每 2 秒更新一次</p>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <span id="weights-strategy-badge" class="badge badge-normal" style="font-size: 11px;">加载中...</span>
+      <span id="weights-updated" class="muted" style="font-size: 13px; font-weight: 500;"></span>
+    </div>
+  </div>
+  <div class="table-wrap" style="margin-top: 20px;">
+    <table>
+      <thead>
+        <tr>
+          <th>上游渠道</th>
+          <th>当前权重</th>
+          <th>成功评分</th>
+          <th>排队数量</th>
+          <th>运行状态</th>
+        </tr>
+      </thead>
+      <tbody id="weights-body">
+        <tr class="empty-row"><td colspan="5" class="muted" style="text-align: center; padding: 32px 0;">正在加载权重数据...</td></tr>
       </tbody>
     </table>
   </div>
@@ -591,12 +623,126 @@
 
   upstreamFilter.addEventListener("change", refreshQueue);
 
+  // ---- Stats auto-refresh ----
+  const statTodayRequests = document.getElementById("stat-today-requests");
+  const statTotalAnlas = document.getElementById("stat-total-anlas");
+
+  async function refreshStats() {
+    try {
+      const response = await fetch("/admin/api/stats", {headers: {"Accept": "application/json"}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (statTodayRequests) statTodayRequests.textContent = data.today_requests;
+      if (statTotalAnlas) statTotalAnlas.textContent = data.total_anlas;
+      // queue-size is updated by refreshQueue to avoid a race between the two fetches
+      if (queueSize) queueSize.textContent = data.queue_size;
+    } catch (error) {
+      // silently keep previous values on transient errors
+    }
+  }
+
+  // ---- Upstream weights auto-refresh ----
+  const weightsBody = document.getElementById("weights-body");
+  const weightsStrategyBadge = document.getElementById("weights-strategy-badge");
+  const weightsUpdated = document.getElementById("weights-updated");
+
+  function renderWeights(data) {
+    const strategyLabels = {
+      "round_robin": "轮询",
+      "random": "随机",
+      "adaptive_weighted_random": "自适应加权随机",
+    };
+    if (weightsStrategyBadge) {
+      weightsStrategyBadge.textContent = strategyLabels[data.strategy] || data.strategy;
+    }
+    if (weightsUpdated) {
+      weightsUpdated.textContent = `最后同步 ${new Date().toLocaleTimeString()}`;
+    }
+    if (!weightsBody) return;
+
+    weightsBody.replaceChildren();
+    const upstreams = data.upstreams || [];
+
+    if (upstreams.length === 0) {
+      const row = document.createElement("tr");
+      row.className = "empty-row";
+      const cell = document.createElement("td");
+      cell.colSpan = 5;
+      cell.style.textAlign = "center";
+      cell.className = "muted";
+      cell.innerHTML = `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 24px 0; gap:8px;">
+        <i data-lucide="inbox" style="width:32px; height:32px; stroke:#64748b;"></i>
+        <span>暂无上游渠道数据</span>
+      </div>`;
+      row.appendChild(cell);
+      weightsBody.appendChild(row);
+      lucide.createIcons();
+      return;
+    }
+
+    const maxWeight = Math.max(...upstreams.map(function(u) { return u.weight; }), 0.001);
+
+    for (var i = 0; i < upstreams.length; i++) {
+      var u = upstreams[i];
+      var row = document.createElement("tr");
+
+      // Upstream name
+      appendCell(row, "<code style=\"font-weight:600;\">" + u.id + "</code>", "mono");
+
+      // Weight bar
+      var percentage = maxWeight > 0 ? (u.weight / maxWeight * 100) : 0;
+      var weightCell = document.createElement("td");
+      weightCell.innerHTML = "<div style=\"display:flex; align-items:center; gap:8px;\">" +
+        "<div style=\"flex:1; height:8px; background:rgba(255,255,255,0.06); border-radius:4px; overflow:hidden;\">" +
+        "<div style=\"height:100%; width:" + percentage.toFixed(1) + "%; background:linear-gradient(90deg, #6366f1, #a5b4fc); border-radius:4px; transition: width 0.5s ease;\"></div>" +
+        "</div>" +
+        "<span style=\"font-weight:700; font-size:13px; min-width:48px; text-align:right; color:#e2e8f0;\">" + u.weight.toFixed(3) + "</span>" +
+        "</div>";
+      row.appendChild(weightCell);
+
+      // Score with color coding
+      var scoreColor = u.score >= 0.7 ? "#34d399" : u.score >= 0.4 ? "#f59e0b" : "#ef4444";
+      var scoreCell = document.createElement("td");
+      scoreCell.innerHTML = "<span style=\"font-weight:600; color:" + scoreColor + ";\">" + u.score.toFixed(3) + "</span>";
+      row.appendChild(scoreCell);
+
+      // Queue size
+      appendCell(row, "<span style=\"font-weight:500;\">" + u.queue_size + "</span>");
+
+      // Running status
+      var runningHtml = u.running
+        ? "<span class=\"status-pill status-running\">执行中</span>"
+        : "<span class=\"status-pill\">空闲</span>";
+      appendCell(row, runningHtml);
+
+      weightsBody.appendChild(row);
+    }
+
+    lucide.createIcons();
+  }
+
+  async function refreshUpstreamWeights() {
+    try {
+      const response = await fetch("/admin/api/upstream-weights", {headers: {"Accept": "application/json"}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      renderWeights(await response.json());
+    } catch (error) {
+      if (weightsUpdated) weightsUpdated.textContent = "同步失败";
+    }
+  }
+
   try {
     renderQueue(JSON.parse(initialQueue.textContent));
   } catch (error) {
     refreshQueue();
   }
-  setInterval(refreshQueue, 2000);
+  refreshStats();
+  refreshUpstreamWeights();
+  setInterval(function() {
+    refreshQueue();
+    refreshStats();
+    refreshUpstreamWeights();
+  }, 2000);
 })();
 </script>
 {% endblock %}

@@ -32,6 +32,34 @@ async def request_trends(request: Request, upstream_id: str | None = None):
     return _request_trend_stats(db, upstream_id=_normalize_upstream_filter(request, upstream_id))
 
 
+@api_router.get("/stats", dependencies=[Depends(require_admin_or_session)])
+async def admin_stats(request: Request):
+    db: Database = request.app.state.db
+    today_start, today_end = local_day_range(datetime.now(DISPLAY_TIMEZONE))
+    today_requests = db.query_one(
+        """
+        SELECT COUNT(*) AS c
+        FROM usage_logs
+        WHERE datetime(created_at) >= datetime(?)
+          AND datetime(created_at) < datetime(?)
+        """,
+        (to_utc_iso(today_start), to_utc_iso(today_end)),
+    )["c"]
+    total_anlas = db.query_one(
+        "SELECT COALESCE(SUM(final_anlas_cost), 0) AS c FROM usage_logs WHERE status = 'success'"
+    )["c"]
+    return {
+        "today_requests": today_requests,
+        "total_anlas": total_anlas,
+        "queue_size": request.app.state.proxy_queue.qsize(),
+    }
+
+
+@api_router.get("/upstream-weights", dependencies=[Depends(require_admin_or_session)])
+async def upstream_weights(request: Request):
+    return request.app.state.proxy_queue.get_weights()
+
+
 @web_router.get("", response_class=HTMLResponse)
 async def dashboard_alias(request: Request):
     return await dashboard(request)

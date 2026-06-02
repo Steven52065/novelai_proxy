@@ -495,6 +495,23 @@ class RoutingProxyQueue:
             "upstreams": upstream_snapshots,
         }
 
+    def get_weights(self) -> dict[str, object]:
+        upstreams = []
+        for upstream_id in self._target_order:
+            score = self._adaptive_scores.get(upstream_id)
+            weight = self._adaptive_weight(upstream_id)
+            upstreams.append({
+                "id": upstream_id,
+                "score": round(score.score, 4) if score else 0.0,
+                "weight": round(weight, 4),
+                "queue_size": self._queues[upstream_id].qsize(),
+                "running": self._queues[upstream_id]._running_item is not None,
+            })
+        return {
+            "strategy": self.routing_strategy,
+            "upstreams": upstreams,
+        }
+
     async def submit(
         self,
         *,
