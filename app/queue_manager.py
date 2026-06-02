@@ -91,7 +91,7 @@ class ProxyQueue:
         if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
             raise ValueError("upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
         self.upstream_error_extra_delay_seconds = max(0.0, float(upstream_error_extra_delay_seconds))
-        self._last_upstream_started_at: float | None = None
+        self._last_upstream_completed_at: float | None = None
         self._last_upstream_interval_seconds = 0.0
         self._apply_error_extra_delay_next = False
         self._sequence = itertools.count()
@@ -227,7 +227,11 @@ class ProxyQueue:
                 )
                 await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
+                # 记录请求完成时间（成功情况）
+                self._last_upstream_completed_at = time.monotonic()
             except Exception as exc:
+                # 记录请求完成时间（失败情况）
+                self._last_upstream_completed_at = time.monotonic()
                 if isinstance(exc, APIError):
                     self._apply_error_extra_delay_next = True
                 if item.manage_quota:
@@ -288,23 +292,25 @@ class ProxyQueue:
         interval = self._next_upstream_interval()
         extra_delay = self.upstream_error_extra_delay_seconds if self._apply_error_extra_delay_next else 0.0
         self._apply_error_extra_delay_next = False
-        required_interval = interval + extra_delay
-        if required_interval <= 0 or self._last_upstream_started_at is None:
-            self._last_upstream_started_at = time.monotonic()
+        required_delay = interval + extra_delay
+        if required_delay <= 0:
             self._last_upstream_interval_seconds = interval
             return
-        elapsed = time.monotonic() - self._last_upstream_started_at
-        delay = required_interval - elapsed
+        if self._last_upstream_completed_at is None:
+            # 首次请求，无需等待
+            self._last_upstream_interval_seconds = interval
+            return
+        elapsed = time.monotonic() - self._last_upstream_completed_at
+        delay = required_delay - elapsed
         if delay > 0:
             logger.info(
-                "proxy request waiting before upstream request_id=%s delay_seconds=%.3f interval_seconds=%.3f error_extra_delay_seconds=%.3f",
+                "proxy request waiting after last completion request_id=%s delay_seconds=%.3f interval_seconds=%.3f error_extra_delay_seconds=%.3f",
                 request_id,
                 delay,
                 interval,
                 extra_delay,
             )
             await asyncio.sleep(delay)
-        self._last_upstream_started_at = time.monotonic()
         self._last_upstream_interval_seconds = interval
 
     def _next_upstream_interval(self) -> float:
