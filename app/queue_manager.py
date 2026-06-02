@@ -92,7 +92,6 @@ class ProxyQueue:
             raise ValueError("upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
         self.upstream_error_extra_delay_seconds = max(0.0, float(upstream_error_extra_delay_seconds))
         self._last_upstream_completed_at: float | None = None
-        self._last_upstream_interval_seconds = 0.0
         self._apply_error_extra_delay_next = False
         self._sequence = itertools.count()
         self._worker: asyncio.Task | None = None
@@ -294,11 +293,9 @@ class ProxyQueue:
         self._apply_error_extra_delay_next = False
         required_delay = interval + extra_delay
         if required_delay <= 0:
-            self._last_upstream_interval_seconds = interval
             return
         if self._last_upstream_completed_at is None:
             # 首次请求，无需等待
-            self._last_upstream_interval_seconds = interval
             return
         elapsed = time.monotonic() - self._last_upstream_completed_at
         delay = required_delay - elapsed
@@ -311,7 +308,6 @@ class ProxyQueue:
                 extra_delay,
             )
             await asyncio.sleep(delay)
-        self._last_upstream_interval_seconds = interval
 
     def _next_upstream_interval(self) -> float:
         if self.upstream_interval_max_seconds == self.upstream_interval_min_seconds:

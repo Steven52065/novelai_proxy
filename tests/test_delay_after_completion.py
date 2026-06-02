@@ -13,9 +13,9 @@ import time
 
 async def simulate_upstream_request(request_id: str, duration: float) -> bytes:
     """模拟上游请求"""
-    print(f"[{time.time():.2f}] 请求 {request_id} 开始发送到上游")
+    print(f"[{time.monotonic():.2f}] 请求 {request_id} 开始发送到上游")
     await asyncio.sleep(duration)
-    print(f"[{time.time():.2f}] 请求 {request_id} 完成，耗时 {duration} 秒")
+    print(f"[{time.monotonic():.2f}] 请求 {request_id} 完成，耗时 {duration} 秒")
     return b"result"
 
 
@@ -35,7 +35,7 @@ class MockProxyQueue:
         result = await simulate_upstream_request(request_id, upstream_duration)
 
         # 记录完成时间
-        self._last_upstream_completed_at = time.time()
+        self._last_upstream_completed_at = time.monotonic()
 
         return result
 
@@ -46,17 +46,17 @@ class MockProxyQueue:
 
         if self._last_upstream_completed_at is None:
             # 首次请求，无需等待
-            print(f"[{time.time():.2f}] 请求 {request_id} 是首次请求，无需等待")
+            print(f"[{time.monotonic():.2f}] 请求 {request_id} 是首次请求，无需等待")
             return
 
-        elapsed = time.time() - self._last_upstream_completed_at
+        elapsed = time.monotonic() - self._last_upstream_completed_at
         delay = self.interval - elapsed
 
         if delay > 0:
-            print(f"[{time.time():.2f}] 请求 {request_id} 等待 {delay:.2f} 秒（上次完成后已过 {elapsed:.2f} 秒）")
+            print(f"[{time.monotonic():.2f}] 请求 {request_id} 等待 {delay:.2f} 秒（上次完成后已过 {elapsed:.2f} 秒）")
             await asyncio.sleep(delay)
         else:
-            print(f"[{time.time():.2f}] 请求 {request_id} 无需等待（上次完成后已过 {elapsed:.2f} 秒 > 要求的 {self.interval} 秒）")
+            print(f"[{time.monotonic():.2f}] 请求 {request_id} 无需等待（上次完成后已过 {elapsed:.2f} 秒 > 要求的 {self.interval} 秒）")
 
 
 async def test_delay_after_completion():
@@ -67,20 +67,20 @@ async def test_delay_after_completion():
     print("=" * 80)
 
     queue = MockProxyQueue(interval=5.0)
-    start_time = time.time()
+    start_time = time.monotonic()
 
     # 请求 A：耗时 20 秒
-    print(f"\n[{time.time() - start_time:.2f}] 提交请求 A（耗时 20 秒）")
+    print(f"\n[{time.monotonic() - start_time:.2f}] 提交请求 A（耗时 20 秒）")
     await queue.submit_request("A", 20.0)
 
-    time_after_a = time.time() - start_time
+    time_after_a = time.monotonic() - start_time
     print(f"\n[{time_after_a:.2f}] 请求 A 完成，现在提交请求 B")
 
     # 请求 B：耗时 2 秒
-    print(f"[{time.time() - start_time:.2f}] 提交请求 B（耗时 2 秒）")
+    print(f"[{time.monotonic() - start_time:.2f}] 提交请求 B（耗时 2 秒）")
     await queue.submit_request("B", 2.0)
 
-    time_after_b = time.time() - start_time
+    time_after_b = time.monotonic() - start_time
 
     print("\n" + "=" * 80)
     print("测试结果：")
@@ -107,25 +107,25 @@ async def test_delay_with_queue_idle():
     print("=" * 80)
 
     queue = MockProxyQueue(interval=5.0)
-    start_time = time.time()
+    start_time = time.monotonic()
 
     # 请求 A：耗时 2 秒
-    print(f"\n[{time.time() - start_time:.2f}] 提交请求 A（耗时 2 秒）")
+    print(f"\n[{time.monotonic() - start_time:.2f}] 提交请求 A（耗时 2 秒）")
     await queue.submit_request("A", 2.0)
 
-    time_after_a = time.time() - start_time
+    time_after_a = time.monotonic() - start_time
     print(f"\n[{time_after_a:.2f}] 请求 A 完成，等待 10 秒模拟队列空闲")
 
     # 模拟队列空闲 10 秒
     await asyncio.sleep(10.0)
 
-    time_after_idle = time.time() - start_time
+    time_after_idle = time.monotonic() - start_time
     print(f"\n[{time_after_idle:.2f}] 队列空闲 10 秒后，提交请求 B")
 
     # 请求 B：耗时 2 秒
     await queue.submit_request("B", 2.0)
 
-    time_after_b = time.time() - start_time
+    time_after_b = time.monotonic() - start_time
 
     print("\n" + "=" * 80)
     print("测试结果：")
