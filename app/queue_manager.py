@@ -38,6 +38,7 @@ class QueueItem:
     process_zip_response: bool = field(compare=False)
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
+    is_retry_success: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class DispatchQueueItem:
     allowed_upstreams: frozenset[str] | set[str] | list[str] | None = field(compare=False)
     handler: Callable[[Any], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
+    has_retried_429: bool = field(default=False, compare=False)
 
 
 class ProxyQueue:
@@ -79,6 +81,7 @@ class ProxyQueue:
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
+        retry_429_queue_length_threshold: int = 3,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
         self.upstream_id = upstream_id
@@ -91,6 +94,7 @@ class ProxyQueue:
         if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
             raise ValueError("upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
         self.upstream_error_extra_delay_seconds = max(0.0, float(upstream_error_extra_delay_seconds))
+        self.retry_429_queue_length_threshold = int(retry_429_queue_length_threshold)
         self._last_upstream_completed_at: float | None = None
         self._apply_error_extra_delay_next = False
         self._sequence = itertools.count()
@@ -155,6 +159,7 @@ class ProxyQueue:
         priority_override: int | None = None,
         sequence_override: int | None = None,
         manage_quota: bool = True,
+        is_retry_success: bool = False,
     ) -> asyncio.Future:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
@@ -175,6 +180,7 @@ class ProxyQueue:
             process_zip_response=process_zip_response,
             handler=handler,
             future=future,
+            is_retry_success=is_retry_success,
         )
         try:
             self.queue.put_nowait(item)
@@ -231,6 +237,33 @@ class ProxyQueue:
             except Exception as exc:
                 # 记录请求完成时间（失败情况）
                 self._last_upstream_completed_at = time.monotonic()
+
+                # 检查是否为 429 错误且应该重试
+                if isinstance(exc, APIError) and str(exc.code) == "429":
+                    should_retry = self._should_retry_429()
+                    if should_retry:
+                        # 将 429 错误标记到日志，但状态仍为 failed
+                        code, message = self._error_details(exc)
+                        self.usage_logs.mark_failed(
+                            item.request_id,
+                            queued_ms=queued_ms,
+                            error_code=code,
+                            error_message=message,
+                        )
+                        logger.warning(
+                            "proxy request 429 error, will retry request_id=%s queue_size=%s threshold=%s",
+                            item.request_id,
+                            self.queue.qsize(),
+                            self.retry_429_queue_length_threshold,
+                        )
+                        # 抛出 Retry429Error 让上层重新分配
+                        if not item.future.done():
+                            item.future.set_exception(Retry429Error(exc))
+                        self._running_item = None
+                        self._running_started_at = None
+                        self.queue.task_done()
+                        continue
+
                 if isinstance(exc, APIError):
                     self._apply_error_extra_delay_next = True
                 if item.manage_quota:
@@ -265,12 +298,16 @@ class ProxyQueue:
                     queued_ms=queued_ms,
                     final_cost=item.estimated_cost,
                     output_files=saved_files,
+                    is_retry_success=item.is_retry_success,
                 )
+                log_color = "white" if item.is_retry_success else "default"
                 logger.info(
-                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s",
+                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s is_retry_success=%s log_color=%s",
                     item.request_id,
                     item.estimated_cost,
                     len(saved_files),
+                    item.is_retry_success,
+                    log_color,
                 )
                 if not item.future.done():
                     item.future.set_result(payload)
@@ -286,6 +323,12 @@ class ProxyQueue:
         if isinstance(exc, APIError):
             return str(exc.code or "upstream_error"), exc.message
         return exc.__class__.__name__, str(exc)
+
+    def _should_retry_429(self) -> bool:
+        """检查当前队列状态是否允许重试 429 错误"""
+        if self.retry_429_queue_length_threshold < 0:
+            return False
+        return self.queue.qsize() <= self.retry_429_queue_length_threshold
 
     async def _wait_for_upstream_interval(self, request_id: str) -> None:
         interval = self._next_upstream_interval()
@@ -374,6 +417,13 @@ class NoAvailableUpstream(Exception):
     pass
 
 
+class Retry429Error(Exception):
+    """Raised when a 429 error should be retried at the routing layer."""
+    def __init__(self, original_error: APIError):
+        self.original_error = original_error
+        super().__init__(str(original_error))
+
+
 def _without_sequence(item: dict[str, object]) -> dict[str, object]:
     clean = dict(item)
     clean.pop("sequence", None)
@@ -396,8 +446,10 @@ class RoutingProxyQueue:
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
+        retry_429_queue_length_threshold: int = 3,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
+        self._quota_manager = quota_manager
         enabled_targets = [target for target in targets if target.id]
         if not enabled_targets:
             raise ValueError("at least one upstream target is required")
@@ -428,6 +480,7 @@ class RoutingProxyQueue:
                 upstream_interval_min_seconds=upstream_interval_min_seconds,
                 upstream_interval_max_seconds=upstream_interval_max_seconds,
                 upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
+                retry_429_queue_length_threshold=retry_429_queue_length_threshold,
                 image_hosting=image_hosting,
             )
             for target in enabled_targets
@@ -560,7 +613,7 @@ class RoutingProxyQueue:
             item = await self._dispatch_queue.get()
             self._dispatch_running_item = item
             try:
-                self._dispatch_to_upstream(item)
+                await self._dispatch_to_upstream(item)
             except Exception as exc:
                 if not item.future.done():
                     item.future.set_exception(exc)
@@ -568,33 +621,87 @@ class RoutingProxyQueue:
                 self._dispatch_running_item = None
                 self._dispatch_queue.task_done()
 
-    def _dispatch_to_upstream(self, item: DispatchQueueItem) -> None:
+    async def _dispatch_to_upstream(self, item: DispatchQueueItem) -> None:
         errors = []
-        for upstream_id in self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=True):
-            target = self._targets[upstream_id]
-            queue = self._queues[upstream_id]
-            try:
-                upstream_future = queue.enqueue(
-                    request_id=item.request_id,
-                    user_id=item.user_id,
-                    tier=item.tier,
-                    action=item.action,
-                    logging_config=item.logging_config,
-                    estimated_cost=item.estimated_cost,
-                    handler=lambda target=target: item.handler(target.client_provider()),
-                    process_zip_response=item.process_zip_response,
-                    priority_override=item.priority,
-                    sequence_override=item.sequence,
-                    manage_quota=item.manage_quota,
+        excluded_upstreams = set()
+        max_retries = 5  # 最多尝试 5 次（包括初次尝试）
+        last_429_error: APIError | None = None
+
+        for attempt in range(max_retries):
+            candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=(attempt == 0))
+            # 排除已经返回 429 的上游
+            candidates = [uid for uid in candidates if uid not in excluded_upstreams]
+
+            if not candidates:
+                break
+
+            for upstream_id in candidates:
+                target = self._targets[upstream_id]
+                queue = self._queues[upstream_id]
+                try:
+                    upstream_future = queue.enqueue(
+                        request_id=item.request_id,
+                        user_id=item.user_id,
+                        tier=item.tier,
+                        action=item.action,
+                        logging_config=item.logging_config,
+                        estimated_cost=item.estimated_cost,
+                        handler=lambda target=target: item.handler(target.client_provider()),
+                        process_zip_response=item.process_zip_response,
+                        priority_override=item.priority,
+                        sequence_override=item.sequence,
+                        manage_quota=item.manage_quota,
+                        is_retry_success=item.has_retried_429,
+                    )
+                except QueueFull as exc:
+                    errors.append(exc)
+                    continue
+
+                # 设置回调记录自适应结果
+                upstream_future.add_done_callback(
+                    lambda completed, upstream_id=upstream_id: self._record_adaptive_result(upstream_id, completed)
                 )
-            except QueueFull as exc:
-                errors.append(exc)
+
+                # 等待上游队列执行完成
+                try:
+                    result = await upstream_future
+                    # 成功，直接设置结果并返回
+                    if not item.future.done():
+                        item.future.set_result(result)
+                    return
+                except Retry429Error as exc:
+                    # 记录这个上游返回了 429，排除它，继续尝试其他上游
+                    excluded_upstreams.add(upstream_id)
+                    item.has_retried_429 = True
+                    if last_429_error is None:
+                        last_429_error = exc.original_error
+                    logger.info(
+                        "proxy request 429 retry attempt=%s excluded_count=%s request_id=%s upstream_id=%s",
+                        attempt + 1,
+                        len(excluded_upstreams),
+                        item.request_id,
+                        upstream_id,
+                    )
+                    # 跳出内层循环，重新选择候选上游
+                    break
+                except Exception as exc:
+                    # 其他异常直接抛出
+                    if not item.future.done():
+                        item.future.set_exception(exc)
+                    return
+            else:
+                # 所有候选上游队列都满了
                 continue
-            upstream_future.add_done_callback(lambda completed, future=item.future: self._copy_future_result(completed, future))
-            upstream_future.add_done_callback(
-                lambda completed, upstream_id=upstream_id: self._record_adaptive_result(upstream_id, completed)
-            )
-            return
+
+            # 如果是因为 429 跳出的，继续外层循环重试
+            continue
+
+        # 所有重试都失败了
+        # 如果是因为所有上游都返回 429，传播原始 429 错误
+        if last_429_error is not None:
+            if item.manage_quota:
+                self._quota_manager.release(item.user_id, item.estimated_cost)
+            raise last_429_error
         if errors:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("No enabled upstream is available for this user")

@@ -106,6 +106,7 @@ class UsageLogRepository:
         final_cost: int,
         output_files: list[dict[str, object]],
         image_urls: list[dict[str, object]] | None = None,
+        is_retry_success: bool = False,
     ) -> None:
         self.db.execute(
             """
@@ -115,6 +116,7 @@ class UsageLogRepository:
                 final_anlas_cost = ?,
                 output_files = ?,
                 image_urls = COALESCE(image_urls, ?),
+                is_retry_success = ?,
                 completed_at = ?
             WHERE request_id = ?
             """,
@@ -123,6 +125,7 @@ class UsageLogRepository:
                 final_cost,
                 json_dumps(output_files),
                 json_dumps([] if image_urls is None else image_urls),
+                1 if is_retry_success else 0,
                 utc_now_iso(),
                 request_id,
             ),
