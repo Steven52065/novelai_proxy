@@ -193,6 +193,52 @@ def test_admin_dashboard_websocket_sends_snapshot_for_session(tmp_path: Path, mo
         assert body["request_trends"] is None
 
 
+def test_admin_dashboard_websocket_sends_heartbeat_when_idle(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    import app.admin.dashboard as dashboard_module
+    from app.main import app
+
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_WS_HEARTBEAT_SECONDS", 0.05)
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        with client.websocket_connect("/admin/ws/dashboard", headers={"Origin": "http://testserver"}) as websocket:
+            assert websocket.receive_json()["type"] == "dashboard.snapshot"
+            heartbeat = websocket.receive_json()
+
+        assert heartbeat["type"] == "dashboard.heartbeat"
+        assert "stats" not in heartbeat
+        assert "queue" not in heartbeat
+        assert "upstream_weights" not in heartbeat
+
+
+def test_admin_dashboard_websocket_sends_snapshot_after_data_change(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        with client.websocket_connect("/admin/ws/dashboard", headers={"Origin": "http://testserver"}) as websocket:
+            first = websocket.receive_json()
+            assert first["type"] == "dashboard.snapshot"
+            assert first["stats"]["total_users"] == 0
+
+            create_resp = client.post(
+                "/admin/api/users",
+                auth=("admin", "admin123"),
+                json={"name": "ws-user", "tier": "normal", "anlas_total": 100},
+            )
+            assert create_resp.status_code == 200
+            changed = websocket.receive_json()
+
+        assert changed["type"] == "dashboard.snapshot"
+        assert changed["stats"]["total_users"] == 1
+
+
 def test_admin_dashboard_websocket_rejects_cross_origin(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

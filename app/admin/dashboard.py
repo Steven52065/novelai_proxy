@@ -21,6 +21,7 @@ from .common import (
 
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin")
+DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
 
 
 @api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
@@ -75,25 +76,62 @@ async def dashboard_ws(websocket: WebSocket):
         await websocket.close(code=1008)
         return
     await websocket.accept()
+    event_bus = getattr(websocket.app.state, "dashboard_events", None)
+    last_version = event_bus.version if event_bus is not None else 0
     last_state = None
+    receive_task = None
+    event_task = None
     try:
+        payload = dashboard_snapshot_payload(websocket, queue_upstream_id=queue_upstream_id, include_trends=False)
+        last_state = _dashboard_snapshot_state(payload)
+        await websocket.send_json(payload)
+        receive_task = asyncio.create_task(websocket.receive_text())
         while True:
-            payload = dashboard_snapshot_payload(websocket, queue_upstream_id=queue_upstream_id, include_trends=False)
-            current_state = {
-                "stats": payload["stats"],
-                "queue": _stable_queue_state(payload["queue"]),
-                "upstream_weights": payload["upstream_weights"],
-                "request_trends": payload["request_trends"],
-            }
-            if current_state != last_state:
-                await websocket.send_json(payload)
-                last_state = current_state
-            try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=2)
-            except asyncio.TimeoutError:
-                pass
+            event_task = (
+                asyncio.create_task(event_bus.wait_for_change(last_version, DASHBOARD_WS_HEARTBEAT_SECONDS))
+                if event_bus is not None
+                else asyncio.create_task(asyncio.sleep(DASHBOARD_WS_HEARTBEAT_SECONDS, result=last_version))
+            )
+            done, pending = await asyncio.wait(
+                [receive_task, event_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if receive_task in done:
+                receive_task.result()
+                receive_task = asyncio.create_task(websocket.receive_text())
+                if event_task not in done:
+                    event_task.cancel()
+                    await asyncio.gather(event_task, return_exceptions=True)
+                    continue
+
+            if event_task in done:
+                next_version = event_task.result()
+                if next_version != last_version:
+                    last_version = next_version
+                    payload = dashboard_snapshot_payload(websocket, queue_upstream_id=queue_upstream_id, include_trends=False)
+                    current_state = _dashboard_snapshot_state(payload)
+                    if current_state != last_state:
+                        await websocket.send_json(payload)
+                        last_state = current_state
+                    continue
+
+            await websocket.send_json(
+                {
+                    "type": "dashboard.heartbeat",
+                    "server_time": datetime.now(DISPLAY_TIMEZONE).isoformat(),
+                    "version": last_version,
+                }
+            )
     except WebSocketDisconnect:
         return
+    finally:
+        if receive_task is not None and not receive_task.done():
+            receive_task.cancel()
+            await asyncio.gather(receive_task, return_exceptions=True)
+        if event_task is not None and not event_task.done():
+            event_task.cancel()
+            await asyncio.gather(event_task, return_exceptions=True)
 
 
 @web_router.get("/", response_class=HTMLResponse)
@@ -190,6 +228,15 @@ def _stable_queue_state(queue: dict) -> dict:
         snapshot["running_items"] = [_stable_queue_item(item) for item in snapshot["running_items"]]
     snapshot["queued"] = [_stable_queue_item(item) for item in snapshot.get("queued", [])]
     return snapshot
+
+
+def _dashboard_snapshot_state(payload: dict) -> dict:
+    return {
+        "stats": payload["stats"],
+        "queue": _stable_queue_state(payload["queue"]),
+        "upstream_weights": payload["upstream_weights"],
+        "request_trends": payload["request_trends"],
+    }
 
 
 def _stable_queue_item(item: dict) -> dict:

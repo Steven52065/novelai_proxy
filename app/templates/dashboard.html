@@ -6,8 +6,8 @@
     系统仪表盘
   </h1>
   <div style="display: flex; align-items: center; gap: 8px;">
-    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 99px; background: #10b981; box-shadow: 0 0 10px #10b981; animation: pulse-glow 1.5s infinite alternate;"></span>
-    <span class="muted" id="queue-updated" style="font-size: 13px; font-weight: 500;">数据同步中...</span>
+    <span id="dashboard-ws-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 99px; background: #f59e0b; box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);"></span>
+    <span class="muted" id="dashboard-ws-status" style="font-size: 13px; font-weight: 500;">WS 连接中...</span>
   </div>
 </div>
 
@@ -106,7 +106,7 @@
         <i data-lucide="list-ordered" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
         生成队列状态
       </h2>
-      <p class="muted" style="margin-top: 4px;">当前上游并发处理队列，自动每 2 秒更新一次</p>
+      <p class="muted" style="margin-top: 4px;">当前上游并发处理队列，数据变化时实时推送，空闲时仅保持心跳</p>
     </div>
     <div class="dashboard-controls">
       <label class="inline-filter">
@@ -151,11 +151,10 @@
         <i data-lucide="sliders-horizontal" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
         上游渠道权重
       </h2>
-      <p class="muted" style="margin-top: 4px;">自适应分流权重与上游状态，自动每 2 秒更新一次</p>
+      <p class="muted" style="margin-top: 4px;">自适应分流权重与上游状态，数据变化时实时推送，空闲时仅保持心跳</p>
     </div>
     <div style="display: flex; align-items: center; gap: 10px;">
       <span id="weights-strategy-badge" class="badge badge-normal" style="font-size: 11px;">加载中...</span>
-      <span id="weights-updated" class="muted" style="font-size: 13px; font-weight: 500;"></span>
     </div>
   </div>
   <div class="table-wrap" style="margin-top: 20px;">
@@ -187,7 +186,6 @@
   const empty = document.getElementById("trend-empty");
   const trendsEl = document.getElementById("request-trends");
   const upstreamFilter = document.getElementById("trend-upstream-filter");
-  const syncStatus = document.getElementById("queue-updated");
   const rangeButtons = document.querySelectorAll("[data-trend-range]");
   const totalRequests = document.getElementById("trend-total-requests");
   const totalFailed = document.getElementById("trend-total-failed");
@@ -473,7 +471,7 @@
       trends = await response.json();
       renderTrend(activeRange);
     } catch (error) {
-      syncStatus.textContent = "请求趋势同步失败";
+      console.error("请求趋势同步失败", error);
     }
   }
 
@@ -486,7 +484,8 @@
 (() => {
   const queueSize = document.getElementById("queue-size");
   const queueBody = document.getElementById("queue-body");
-  const queueUpdated = document.getElementById("queue-updated");
+  const wsStatus = document.getElementById("dashboard-ws-status");
+  const wsStatusDot = document.getElementById("dashboard-ws-dot");
   const runningState = document.getElementById("queue-running-state");
   const initialQueue = document.getElementById("initial-queue");
   const initialWeights = document.getElementById("initial-upstream-weights");
@@ -571,7 +570,6 @@
       runningState.className = "status-pill";
     }
     
-    queueUpdated.textContent = `最后同步 ${new Date().toLocaleTimeString()}`;
     queueBody.replaceChildren();
     
     if (rows.length === 0) {
@@ -643,7 +641,6 @@
   // ---- Upstream weights rendering ----
   const weightsBody = document.getElementById("weights-body");
   const weightsStrategyBadge = document.getElementById("weights-strategy-badge");
-  const weightsUpdated = document.getElementById("weights-updated");
 
   function renderWeights(data) {
     const strategyLabels = {
@@ -653,9 +650,6 @@
     };
     if (weightsStrategyBadge) {
       weightsStrategyBadge.textContent = strategyLabels[data.strategy] || data.strategy;
-    }
-    if (weightsUpdated) {
-      weightsUpdated.textContent = `最后同步 ${new Date().toLocaleTimeString()}`;
     }
     if (!weightsBody) return;
 
@@ -727,7 +721,7 @@
   }
 
   function applyDashboardSnapshot(snapshot) {
-    if (!snapshot) return;
+    if (!snapshot || snapshot.type !== "dashboard.snapshot") return;
     const stats = snapshot.stats || {};
     if (statTotalUsers && stats.total_users !== undefined) statTotalUsers.textContent = stats.total_users;
     if (statTodayRequests && stats.today_requests !== undefined) statTodayRequests.textContent = stats.today_requests;
@@ -743,11 +737,25 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       applyDashboardSnapshot(await response.json());
     } catch (error) {
-      queueUpdated.textContent = "同步失败，正在重试...";
+      setWsStatus("fallback", "WS 已断开，降级同步中");
       runningState.textContent = "异常";
       runningState.className = "status-pill status-error";
-      if (weightsUpdated) weightsUpdated.textContent = "同步失败";
     }
+  }
+
+  function setWsStatus(state, text) {
+    if (wsStatus) wsStatus.textContent = text;
+    if (!wsStatusDot) return;
+    const styles = {
+      connected: ["#10b981", "rgba(16, 185, 129, 0.6)", "pulse-glow 1.5s infinite alternate"],
+      connecting: ["#f59e0b", "rgba(245, 158, 11, 0.45)", ""],
+      fallback: ["#f59e0b", "rgba(245, 158, 11, 0.45)", ""],
+      error: ["#ef4444", "rgba(239, 68, 68, 0.45)", ""],
+    };
+    const [background, shadow, animation] = styles[state] || styles.connecting;
+    wsStatusDot.style.background = background;
+    wsStatusDot.style.boxShadow = `0 0 10px ${shadow}`;
+    wsStatusDot.style.animation = animation;
   }
 
   function dashboardWebSocketUrl() {
@@ -760,7 +768,7 @@
   function startDashboardFallback() {
     window.clearInterval(dashboardFallbackTimer);
     fetchDashboardSnapshot();
-    dashboardFallbackTimer = window.setInterval(fetchDashboardSnapshot, 2000);
+    dashboardFallbackTimer = window.setInterval(fetchDashboardSnapshot, 15000);
   }
 
   function stopDashboardFallback() {
@@ -776,15 +784,25 @@
   function connectDashboardSocket() {
     window.clearTimeout(dashboardReconnectTimer);
     if (!("WebSocket" in window)) {
+      setWsStatus("fallback", "浏览器不支持 WS，降级同步中");
       startDashboardFallback();
       return;
     }
+    setWsStatus("connecting", "WS 连接中...");
     const socket = new WebSocket(dashboardWebSocketUrl());
     dashboardSocket = socket;
-    socket.addEventListener("open", stopDashboardFallback);
+    socket.addEventListener("open", () => {
+      stopDashboardFallback();
+      setWsStatus("connected", "WS 已连接");
+    });
     socket.addEventListener("message", (event) => {
       try {
-        applyDashboardSnapshot(JSON.parse(event.data));
+        const message = JSON.parse(event.data);
+        if (message.type === "dashboard.heartbeat") {
+          setWsStatus("connected", "WS 已连接");
+          return;
+        }
+        applyDashboardSnapshot(message);
       } catch (error) {
         // Ignore malformed transient frames; the next snapshot will correct the UI.
       }
@@ -792,10 +810,12 @@
     socket.addEventListener("close", () => {
       if (dashboardSocket !== socket) return;
       dashboardSocket = null;
+      setWsStatus("fallback", "WS 已断开，正在重连...");
       startDashboardFallback();
       scheduleDashboardReconnect();
     });
     socket.addEventListener("error", () => {
+      setWsStatus("error", "WS 连接异常");
       socket.close();
     });
   }

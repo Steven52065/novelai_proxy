@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from sqlite3 import Row
+from collections.abc import Callable
 from typing import Any
 
 from .database import Database, utc_now_iso
@@ -29,8 +30,9 @@ class UsageLogCreate:
 class UsageLogRepository:
     """Centralizes usage_logs writes so status transitions stay consistent."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, on_change: Callable[[], None] | None = None):
         self.db = db
+        self._on_change = on_change
 
     def insert_queued(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
         self.db.execute(
@@ -60,6 +62,7 @@ class UsageLogRepository:
                 utc_now_iso(),
             ),
         )
+        self._notify_change()
 
     def insert_rejected(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
         self.db.execute(
@@ -89,6 +92,7 @@ class UsageLogRepository:
                 utc_now_iso(),
             ),
         )
+        self._notify_change()
 
     def mark_running(self, request_id: str, queued_ms: int, upstream_id: str | None = None, attempt_number: int = 0) -> None:
         self.db.execute(
@@ -99,6 +103,7 @@ class UsageLogRepository:
             """,
             (queued_ms, upstream_id, request_id, attempt_number),
         )
+        self._notify_change()
 
     def mark_success(
         self,
@@ -136,6 +141,7 @@ class UsageLogRepository:
                 attempt_number,
             ),
         )
+        self._notify_change()
 
     def mark_failed(self, request_id: str, *, queued_ms: int, error_code: str, error_message: str, attempt_number: int = 0) -> None:
         self.db.execute(
@@ -151,6 +157,7 @@ class UsageLogRepository:
             """,
             (queued_ms, error_code, error_message[:500], utc_now_iso(), request_id, attempt_number),
         )
+        self._notify_change()
 
     def mark_rejected(
         self,
@@ -173,6 +180,7 @@ class UsageLogRepository:
             """,
             (error_code, error_message, log_level, utc_now_iso(), request_id, attempt_number),
         )
+        self._notify_change()
 
     def update_image_urls(self, request_id: str, image_urls: list[dict[str, object]], attempt_number: int = 0) -> None:
         self.db.execute(
@@ -183,6 +191,7 @@ class UsageLogRepository:
             """,
             (json_dumps(image_urls), request_id, attempt_number),
         )
+        self._notify_change()
 
     def insert_retry_attempt(
         self,
@@ -224,6 +233,7 @@ class UsageLogRepository:
                     utc_now_iso(),
                 ),
             )
+            self._notify_change()
         elif request_id is not None:
             # 方式 2：从数据库复制 attempt_number=0 的记录
             self.db.execute(
@@ -240,6 +250,7 @@ class UsageLogRepository:
                 """,
                 (attempt_number, upstream_id, utc_now_iso(), request_id),
             )
+            self._notify_change()
         else:
             raise ValueError("Must provide either log or request_id")
 
@@ -316,3 +327,7 @@ class UsageLogRepository:
     @staticmethod
     def _payload_json(payload: dict[str, Any] | None) -> str | None:
         return None if payload is None else json_dumps(payload)
+
+    def _notify_change(self) -> None:
+        if self._on_change is not None:
+            self._on_change()

@@ -89,6 +89,7 @@ class ProxyQueue:
         retry_429_queue_length_threshold: int = 3,
         get_total_queue_length: callable | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
+        on_change: Callable[[], None] | None = None,
     ):
         self.upstream_id = upstream_id
         self.quota_manager = quota_manager
@@ -109,6 +110,7 @@ class ProxyQueue:
         self._image_upload_tasks: set[asyncio.Task] = set()
         self._running_item: QueueItem | None = None
         self._running_started_at: float | None = None
+        self._on_change = on_change
 
     def start(self) -> None:
         if self._worker is None or self._worker.done():
@@ -216,6 +218,7 @@ class ProxyQueue:
                 self.queue.put_nowait(item)
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
+        self._notify_change()
         return future
 
     async def submit(
@@ -251,6 +254,7 @@ class ProxyQueue:
             item = await self.queue.get()
             self._running_item = item
             self._running_started_at = time.monotonic()
+            self._notify_change()
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
             try:
                 if item.cancel_future is not None and item.cancel_future.done():
@@ -377,6 +381,7 @@ class ProxyQueue:
                 self._running_item = None
                 self._running_started_at = None
                 self.queue.task_done()
+                self._notify_change()
                 await asyncio.sleep(0)
 
     @staticmethod
@@ -474,6 +479,10 @@ class ProxyQueue:
             "queued_seconds": max(0, int(now - item.enqueued_at)),
         }
 
+    def _notify_change(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
+
 
 class QueueFull(Exception):
     pass
@@ -519,6 +528,7 @@ class RoutingProxyQueue:
         retry_429_queue_length_threshold: int = 3,
         retry_429_max_attempts: int = 5,
         image_hosting: ImageHostingServiceLike | None = None,
+        on_change: Callable[[], None] | None = None,
     ):
         self._quota_manager = quota_manager
         self._usage_logs = usage_logs
@@ -544,6 +554,7 @@ class RoutingProxyQueue:
         self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
         self._dispatch_running_item: DispatchQueueItem | None = None
+        self._on_change = on_change
         self._queues = {
             target.id: ProxyQueue(
                 upstream_id=target.id,
@@ -556,6 +567,7 @@ class RoutingProxyQueue:
                 retry_429_queue_length_threshold=retry_429_queue_length_threshold,
                 get_total_queue_length=self._get_total_queue_length,
                 image_hosting=image_hosting,
+                on_change=on_change,
             )
             for target in enabled_targets
         }
@@ -684,6 +696,7 @@ class RoutingProxyQueue:
             )
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
+        self._notify_change()
         try:
             return await future
         except asyncio.CancelledError:
@@ -694,6 +707,7 @@ class RoutingProxyQueue:
         while True:
             item = await self._dispatch_queue.get()
             self._dispatch_running_item = item
+            self._notify_change()
             try:
                 if item.future.done():
                     if item.manage_quota:
@@ -712,6 +726,7 @@ class RoutingProxyQueue:
             finally:
                 self._dispatch_running_item = None
                 self._dispatch_queue.task_done()
+                self._notify_change()
 
     def _dispatch_to_upstream(
         self,
@@ -845,6 +860,8 @@ class RoutingProxyQueue:
                 next_attempt_number,
             )
             self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
+        else:
+            self._notify_change()
 
     def _finish_unavailable_dispatch(
         self,
@@ -904,7 +921,10 @@ class RoutingProxyQueue:
         if score is None:
             return
         success_value = 0.0 if completed.exception() is not None else 1.0
-        score.score = score.score * (1.0 - self._adaptive_alpha) + success_value * self._adaptive_alpha
+        next_score = score.score * (1.0 - self._adaptive_alpha) + success_value * self._adaptive_alpha
+        if next_score != score.score:
+            score.score = next_score
+            self._notify_change()
 
     def _weighted_random_candidates(self, candidates: list[str]) -> list[str]:
         remaining = list(candidates)
@@ -932,6 +952,10 @@ class RoutingProxyQueue:
         if score is None:
             return self._adaptive_min_weight
         return self._adaptive_min_weight + score.score
+
+    def _notify_change(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
 
     @staticmethod
     def _copy_future_result(completed: asyncio.Future, future: asyncio.Future) -> None:

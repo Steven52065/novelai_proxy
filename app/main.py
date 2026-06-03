@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from .admin.routes import router as admin_router, set_admin_session_cookie, valid_admin_session
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
+from .dashboard_events import DashboardEventBus
 from .database import Database
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
@@ -36,8 +37,9 @@ async def lifespan(app: FastAPI):
     configure_logging(config.logging)
     db = Database(config.database.path)
     db.init_schema()
+    dashboard_events = DashboardEventBus()
     quota_manager = QuotaManager(db)
-    usage_logs = UsageLogRepository(db)
+    usage_logs = UsageLogRepository(db, on_change=dashboard_events.notify_nowait)
     upstream_clients = _build_upstream_clients(config)
     default_upstream_id = next(iter(upstream_clients))
     upstream = upstream_clients[default_upstream_id]
@@ -65,9 +67,11 @@ async def lifespan(app: FastAPI):
         retry_429_queue_length_threshold=config.queue.retry_429_queue_length_threshold,
         retry_429_max_attempts=config.queue.retry_429_max_attempts,
         image_hosting=ImageHostingService(config.image_hosting),
+        on_change=dashboard_events.notify_nowait,
     )
 
     app.state.config = config
+    app.state.dashboard_events = dashboard_events
     app.state.db = db
     app.state.quota_manager = quota_manager
     app.state.usage_logs = usage_logs

@@ -96,6 +96,7 @@ async def create_user(payload: CreateUserRequest, request: Request):
         )
         user_id = int(cursor.lastrowid)
     quota_manager.create_or_update(user_id, payload.anlas_total, payload.reset_period, payload.reset_day)
+    _notify_dashboard_change(request)
     return {"user_id": user_id, "api_key": api_key}
 
 
@@ -142,6 +143,8 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
     if quota_fields:
         quota_params.append(user_id)
         db.execute(f"UPDATE user_anlas_quota SET {', '.join(quota_fields)} WHERE user_id = ?", tuple(quota_params))
+    if fields or quota_fields:
+        _notify_dashboard_change(request)
     return {"ok": True}
 
 
@@ -149,6 +152,7 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
 async def delete_user(user_id: int, request: Request):
     db: Database = request.app.state.db
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    _notify_dashboard_change(request)
     return {"ok": True}
 
 
@@ -417,3 +421,9 @@ def _validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Re
             status_code=400,
             detail={"message": f"Unknown upstream id: {', '.join(unknown)}"},
         )
+
+
+def _notify_dashboard_change(request: Request) -> None:
+    event_bus = getattr(request.app.state, "dashboard_events", None)
+    if event_bus is not None:
+        event_bus.notify_nowait()
