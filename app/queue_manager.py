@@ -165,6 +165,14 @@ class ProxyQueue:
         is_retry_success: bool = False,
         attempt_number: int = 0,
     ) -> asyncio.Future:
+        # 如果是重试（attempt_number > 0），先插入新的数据库记录
+        if attempt_number > 0:
+            self.usage_logs.insert_retry_attempt(
+                request_id=request_id,
+                attempt_number=attempt_number,
+                upstream_id=self.upstream_id,
+            )
+
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10

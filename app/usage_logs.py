@@ -186,36 +186,62 @@ class UsageLogRepository:
 
     def insert_retry_attempt(
         self,
-        log: UsageLogCreate,
+        log: UsageLogCreate | None = None,
         *,
+        request_id: str | None = None,
         attempt_number: int,
         upstream_id: str | None = None,
     ) -> None:
-        """为重试尝试插入新的数据库记录（状态为 running）"""
-        self.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+        """为重试尝试插入新的数据库记录（状态为 running）
+
+        可以通过两种方式调用：
+        1. 传入 log 对象（用于测试或有完整信息时）
+        2. 传入 request_id，从数据库复制 attempt_number=0 的记录（用于重试时）
+        """
+        if log is not None:
+            # 方式 1：使用提供的 log 对象
+            self.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
+                    estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'INFO', ?, ?, ?)
+                """,
+                (
+                    log.request_id,
+                    attempt_number,
+                    log.user_id,
+                    log.action,
+                    log.model,
+                    log.width,
+                    log.height,
+                    log.steps,
+                    log.n_samples,
+                    int(log.estimated_anlas_cost),
+                    upstream_id,
+                    self._payload_json(log.request_payload),
+                    utc_now_iso(),
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'INFO', ?, ?, ?)
-            """,
-            (
-                log.request_id,
-                attempt_number,
-                log.user_id,
-                log.action,
-                log.model,
-                log.width,
-                log.height,
-                log.steps,
-                log.n_samples,
-                int(log.estimated_anlas_cost),
-                upstream_id,
-                self._payload_json(log.request_payload),
-                utc_now_iso(),
-            ),
-        )
+        elif request_id is not None:
+            # 方式 2：从数据库复制 attempt_number=0 的记录
+            self.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
+                    estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+                )
+                SELECT
+                    request_id, ?, user_id, action, model, width, height, steps, n_samples,
+                    estimated_anlas_cost, 'running', 'INFO', ?, request_payload, ?
+                FROM usage_logs
+                WHERE request_id = ? AND attempt_number = 0
+                """,
+                (attempt_number, upstream_id, utc_now_iso(), request_id),
+            )
+        else:
+            raise ValueError("Must provide either log or request_id")
 
     def get_by_request_id(self, request_id: str) -> Row | None:
         return self.db.query_one(
