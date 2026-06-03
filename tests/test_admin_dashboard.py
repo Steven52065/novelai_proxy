@@ -139,6 +139,58 @@ def test_admin_request_trends_can_filter_by_upstream(tmp_path: Path, monkeypatch
         assert filtered_resp.json()["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 0, "retry_success": 1}
 
 
+def test_admin_dashboard_snapshot_api_combines_ui_data(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "snapshot-user", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, final_anlas_cost, status, log_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("snapshot-success", user_id, "generate", 5, 5, "success", "INFO", datetime.now(timezone.utc).isoformat()),
+        )
+
+        resp = client.get("/admin/api/dashboard", auth=("admin", "admin123"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["type"] == "dashboard.snapshot"
+        assert body["stats"]["total_users"] == 1
+        assert body["stats"]["today_requests"] == 1
+        assert body["stats"]["total_anlas"] == 5
+        assert "queue" in body
+        assert "upstream_weights" in body
+        assert body["request_trends"] is None
+
+
+def test_admin_dashboard_websocket_sends_snapshot_for_session(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        with client.websocket_connect("/admin/ws/dashboard") as websocket:
+            body = websocket.receive_json()
+
+        assert body["type"] == "dashboard.snapshot"
+        assert "stats" in body
+        assert "queue" in body
+        assert "upstream_weights" in body
+        assert body["request_trends"] is None
+
+
 def test_admin_queue_status_can_filter_by_upstream(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
     from app.main import app

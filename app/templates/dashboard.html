@@ -17,7 +17,7 @@
       <i data-lucide="users" style="width: 16px; height: 16px; stroke: #6366f1;"></i>
       用户总数
     </span>
-    <strong>{{ stats.total_users }}</strong>
+    <strong id="stat-total-users">{{ stats.total_users }}</strong>
   </div>
   <div>
     <span>
@@ -177,6 +177,7 @@
 </section>
 
 <script id="initial-queue" type="application/json">{{ queue | tojson }}</script>
+<script id="initial-upstream-weights" type="application/json">{{ upstream_weights | tojson }}</script>
 <script id="request-trends" type="application/json">{{ request_trends | tojson }}</script>
 <script>
 (() => {
@@ -477,6 +478,7 @@
   }
 
   upstreamFilter.addEventListener("change", refreshTrends);
+  window.setInterval(refreshTrends, 60 * 60 * 1000);
   renderTrend("today");
 })();
 </script>
@@ -487,7 +489,14 @@
   const queueUpdated = document.getElementById("queue-updated");
   const runningState = document.getElementById("queue-running-state");
   const initialQueue = document.getElementById("initial-queue");
+  const initialWeights = document.getElementById("initial-upstream-weights");
   const upstreamFilter = document.getElementById("queue-upstream-filter");
+  const statTotalUsers = document.getElementById("stat-total-users");
+  const statTodayRequests = document.getElementById("stat-today-requests");
+  const statTotalAnlas = document.getElementById("stat-total-anlas");
+  let dashboardSocket = null;
+  let dashboardFallbackTimer = null;
+  let dashboardReconnectTimer = null;
 
   function formatSeconds(seconds) {
     const value = Number(seconds || 0);
@@ -615,41 +624,7 @@
     lucide.createIcons();
   }
 
-  async function refreshQueue() {
-    try {
-      const params = new URLSearchParams();
-      if (upstreamFilter.value) params.set("upstream_id", upstreamFilter.value);
-      const response = await fetch(`/admin/api/queue?${params.toString()}`, {headers: {"Accept": "application/json"}});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      renderQueue(await response.json());
-    } catch (error) {
-      queueUpdated.textContent = "同步失败，正在重试...";
-      runningState.textContent = "异常";
-      runningState.className = "status-pill status-error";
-    }
-  }
-
-  upstreamFilter.addEventListener("change", refreshQueue);
-
-  // ---- Stats auto-refresh ----
-  const statTodayRequests = document.getElementById("stat-today-requests");
-  const statTotalAnlas = document.getElementById("stat-total-anlas");
-
-  async function refreshStats() {
-    try {
-      const response = await fetch("/admin/api/stats", {headers: {"Accept": "application/json"}});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      if (statTodayRequests) statTodayRequests.textContent = data.today_requests;
-      if (statTotalAnlas) statTotalAnlas.textContent = data.total_anlas;
-      // queue-size is updated by refreshQueue to avoid a race between the two fetches
-      if (queueSize) queueSize.textContent = data.queue_size;
-    } catch (error) {
-      // silently keep previous values on transient errors
-    }
-  }
-
-  // ---- Upstream weights auto-refresh ----
+  // ---- Upstream weights rendering ----
   const weightsBody = document.getElementById("weights-body");
   const weightsStrategyBadge = document.getElementById("weights-strategy-badge");
   const weightsUpdated = document.getElementById("weights-updated");
@@ -729,28 +704,106 @@
     lucide.createIcons();
   }
 
-  async function refreshUpstreamWeights() {
+  function dashboardQueryParams() {
+    const params = new URLSearchParams();
+    if (upstreamFilter.value) params.set("queue_upstream_id", upstreamFilter.value);
+    return params;
+  }
+
+  function applyDashboardSnapshot(snapshot) {
+    if (!snapshot) return;
+    const stats = snapshot.stats || {};
+    if (statTotalUsers && stats.total_users !== undefined) statTotalUsers.textContent = stats.total_users;
+    if (statTodayRequests && stats.today_requests !== undefined) statTodayRequests.textContent = stats.today_requests;
+    if (statTotalAnlas && stats.total_anlas !== undefined) statTotalAnlas.textContent = stats.total_anlas;
+    if (snapshot.queue) renderQueue(snapshot.queue);
+    if (snapshot.upstream_weights) renderWeights(snapshot.upstream_weights);
+  }
+
+  async function fetchDashboardSnapshot() {
     try {
-      const response = await fetch("/admin/api/upstream-weights", {headers: {"Accept": "application/json"}});
+      const params = dashboardQueryParams();
+      const response = await fetch(`/admin/api/dashboard?${params.toString()}`, {headers: {"Accept": "application/json"}});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      renderWeights(await response.json());
+      applyDashboardSnapshot(await response.json());
     } catch (error) {
+      queueUpdated.textContent = "同步失败，正在重试...";
+      runningState.textContent = "异常";
+      runningState.className = "status-pill status-error";
       if (weightsUpdated) weightsUpdated.textContent = "同步失败";
     }
   }
 
+  function dashboardWebSocketUrl() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const params = dashboardQueryParams();
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return `${protocol}//${window.location.host}/admin/ws/dashboard${suffix}`;
+  }
+
+  function startDashboardFallback() {
+    window.clearInterval(dashboardFallbackTimer);
+    fetchDashboardSnapshot();
+    dashboardFallbackTimer = window.setInterval(fetchDashboardSnapshot, 2000);
+  }
+
+  function stopDashboardFallback() {
+    window.clearInterval(dashboardFallbackTimer);
+    dashboardFallbackTimer = null;
+  }
+
+  function scheduleDashboardReconnect() {
+    window.clearTimeout(dashboardReconnectTimer);
+    dashboardReconnectTimer = window.setTimeout(connectDashboardSocket, 3000);
+  }
+
+  function connectDashboardSocket() {
+    window.clearTimeout(dashboardReconnectTimer);
+    if (!("WebSocket" in window)) {
+      startDashboardFallback();
+      return;
+    }
+    const socket = new WebSocket(dashboardWebSocketUrl());
+    dashboardSocket = socket;
+    socket.addEventListener("open", stopDashboardFallback);
+    socket.addEventListener("message", (event) => {
+      try {
+        applyDashboardSnapshot(JSON.parse(event.data));
+      } catch (error) {
+        // Ignore malformed transient frames; the next snapshot will correct the UI.
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (dashboardSocket !== socket) return;
+      dashboardSocket = null;
+      startDashboardFallback();
+      scheduleDashboardReconnect();
+    });
+    socket.addEventListener("error", () => {
+      socket.close();
+    });
+  }
+
+  function reconnectDashboardSocket() {
+    const previousSocket = dashboardSocket;
+    dashboardSocket = null;
+    if (previousSocket) previousSocket.close();
+    connectDashboardSocket();
+  }
+
+  upstreamFilter.addEventListener("change", reconnectDashboardSocket);
+
   try {
     renderQueue(JSON.parse(initialQueue.textContent));
   } catch (error) {
-    refreshQueue();
+    // The websocket or fallback request will populate the table.
   }
-  refreshStats();
-  refreshUpstreamWeights();
-  setInterval(function() {
-    refreshQueue();
-    refreshStats();
-    refreshUpstreamWeights();
-  }, 2000);
+  try {
+    renderWeights(JSON.parse(initialWeights.textContent));
+  } catch (error) {
+    // The websocket or fallback request will populate the table.
+  }
+  connectDashboardSocket();
 })();
 </script>
 {% endblock %}
