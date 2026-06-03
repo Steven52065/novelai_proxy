@@ -96,6 +96,15 @@ class Database:
                     ON usage_logs(request_id);
                 """
             )
+            self._add_column_if_missing("usage_logs", "model", "TEXT")
+            self._add_column_if_missing("usage_logs", "width", "INTEGER")
+            self._add_column_if_missing("usage_logs", "height", "INTEGER")
+            self._add_column_if_missing("usage_logs", "steps", "INTEGER")
+            self._add_column_if_missing("usage_logs", "n_samples", "INTEGER")
+            self._add_column_if_missing("usage_logs", "final_anlas_cost", "INTEGER")
+            self._add_column_if_missing("usage_logs", "queued_ms", "INTEGER")
+            self._add_column_if_missing("usage_logs", "error_code", "TEXT")
+            self._add_column_if_missing("usage_logs", "error_message", "TEXT")
             self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
             self._add_column_if_missing("usage_logs", "upstream_id", "TEXT")
             self._add_column_if_missing("usage_logs", "request_payload", "TEXT")
@@ -103,6 +112,7 @@ class Database:
             self._add_column_if_missing("usage_logs", "image_urls", "TEXT")
             self._add_column_if_missing("usage_logs", "is_retry_success", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("usage_logs", "attempt_number", "INTEGER NOT NULL DEFAULT 0")
+            self._add_column_if_missing("usage_logs", "completed_at", "TEXT")
             self._migrate_usage_logs_unique_constraint()
             self._add_column_if_missing("users", "api_key", "TEXT")
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
@@ -144,24 +154,14 @@ class Database:
 
     def _migrate_usage_logs_unique_constraint(self) -> None:
         """迁移 usage_logs 表的唯一约束，从 request_id 改为 (request_id, attempt_number)"""
-        # 检查是否已经迁移过（通过检查索引是否存在）
-        indexes = self.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='usage_logs'").fetchall()
-        index_names = {row["name"] for row in indexes}
-
-        # 如果新索引已存在，说明已经迁移过
-        if "idx_usage_request_id" in index_names:
-            return
-
-        # 检查表结构中是否有 UNIQUE 约束
-        # SQLite 不支持直接修改约束，需要重建表
         table_info = self.conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='usage_logs'").fetchone()
-        if table_info and "UNIQUE(request_id, attempt_number)" in table_info["sql"]:
-            # 新表结构已存在
+        if table_info is None:
             return
-
-        # 检查是否是旧表结构（request_id TEXT NOT NULL UNIQUE）
-        if table_info and "request_id TEXT NOT NULL UNIQUE" not in table_info["sql"]:
-            # 可能是其他版本的表结构，或者已经是新结构了
+        table_sql = table_info["sql"] or ""
+        normalized_sql = " ".join(table_sql.replace("\n", " ").split()).lower()
+        if "unique(request_id, attempt_number)" in normalized_sql:
+            return
+        if "request_id text not null unique" not in normalized_sql:
             return
 
         # 执行迁移：重建表

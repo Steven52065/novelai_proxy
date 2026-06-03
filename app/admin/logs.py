@@ -44,13 +44,26 @@ async def logs(request: Request, user_id: int | None = None, limit: int = 100, b
     }
 
 
+@api_router.post("/logs/by-id/{log_id}/replay", dependencies=[Depends(require_admin_or_session)])
+async def replay_log_by_id(log_id: int, request: Request):
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
+    source = usage_logs.get_by_id(log_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail={"message": "Log not found"})
+    return await _replay_log_source(source, request)
+
+
 @api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])
 async def replay_log_request(request_id: str, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
     source = usage_logs.get_by_request_id(request_id)
     if source is None:
         raise HTTPException(status_code=404, detail={"message": "Log not found"})
+    return await _replay_log_source(source, request)
 
+
+async def _replay_log_source(source, request: Request):
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
     request_payload = json_or_none(source["request_payload"])
     if not isinstance(request_payload, dict):
         raise HTTPException(status_code=400, detail={"message": "This log has no replayable request payload"})
@@ -115,7 +128,9 @@ async def replay_log_request(request_id: str, request: Request):
 
     return {
         "ok": True,
-        "source_request_id": request_id,
+        "source_log_id": int(source["id"]),
+        "source_request_id": source["request_id"],
+        "source_attempt_number": int(source["attempt_number"]),
         "replay_request_id": replay_request_id,
         "images": _zip_images_to_data_urls(binary_payload),
     }

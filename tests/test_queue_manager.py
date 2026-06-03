@@ -272,6 +272,61 @@ def test_routing_tries_other_allowed_upstream_when_selected_queue_is_full(tmp_pa
             assert queued.result(timeout=3).status_code == 201
 
 
+def test_dispatcher_does_not_wait_for_upstream_completion():
+    async def run_test():
+        release_a = threading.Event()
+        queue = RoutingProxyQueue(
+            targets=[
+                UpstreamQueueTarget(id="opus-a", client_provider=lambda: BlockingFakeUpstream(release_a)),
+                UpstreamQueueTarget(id="opus-b", client_provider=FakeUpstream),
+            ],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+        )
+        queue.start()
+        try:
+            first = asyncio.create_task(
+                queue.submit(
+                    request_id="blocked-a",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip(PAYLOAD),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            await _wait_until_async(lambda: queue._queues["opus-a"]._running_item is not None)
+
+            second = await asyncio.wait_for(
+                queue.submit(
+                    request_id="fast-b",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip(PAYLOAD),
+                    process_zip_response=False,
+                    manage_quota=False,
+                ),
+                timeout=1,
+            )
+            assert b"fake-image" in second
+            assert queue._queues["opus-b"]._last_upstream_completed_at is not None
+
+            release_a.set()
+            assert b"fake-image" in await asyncio.wait_for(first, timeout=1)
+        finally:
+            release_a.set()
+            await queue.stop()
+
+    asyncio.run(run_test())
+
+
 def test_queue_snapshot_orders_queued_items_by_actual_dispatch_sequence(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(
         "NOVELAI_PROXY_CONFIG",
@@ -465,3 +520,29 @@ def _wait_until(predicate, timeout: float = 3) -> None:
             return
         time.sleep(0.01)
     raise AssertionError("timed out waiting for condition")
+
+
+async def _wait_until_async(predicate, timeout: float = 3) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting for condition")
+
+
+class _NoopUsageLogs:
+    def mark_running(self, *args, **kwargs):
+        pass
+
+    def mark_success(self, *args, **kwargs):
+        pass
+
+    def mark_failed(self, *args, **kwargs):
+        pass
+
+    def insert_retry_attempt(self, *args, **kwargs):
+        pass
+
+    def update_image_urls(self, *args, **kwargs):
+        pass

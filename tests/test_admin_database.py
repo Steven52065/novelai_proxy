@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.database import Database
 from helpers import write_test_config
 
 
@@ -173,3 +175,52 @@ def test_admin_database_page_and_vacuum(tmp_path: Path, monkeypatch):
         form_resp = client.post("/admin/database/vacuum", follow_redirects=False)
         assert form_resp.status_code == 303
         assert "/admin/database" in form_resp.headers["location"]
+
+
+def test_usage_logs_unique_constraint_migration_allows_retry_attempts(tmp_path: Path):
+    db_path = tmp_path / "old-schema.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_key_hash TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL UNIQUE,
+            tier TEXT NOT NULL DEFAULT 'normal',
+            rate_limit_count INTEGER NOT NULL DEFAULT 20,
+            rate_limit_window_seconds INTEGER NOT NULL DEFAULT 3600,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE usage_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO users(api_key_hash, name, created_at)
+        VALUES ('hash', 'user', '2026-01-01T00:00:00+00:00');
+        INSERT INTO usage_logs(request_id, user_id, action, estimated_anlas_cost, status, created_at)
+        VALUES ('retry-request', 1, 'generate', 0, 'failed', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(str(db_path))
+    db.init_schema()
+    db.execute(
+        """
+        INSERT INTO usage_logs(request_id, attempt_number, user_id, action, estimated_anlas_cost, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("retry-request", 1, 1, "generate", 0, "running", "2026-01-01T00:00:01+00:00"),
+    )
+
+    rows = db.query_all("SELECT request_id, attempt_number FROM usage_logs ORDER BY attempt_number")
+    assert [row["attempt_number"] for row in rows] == [0, 1]
+    table_sql = db.query_one("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage_logs'")["sql"]
+    assert "UNIQUE(request_id, attempt_number)" in table_sql
+    db.close()

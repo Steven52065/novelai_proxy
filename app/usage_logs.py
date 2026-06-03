@@ -249,8 +249,19 @@ class UsageLogRepository:
             SELECT *
             FROM usage_logs
             WHERE request_id = ?
+            ORDER BY attempt_number DESC, id DESC
             """,
             (request_id,),
+        )
+
+    def get_by_id(self, log_id: int) -> Row | None:
+        return self.db.query_one(
+            """
+            SELECT *
+            FROM usage_logs
+            WHERE id = ?
+            """,
+            (log_id,),
         )
 
     def list_logs(self, *, user_id: int | None, limit: int, before_id: int | None) -> list[Row]:

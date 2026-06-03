@@ -167,7 +167,11 @@ class ProxyQueue:
         is_retry_success: bool = False,
         attempt_number: int = 0,
     ) -> asyncio.Future:
-        # 如果是重试（attempt_number > 0），先插入新的数据库记录
+        if self.queue.full():
+            raise QueueFull
+
+        # 如果是重试（attempt_number > 0），先插入新的数据库记录。
+        # 这里没有 await，插入完成前 worker 不会开始处理刚入队的 item。
         if attempt_number > 0:
             self.usage_logs.insert_retry_attempt(
                 request_id=request_id,
@@ -281,7 +285,7 @@ class ProxyQueue:
                         if not item.future.done():
                             item.future.set_exception(Retry429Error(exc))
                         # 重要：429 重试时不释放额度，因为请求还在重试中，额度应保持 reserved 状态。
-                        # 如果所有上游都重试失败，调度层会在 _dispatch_to_upstream 的第 703 行统一释放额度。
+                        # 如果所有上游都重试失败，调度层会统一释放额度。
                         # 注意：不在这里调用 task_done()，由 finally 块统一处理。
                         continue
 
@@ -651,7 +655,7 @@ class RoutingProxyQueue:
             item = await self._dispatch_queue.get()
             self._dispatch_running_item = item
             try:
-                await self._dispatch_to_upstream(item)
+                self._dispatch_to_upstream(item)
             except Exception as exc:
                 if not item.future.done():
                     item.future.set_exception(exc)
@@ -659,89 +663,130 @@ class RoutingProxyQueue:
                 self._dispatch_running_item = None
                 self._dispatch_queue.task_done()
 
-    async def _dispatch_to_upstream(self, item: DispatchQueueItem) -> None:
+    def _dispatch_to_upstream(
+        self,
+        item: DispatchQueueItem,
+        *,
+        excluded_upstreams: set[str] | None = None,
+        last_429_error: APIError | None = None,
+    ) -> None:
         errors = []
-        excluded_upstreams = set()
-        last_429_error: APIError | None = None
+        excluded_upstreams = set() if excluded_upstreams is None else set(excluded_upstreams)
 
-        for attempt in range(self._retry_429_max_attempts):
-            candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=(attempt == 0))
-            # 排除已经返回 429 的上游
-            candidates = [uid for uid in candidates if uid not in excluded_upstreams]
+        candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=(item.attempt_number == 0))
+        # 排除已经返回 429 的上游
+        candidates = [uid for uid in candidates if uid not in excluded_upstreams]
 
-            if not candidates:
-                break
+        if not candidates:
+            self._finish_unavailable_dispatch(item, errors=errors, last_429_error=last_429_error)
+            return
 
-            for upstream_id in candidates:
-                target = self._targets[upstream_id]
-                queue = self._queues[upstream_id]
-                try:
-                    upstream_future = queue.enqueue(
-                        request_id=item.request_id,
-                        user_id=item.user_id,
-                        tier=item.tier,
-                        action=item.action,
-                        logging_config=item.logging_config,
-                        estimated_cost=item.estimated_cost,
-                        handler=lambda target=target: item.handler(target.client_provider()),
-                        process_zip_response=item.process_zip_response,
-                        priority_override=item.priority,
-                        sequence_override=item.sequence,
-                        manage_quota=item.manage_quota,
-                        is_retry_success=item.has_retried_429,
-                        attempt_number=item.attempt_number,
-                    )
-                except QueueFull as exc:
-                    errors.append(exc)
-                    continue
-
-                # 设置回调记录自适应结果
-                upstream_future.add_done_callback(
-                    lambda completed, upstream_id=upstream_id: self._record_adaptive_result(upstream_id, completed)
+        for upstream_id in candidates:
+            target = self._targets[upstream_id]
+            queue = self._queues[upstream_id]
+            try:
+                upstream_future = queue.enqueue(
+                    request_id=item.request_id,
+                    user_id=item.user_id,
+                    tier=item.tier,
+                    action=item.action,
+                    logging_config=item.logging_config,
+                    estimated_cost=item.estimated_cost,
+                    handler=lambda target=target: item.handler(target.client_provider()),
+                    process_zip_response=item.process_zip_response,
+                    priority_override=item.priority,
+                    sequence_override=item.sequence,
+                    manage_quota=item.manage_quota,
+                    is_retry_success=item.has_retried_429,
+                    attempt_number=item.attempt_number,
                 )
-
-                # 等待上游队列执行完成
-                try:
-                    result = await upstream_future
-                    # 成功，直接设置结果并返回
-                    if not item.future.done():
-                        item.future.set_result(result)
-                    return
-                except Retry429Error as exc:
-                    # 记录这个上游返回了 429，排除它，继续尝试其他上游
-                    excluded_upstreams.add(upstream_id)
-                    # 标记已重试，并增加 attempt_number
-                    item = dataclasses.replace(item, has_retried_429=True, attempt_number=item.attempt_number + 1)
-                    if last_429_error is None:
-                        last_429_error = exc.original_error
-                    logger.info(
-                        "proxy request 429 retry attempt=%s excluded_count=%s request_id=%s upstream_id=%s next_attempt_number=%s",
-                        attempt + 1,
-                        len(excluded_upstreams),
-                        item.request_id,
-                        upstream_id,
-                        item.attempt_number,
-                    )
-                    # 跳出内层循环，重新选择候选上游
-                    break
-                except Exception as exc:
-                    # 其他异常直接抛出
-                    if not item.future.done():
-                        item.future.set_exception(exc)
-                    return
-            else:
-                # 所有候选上游队列都满了
+            except QueueFull as exc:
+                errors.append(exc)
                 continue
 
-            # 如果是因为 429 跳出的，继续外层循环重试
-            continue
+            upstream_future.add_done_callback(
+                lambda completed,
+                item=item,
+                upstream_id=upstream_id,
+                excluded_upstreams=frozenset(excluded_upstreams),
+                last_429_error=last_429_error: self._handle_upstream_completion(
+                    completed,
+                    item=item,
+                    upstream_id=upstream_id,
+                    excluded_upstreams=set(excluded_upstreams),
+                    last_429_error=last_429_error,
+                )
+            )
+            return
 
-        # 所有重试都失败了
-        # 如果是因为所有上游都返回 429，传播原始 429 错误
+        self._finish_unavailable_dispatch(item, errors=errors, last_429_error=last_429_error)
+
+    def _handle_upstream_completion(
+        self,
+        completed: asyncio.Future,
+        *,
+        item: DispatchQueueItem,
+        upstream_id: str,
+        excluded_upstreams: set[str],
+        last_429_error: APIError | None,
+    ) -> None:
+        self._record_adaptive_result(upstream_id, completed)
+        if item.future.done():
+            return
+        if completed.cancelled():
+            item.future.cancel()
+            return
+
+        exc = completed.exception()
+        if isinstance(exc, Retry429Error):
+            excluded_upstreams.add(upstream_id)
+            next_attempt_number = item.attempt_number + 1
+            retry_error = last_429_error or exc.original_error
+            if next_attempt_number >= self._retry_429_max_attempts:
+                self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
+                return
+            next_item = dataclasses.replace(
+                item,
+                has_retried_429=True,
+                attempt_number=next_attempt_number,
+            )
+            logger.info(
+                "proxy request 429 retry attempt=%s excluded_count=%s request_id=%s upstream_id=%s next_attempt_number=%s",
+                next_attempt_number,
+                len(excluded_upstreams),
+                item.request_id,
+                upstream_id,
+                next_attempt_number,
+            )
+            try:
+                self._dispatch_to_upstream(
+                    next_item,
+                    excluded_upstreams=excluded_upstreams,
+                    last_429_error=retry_error,
+                )
+            except Exception as dispatch_exc:
+                if not item.future.done():
+                    item.future.set_exception(dispatch_exc)
+            return
+
+        if exc is not None:
+            item.future.set_exception(exc)
+            return
+        item.future.set_result(completed.result())
+
+    def _finish_unavailable_dispatch(
+        self,
+        item: DispatchQueueItem,
+        *,
+        errors: list[Exception],
+        last_429_error: APIError | None,
+    ) -> None:
         if last_429_error is not None:
             if item.manage_quota:
                 self._quota_manager.release(item.user_id, item.estimated_cost)
-            raise last_429_error
+            if not item.future.done():
+                item.future.set_exception(last_429_error)
+            return
         if errors:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("No enabled upstream is available for this user")

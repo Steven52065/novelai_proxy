@@ -55,6 +55,87 @@ def test_admin_can_replay_rejected_generate_without_quota_charge(tmp_path: Path,
         assert replay_log["estimated_anlas_cost"] == 0
         assert replay_log["final_anlas_cost"] == 0
 
+
+def test_admin_replay_by_log_id_uses_exact_retry_attempt(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "replay-retry-attempt", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "same-request",
+                0,
+                user_id,
+                "generate",
+                "nai-diffusion-3",
+                832,
+                1216,
+                23,
+                1,
+                0,
+                "failed",
+                "ERROR",
+                "default",
+                '{"input":"first attempt","model":"nai-diffusion-3","parameters":{}}',
+                "2026-05-27T00:00:00+00:00",
+            ),
+        )
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "same-request",
+                1,
+                user_id,
+                "generate",
+                "nai-diffusion-3",
+                832,
+                1216,
+                23,
+                1,
+                0,
+                "success",
+                "INFO",
+                "default",
+                '{"input":"second attempt","model":"nai-diffusion-3","parameters":{}}',
+                "2026-05-27T00:00:01+00:00",
+            ),
+        )
+        source = app.state.db.query_one(
+            "SELECT id FROM usage_logs WHERE request_id = ? AND attempt_number = ?",
+            ("same-request", 1),
+        )
+
+        replay = client.post(f"/admin/api/logs/by-id/{source['id']}/replay", auth=("admin", "admin123"))
+
+        assert replay.status_code == 200
+        body = replay.json()
+        assert body["source_log_id"] == source["id"]
+        assert body["source_request_id"] == "same-request"
+        assert body["source_attempt_number"] == 1
+        assert fake_upstream.last_post_binary_payload["input"] == "second attempt"
+
+
 def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

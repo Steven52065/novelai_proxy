@@ -111,12 +111,12 @@
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
           <td>
             <div class="log-actions">
-              <button class="secondary log-toggle-btn" data-request-id="{{ log.request_id }}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+              <button class="secondary log-toggle-btn" data-log-id="{{ log.id }}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
                 <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
                 <span>详情</span>
               </button>
               {% if log.request_payload %}
-              <button class="secondary btn-replay-log" data-request-id="{{ log.request_id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+              <button class="secondary btn-replay-log" data-log-id="{{ log.id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
                 <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
                 <span>重放</span>
               </button>
@@ -126,11 +126,11 @@
             </div>
           </td>
         </tr>
-        <tr class="log-detail-row" data-request-id="{{ log.request_id }}" hidden>
+        <tr class="log-detail-row" data-log-id="{{ log.id }}" hidden>
           <td colspan="11">
-            <div class="log-details-block" data-request-id="{{ log.request_id }}">
+            <div class="log-details-block" data-log-id="{{ log.id }}">
               <div class="log-details-content">
-                <div id="replay-result-{{ log.request_id }}" class="replay-result" hidden></div>
+                <div id="replay-result-log-{{ log.id }}" class="replay-result" hidden></div>
 
                 {% if log.error_message %}
                 <div class="error" style="margin-bottom: 0;">
@@ -143,7 +143,7 @@
                 {% endif %}
 
                 <!-- Raw JSON payload store hidden -->
-                <script type="application/json" id="raw-payload-{{ log.request_id }}">{{ log.request_payload | tojson }}</script>
+                <script type="application/json" id="raw-payload-log-{{ log.id }}">{{ log.request_payload | tojson }}</script>
 
                 <div>
                   <div class="payload-toolbar">
@@ -151,12 +151,12 @@
                       <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
                       请求与响应 Payload 数据 (含智能安全截断)
                     </span>
-                    <button class="secondary btn-copy-raw-payload" data-request-id="{{ log.request_id }}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
+                    <button class="secondary btn-copy-raw-payload" data-log-id="{{ log.id }}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
                       <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
                       <span>复制完整 JSON</span>
                     </button>
                   </div>
-                  <pre id="pretty-payload-{{ log.request_id }}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+                  <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
                 </div>
 
                 <div>
@@ -302,10 +302,10 @@
       const toggleBtn = event.target.closest?.(".log-toggle-btn");
       if (toggleBtn) {
         event.preventDefault();
-        const requestId = toggleBtn.dataset.requestId;
-        const detailRow = document.querySelector(`.log-detail-row[data-request-id="${requestId}"]`);
+        const logId = toggleBtn.dataset.logId;
+        const detailRow = document.querySelector(`.log-detail-row[data-log-id="${logId}"]`);
         const willOpen = detailRow ? detailRow.hidden : true;
-        setLogDetailOpen(requestId, willOpen);
+        setLogDetailOpen(logId, willOpen);
         return;
       }
 
@@ -515,14 +515,14 @@
   }
 
   // Lazily parse and render a log's payload the first time its detail panel opens
-  function renderPayload(requestId) {
-    const prettyContainer = document.getElementById(`pretty-payload-${requestId}`);
+  function renderPayload(logId) {
+    const prettyContainer = document.getElementById(`pretty-payload-log-${logId}`);
     if (!prettyContainer || prettyContainer.getAttribute("data-loaded") === "true") {
       return;
     }
 
     try {
-      const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+      const rawJsonEl = document.getElementById(`raw-payload-log-${logId}`);
       if (!rawJsonEl) {
         prettyContainer.textContent = "解析失败：找不到原始数据容器。";
         return;
@@ -543,18 +543,18 @@
   }
 
   // Show or hide a log's detail panel; render its payload lazily on first open
-  function setLogDetailOpen(requestId, open) {
-    const detailRow = document.querySelector(`.log-detail-row[data-request-id="${requestId}"]`);
-    const toggleBtn = document.querySelector(`.log-toggle-btn[data-request-id="${requestId}"]`);
+  function setLogDetailOpen(logId, open) {
+    const detailRow = document.querySelector(`.log-detail-row[data-log-id="${logId}"]`);
+    const toggleBtn = document.querySelector(`.log-toggle-btn[data-log-id="${logId}"]`);
     if (!detailRow) return;
     detailRow.hidden = !open;
     if (toggleBtn) toggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) renderPayload(requestId);
+    if (open) renderPayload(logId);
   }
 
   async function copyRawPayload(btn) {
-    const requestId = btn.dataset.requestId;
-    const rawJsonEl = document.getElementById(`raw-payload-${requestId}`);
+    const logId = btn.dataset.logId;
+    const rawJsonEl = document.getElementById(`raw-payload-log-${logId}`);
     if (!rawJsonEl) return;
 
     try {
@@ -605,14 +605,14 @@
   }
 
   async function replayLog(btn) {
-    const requestId = btn.dataset.requestId;
-    const resultBox = document.getElementById(`replay-result-${requestId}`);
-    setLogDetailOpen(requestId, true);
+    const logId = btn.dataset.logId;
+    const resultBox = document.getElementById(`replay-result-log-${logId}`);
+    setLogDetailOpen(logId, true);
     setReplayButtonState(btn, true, "重放中");
     renderReplayStatus(resultBox, "running", "重放请求已插入队列最前方，正在等待上游返回。");
 
     try {
-      const response = await fetch(`/admin/api/logs/${encodeURIComponent(requestId)}/replay`, {
+      const response = await fetch(`/admin/api/logs/by-id/${encodeURIComponent(logId)}/replay`, {
         method: "POST",
         headers: { "Accept": "application/json" },
       });
@@ -689,6 +689,7 @@
   // Build the same two-row markup the server renders, for logs appended via infinite scroll
   function renderLogEntry(log) {
     const requestId = String(log.request_id ?? "");
+    const logId = String(log.id ?? "");
     const status = String(log.status ?? "");
     const logLevel = log.log_level || "INFO";
     const isRetrySuccess = log.is_retry_success ? true : false;
@@ -702,7 +703,7 @@
       : `<span class="muted">-</span>`;
     const finalCost = (log.final_anlas_cost === null || log.final_anlas_cost === undefined) ? "-" : log.final_anlas_cost;
     const replayCell = log.request_payload
-      ? `<button class="secondary btn-replay-log" data-request-id="${escapeAttr(requestId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
+      ? `<button class="secondary btn-replay-log" data-log-id="${escapeAttr(logId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
       : `<span class="muted" style="font-size: 12px;">不可重放</span>`;
     const errorHtml = log.error_message
       ? `<div class="error" style="margin-bottom: 0;"><div style="display: flex; align-items: center; gap: 8px;"><i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i><strong style="color:#f87171;">错误 ${escapeHtml(log.error_code ?? "")}：</strong><span>${escapeHtml(log.error_message)}</span></div></div>`
@@ -730,7 +731,7 @@
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
           <td>
             <div class="log-actions">
-              <button class="secondary log-toggle-btn" data-request-id="${escapeAttr(requestId)}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
+              <button class="secondary log-toggle-btn" data-log-id="${escapeAttr(logId)}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
                 <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
                 <span>详情</span>
               </button>
@@ -738,25 +739,25 @@
             </div>
           </td>
         </tr>
-        <tr class="log-detail-row" data-request-id="${escapeAttr(requestId)}" hidden>
+        <tr class="log-detail-row" data-log-id="${escapeAttr(logId)}" hidden>
           <td colspan="11">
-            <div class="log-details-block" data-request-id="${escapeAttr(requestId)}">
+            <div class="log-details-block" data-log-id="${escapeAttr(logId)}">
               <div class="log-details-content">
-                <div id="replay-result-${escapeAttr(requestId)}" class="replay-result" hidden></div>
+                <div id="replay-result-log-${escapeAttr(logId)}" class="replay-result" hidden></div>
                 ${errorHtml}
-                <script type="application/json" id="raw-payload-${escapeAttr(requestId)}">${escapeScriptJson(log.request_payload)}<\/script>
+                <script type="application/json" id="raw-payload-log-${escapeAttr(logId)}">${escapeScriptJson(log.request_payload)}<\/script>
                 <div>
                   <div class="payload-toolbar">
                     <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
                       <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
                       请求与响应 Payload 数据 (含智能安全截断)
                     </span>
-                    <button class="secondary btn-copy-raw-payload" data-request-id="${escapeAttr(requestId)}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
+                    <button class="secondary btn-copy-raw-payload" data-log-id="${escapeAttr(logId)}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
                       <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
                       <span>复制完整 JSON</span>
                     </button>
                   </div>
-                  <pre id="pretty-payload-${escapeAttr(requestId)}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+                  <pre id="pretty-payload-log-${escapeAttr(logId)}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
                 </div>
                 <div>
                   <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
