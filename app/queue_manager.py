@@ -39,6 +39,7 @@ class QueueItem:
     process_zip_response: bool = field(compare=False)
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
+    cancel_future: asyncio.Future | None = field(default=None, compare=False)
     is_retry_success: bool = field(default=False, compare=False)
     attempt_number: int = field(default=0, compare=False)
 
@@ -72,6 +73,7 @@ class DispatchQueueItem:
     future: asyncio.Future = field(compare=False)
     has_retried_429: bool = field(default=False, compare=False)
     attempt_number: int = field(default=0, compare=False)
+    last_429_error: APIError | None = field(default=None, compare=False)
 
 
 class ProxyQueue:
@@ -166,8 +168,10 @@ class ProxyQueue:
         manage_quota: bool = True,
         is_retry_success: bool = False,
         attempt_number: int = 0,
+        cancel_future: asyncio.Future | None = None,
+        allow_overflow: bool = False,
     ) -> asyncio.Future:
-        if self.queue.full():
+        if self.queue.full() and not allow_overflow:
             raise QueueFull
 
         # 如果是重试（attempt_number > 0），先插入新的数据库记录。
@@ -198,11 +202,18 @@ class ProxyQueue:
             process_zip_response=process_zip_response,
             handler=handler,
             future=future,
+            cancel_future=cancel_future,
             is_retry_success=is_retry_success,
             attempt_number=attempt_number,
         )
         try:
-            self.queue.put_nowait(item)
+            if self.queue.full() and allow_overflow:
+                self.queue._put(item)
+                self.queue._unfinished_tasks += 1
+                self.queue._finished.clear()
+                self.queue._wakeup_next(self.queue._getters)
+            else:
+                self.queue.put_nowait(item)
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
         return future
@@ -242,6 +253,25 @@ class ProxyQueue:
             self._running_started_at = time.monotonic()
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
             try:
+                if item.cancel_future is not None and item.cancel_future.done():
+                    if item.manage_quota:
+                        self.quota_manager.release(item.user_id, item.estimated_cost)
+                    self.usage_logs.mark_failed(
+                        item.request_id,
+                        queued_ms=queued_ms,
+                        error_code="client_cancelled",
+                        error_message="Client cancelled before upstream execution",
+                        attempt_number=item.attempt_number,
+                    )
+                    if not item.future.done():
+                        item.future.cancel()
+                    logger.info(
+                        "proxy request skipped because caller cancelled request_id=%s upstream_id=%s attempt_number=%s",
+                        item.request_id,
+                        item.upstream_id,
+                        item.attempt_number,
+                    )
+                    continue
                 self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
                 logger.info(
                     "proxy request running request_id=%s upstream_id=%s queued_ms=%s attempt_number=%s",
@@ -347,6 +377,7 @@ class ProxyQueue:
                 self._running_item = None
                 self._running_started_at = None
                 self.queue.task_done()
+                await asyncio.sleep(0)
 
     @staticmethod
     def _error_details(exc: Exception) -> tuple[str, str]:
@@ -376,7 +407,7 @@ class ProxyQueue:
             # 首次请求，无需等待
             return
         elapsed = time.monotonic() - self._last_upstream_completed_at
-        delay = required_delay - elapsed
+        delay = max(interval - elapsed, 0.0) + extra_delay
         if delay > 0:
             logger.info(
                 "proxy request waiting after last completion request_id=%s delay_seconds=%.3f interval_seconds=%.3f error_extra_delay_seconds=%.3f",
@@ -466,6 +497,10 @@ def _without_sequence(item: dict[str, object]) -> dict[str, object]:
 
 
 class RoutingProxyQueue:
+    VIP_PRIORITY = 0
+    NORMAL_PRIORITY = 10
+    VIP_RETRY_PRIORITY = -1
+
     def __init__(
         self,
         *,
@@ -626,7 +661,7 @@ class RoutingProxyQueue:
     ) -> bytes:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
+        priority = priority_override if priority_override is not None else self.VIP_PRIORITY if tier == "vip" else self.NORMAL_PRIORITY
         try:
             self._dispatch_queue.put_nowait(
                 DispatchQueueItem(
@@ -648,13 +683,27 @@ class RoutingProxyQueue:
             )
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
-        return await future
+        try:
+            return await future
+        except asyncio.CancelledError:
+            future.cancel()
+            raise
 
     async def _run_dispatcher(self) -> None:
         while True:
             item = await self._dispatch_queue.get()
             self._dispatch_running_item = item
             try:
+                if item.future.done():
+                    if item.manage_quota:
+                        self._quota_manager.release(item.user_id, item.estimated_cost)
+                    self._mark_cancelled_before_dispatch(item)
+                    logger.info(
+                        "proxy request skipped by dispatcher because caller cancelled request_id=%s attempt_number=%s",
+                        item.request_id,
+                        item.attempt_number,
+                    )
+                    continue
                 self._dispatch_to_upstream(item)
             except Exception as exc:
                 if not item.future.done():
@@ -670,6 +719,7 @@ class RoutingProxyQueue:
         last_429_error: APIError | None = None,
     ) -> None:
         errors = []
+        last_429_error = last_429_error or item.last_429_error
         candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=True)
 
         if not candidates:
@@ -694,6 +744,8 @@ class RoutingProxyQueue:
                     manage_quota=item.manage_quota,
                     is_retry_success=item.has_retried_429,
                     attempt_number=item.attempt_number,
+                    cancel_future=item.future,
+                    allow_overflow=item.tier == "vip",
                 )
             except QueueFull as exc:
                 errors.append(exc)
@@ -723,24 +775,28 @@ class RoutingProxyQueue:
         last_429_error: APIError | None,
     ) -> None:
         self._record_adaptive_result(upstream_id, completed)
-        if item.future.done():
-            return
         if completed.cancelled():
-            item.future.cancel()
+            if not item.future.done():
+                item.future.cancel()
             return
 
         exc = completed.exception()
         if isinstance(exc, Retry429Error):
+            if item.future.done():
+                if item.manage_quota:
+                    self._quota_manager.release(item.user_id, item.estimated_cost)
+                logger.warning(
+                    "proxy request 429 retry cancelled request_id=%s upstream_id=%s attempt_number=%s",
+                    item.request_id,
+                    upstream_id,
+                    item.attempt_number,
+                )
+                return
             next_attempt_number = item.attempt_number + 1
             retry_error = last_429_error or exc.original_error
             if next_attempt_number >= self._retry_429_max_attempts:
                 self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
                 return
-            next_item = dataclasses.replace(
-                item,
-                has_retried_429=True,
-                attempt_number=next_attempt_number,
-            )
             logger.info(
                 "proxy request 429 retry attempt=%s request_id=%s upstream_id=%s next_attempt_number=%s",
                 next_attempt_number,
@@ -748,20 +804,46 @@ class RoutingProxyQueue:
                 upstream_id,
                 next_attempt_number,
             )
-            try:
-                self._dispatch_to_upstream(
-                    next_item,
-                    last_429_error=retry_error,
-                )
-            except Exception as dispatch_exc:
-                if not item.future.done():
-                    item.future.set_exception(dispatch_exc)
+            self._requeue_429_retry(item, next_attempt_number=next_attempt_number, retry_error=retry_error)
             return
 
+        if item.future.done():
+            return
         if exc is not None:
             item.future.set_exception(exc)
             return
         item.future.set_result(completed.result())
+
+    def _requeue_429_retry(
+        self,
+        item: DispatchQueueItem,
+        *,
+        next_attempt_number: int,
+        retry_error: APIError,
+    ) -> None:
+        is_vip_retry = item.tier == "vip"
+        priority = self.VIP_RETRY_PRIORITY if is_vip_retry else item.priority
+        next_item = dataclasses.replace(
+            item,
+            priority=priority,
+            sequence=next(self._sequence),
+            enqueued_at=time.monotonic(),
+            has_retried_429=True,
+            attempt_number=next_attempt_number,
+            last_429_error=retry_error,
+        )
+        if is_vip_retry:
+            self._dispatch_to_upstream(next_item, last_429_error=retry_error)
+            return
+        try:
+            self._dispatch_queue.put_nowait(next_item)
+        except asyncio.QueueFull:
+            logger.warning(
+                "proxy request 429 retry dispatch queue full request_id=%s next_attempt_number=%s",
+                item.request_id,
+                next_attempt_number,
+            )
+            self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
 
     def _finish_unavailable_dispatch(
         self,
@@ -779,6 +861,15 @@ class RoutingProxyQueue:
         if errors:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("No enabled upstream is available for this user")
+
+    def _mark_cancelled_before_dispatch(self, item: DispatchQueueItem) -> None:
+        self._usage_logs.mark_failed(
+            item.request_id,
+            queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
+            error_code="client_cancelled",
+            error_message="Client cancelled before dispatch",
+            attempt_number=item.attempt_number,
+        )
 
     def _candidate_upstreams(
         self,
