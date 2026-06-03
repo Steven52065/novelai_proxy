@@ -256,12 +256,12 @@ class ProxyQueue:
                             self.queue.qsize(),
                             self.retry_429_queue_length_threshold,
                         )
+                        # 429 是 API 错误，需要对下一个请求应用额外延迟
+                        self._apply_error_extra_delay_next = True
                         # 抛出 Retry429Error 让上层重新分配
                         if not item.future.done():
                             item.future.set_exception(Retry429Error(exc))
-                        self._running_item = None
-                        self._running_started_at = None
-                        self.queue.task_done()
+                        # 注意：不在这里调用 task_done()，由 finally 块统一处理
                         continue
 
                 if isinstance(exc, APIError):
