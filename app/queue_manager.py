@@ -258,14 +258,19 @@ class ProxyQueue:
                         )
                         # 429 是 API 错误，需要对下一个请求应用额外延迟
                         self._apply_error_extra_delay_next = True
-                        # 抛出 Retry429Error 让上层重新分配
+                        # 抛出 Retry429Error 让调度层（RoutingProxyQueue）重新分配到其他上游
                         if not item.future.done():
                             item.future.set_exception(Retry429Error(exc))
-                        # 注意：不在这里调用 task_done()，由 finally 块统一处理
+                        # 重要：429 重试时不释放额度，因为请求还在重试中，额度应保持 reserved 状态。
+                        # 如果所有上游都重试失败，调度层会在 _dispatch_to_upstream 的第 703 行统一释放额度。
+                        # 注意：不在这里调用 task_done()，由 finally 块统一处理。
                         continue
 
+                # 所有 API 错误（包括不满足重试条件的 429）都应用额外延迟
                 if isinstance(exc, APIError):
                     self._apply_error_extra_delay_next = True
+
+                # 普通错误处理：释放额度、记录日志、设置异常
                 if item.manage_quota:
                     self.quota_manager.release(item.user_id, item.estimated_cost)
                 code, message = self._error_details(exc)
