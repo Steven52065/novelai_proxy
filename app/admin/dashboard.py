@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..database import Database
+from ..logging_utils import logger
 from .auth import has_admin_session, require_admin_or_session
 from .common import (
     DISPLAY_TIMEZONE,
@@ -67,7 +68,19 @@ async def dashboard_alias(request: Request):
 
 @web_router.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
-    if not _is_same_origin_websocket(websocket) or not has_admin_session(websocket):
+    if not _is_same_origin_websocket(websocket):
+        logger.warning(
+            "dashboard websocket rejected by origin check origin=%s host=%s forwarded_host=%s forwarded_proto=%s url=%s",
+            websocket.headers.get("origin"),
+            websocket.headers.get("host"),
+            websocket.headers.get("x-forwarded-host"),
+            websocket.headers.get("x-forwarded-proto"),
+            str(websocket.url),
+        )
+        await websocket.close(code=1008)
+        return
+    if not has_admin_session(websocket):
+        logger.warning("dashboard websocket rejected by missing or invalid admin session")
         await websocket.close(code=1008)
         return
     try:
@@ -253,12 +266,41 @@ def _is_same_origin_websocket(websocket: WebSocket) -> bool:
     parsed = urlparse(origin)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return False
-    expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
-    return (
-        parsed.scheme == expected_scheme
-        and parsed.hostname == websocket.url.hostname
-        and _origin_port(parsed) == _url_port(websocket.url)
-    )
+    expected_scheme = _expected_origin_scheme(websocket)
+    expected_hostname, expected_port = _expected_origin_host(websocket)
+    if not expected_hostname:
+        return False
+    if parsed.hostname != expected_hostname:
+        return False
+    if expected_port is None:
+        if parsed.port is not None:
+            return False
+    elif _origin_port(parsed) != expected_port:
+        return False
+    return expected_scheme is None or parsed.scheme == expected_scheme
+
+
+def _expected_origin_scheme(websocket: WebSocket) -> str | None:
+    forwarded_proto = websocket.headers.get("x-forwarded-proto")
+    if forwarded_proto:
+        proto = forwarded_proto.split(",", 1)[0].strip().lower()
+        if proto in {"http", "https"}:
+            return proto
+    if websocket.headers.get("host"):
+        return None
+    return "https" if websocket.url.scheme == "wss" else "http"
+
+
+def _expected_origin_host(websocket: WebSocket) -> tuple[str | None, int | None]:
+    forwarded_host = websocket.headers.get("x-forwarded-host")
+    raw_host = (forwarded_host.split(",", 1)[0].strip() if forwarded_host else "") or websocket.headers.get("host")
+    if raw_host:
+        expected_scheme = _expected_origin_scheme(websocket)
+        scheme = expected_scheme or "http"
+        parsed = urlparse(f"{scheme}://{raw_host}")
+        if parsed.hostname:
+            return parsed.hostname, parsed.port if expected_scheme is None else _origin_port(parsed)
+    return websocket.url.hostname, _url_port(websocket.url)
 
 
 def _origin_port(parsed) -> int:
