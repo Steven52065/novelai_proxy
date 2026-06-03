@@ -497,6 +497,7 @@
   let dashboardSocket = null;
   let dashboardFallbackTimer = null;
   let dashboardReconnectTimer = null;
+  let queueClockTimer = null;
 
   function formatSeconds(seconds) {
     const value = Number(seconds || 0);
@@ -504,6 +505,20 @@
     const minutes = Math.floor(value / 60);
     const rest = value % 60;
     return `${minutes} 分 ${rest} 秒`;
+  }
+
+  function elapsedTimerHtml(seconds) {
+    const baseSeconds = Math.max(0, Number(seconds || 0));
+    return `<span class="queue-elapsed" style="font-weight:500;" data-base-seconds="${baseSeconds}" data-base-time="${Date.now()}">${formatSeconds(baseSeconds)}</span>`;
+  }
+
+  function updateQueueElapsedTimes() {
+    for (const node of document.querySelectorAll(".queue-elapsed")) {
+      const baseSeconds = Number(node.dataset.baseSeconds || 0);
+      const baseTime = Number(node.dataset.baseTime || Date.now());
+      const elapsed = baseSeconds + Math.max(0, Math.floor((Date.now() - baseTime) / 1000));
+      node.textContent = formatSeconds(elapsed);
+    }
   }
 
   function requestLabel(requestId) {
@@ -609,7 +624,7 @@
       appendCell(row, anlasHtml);
       
       // Wait time
-      appendCell(row, `<span style="font-weight:500;">${formatSeconds(item.queued_seconds)}</span>`);
+      appendCell(row, elapsedTimerHtml(item.queued_seconds));
 
       // Upstream
       appendCell(row, item.upstream_id ? `<code>${item.upstream_id}</code>` : `<span class="muted">调度中</span>`, "mono");
@@ -622,6 +637,7 @@
     
     // Rerender icons dynamically for dynamically generated inline icons
     lucide.createIcons();
+    updateQueueElapsedTimes();
   }
 
   // ---- Upstream weights rendering ----
@@ -803,6 +819,7 @@
   } catch (error) {
     // The websocket or fallback request will populate the table.
   }
+  queueClockTimer = window.setInterval(updateQueueElapsedTimes, 1000);
   connectDashboardSocket();
 })();
 </script>

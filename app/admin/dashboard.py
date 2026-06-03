@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -65,7 +66,7 @@ async def dashboard_alias(request: Request):
 
 @web_router.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
-    if not has_admin_session(websocket):
+    if not _is_same_origin_websocket(websocket) or not has_admin_session(websocket):
         await websocket.close(code=1008)
         return
     try:
@@ -196,6 +197,33 @@ def _stable_queue_item(item: dict) -> dict:
     stable.pop("queued_seconds", None)
     stable.pop("running_seconds", None)
     return stable
+
+
+def _is_same_origin_websocket(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return False
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
+    return (
+        parsed.scheme == expected_scheme
+        and parsed.hostname == websocket.url.hostname
+        and _origin_port(parsed) == _url_port(websocket.url)
+    )
+
+
+def _origin_port(parsed) -> int:
+    if parsed.port is not None:
+        return parsed.port
+    return 443 if parsed.scheme == "https" else 80
+
+
+def _url_port(url) -> int:
+    if url.port is not None:
+        return url.port
+    return 443 if url.scheme == "wss" else 80
 
 
 def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:

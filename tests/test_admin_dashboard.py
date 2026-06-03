@@ -4,7 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from helpers import write_test_config, write_test_config_with_upstreams
 
@@ -181,7 +183,7 @@ def test_admin_dashboard_websocket_sends_snapshot_for_session(tmp_path: Path, mo
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
 
-        with client.websocket_connect("/admin/ws/dashboard") as websocket:
+        with client.websocket_connect("/admin/ws/dashboard", headers={"Origin": "http://testserver"}) as websocket:
             body = websocket.receive_json()
 
         assert body["type"] == "dashboard.snapshot"
@@ -189,6 +191,24 @@ def test_admin_dashboard_websocket_sends_snapshot_for_session(tmp_path: Path, mo
         assert "queue" in body
         assert "upstream_weights" in body
         assert body["request_trends"] is None
+
+
+def test_admin_dashboard_websocket_rejects_cross_origin(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(
+                "/admin/ws/dashboard",
+                headers={"Origin": "http://evil.example"},
+            ):
+                pass
+
+        assert exc_info.value.code == 1008
 
 
 def test_admin_queue_status_can_filter_by_upstream(tmp_path: Path, monkeypatch):
