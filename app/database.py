@@ -62,7 +62,8 @@ class Database:
 
                 CREATE TABLE IF NOT EXISTS usage_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    request_id TEXT NOT NULL UNIQUE,
+                    request_id TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL DEFAULT 0,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     action TEXT NOT NULL,
                     model TEXT,
@@ -83,13 +84,16 @@ class Database:
                     image_urls TEXT,
                     is_retry_success INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
-                    completed_at TEXT
+                    completed_at TEXT,
+                    UNIQUE(request_id, attempt_number)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_usage_user_created
                     ON usage_logs(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_usage_status
                     ON usage_logs(status);
+                CREATE INDEX IF NOT EXISTS idx_usage_request_id
+                    ON usage_logs(request_id);
                 """
             )
             self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
@@ -98,6 +102,8 @@ class Database:
             self._add_column_if_missing("usage_logs", "output_files", "TEXT")
             self._add_column_if_missing("usage_logs", "image_urls", "TEXT")
             self._add_column_if_missing("usage_logs", "is_retry_success", "INTEGER NOT NULL DEFAULT 0")
+            self._add_column_if_missing("usage_logs", "attempt_number", "INTEGER NOT NULL DEFAULT 0")
+            self._migrate_usage_logs_unique_constraint()
             self._add_column_if_missing("users", "api_key", "TEXT")
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("users", "allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'")
@@ -135,3 +141,85 @@ class Database:
         existing = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in existing:
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _migrate_usage_logs_unique_constraint(self) -> None:
+        """迁移 usage_logs 表的唯一约束，从 request_id 改为 (request_id, attempt_number)"""
+        # 检查是否已经迁移过（通过检查索引是否存在）
+        indexes = self.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='usage_logs'").fetchall()
+        index_names = {row["name"] for row in indexes}
+
+        # 如果新索引已存在，说明已经迁移过
+        if "idx_usage_request_id" in index_names:
+            return
+
+        # 检查表结构中是否有 UNIQUE 约束
+        # SQLite 不支持直接修改约束，需要重建表
+        table_info = self.conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='usage_logs'").fetchone()
+        if table_info and "UNIQUE(request_id, attempt_number)" in table_info["sql"]:
+            # 新表结构已存在
+            return
+
+        # 检查是否是旧表结构（request_id TEXT NOT NULL UNIQUE）
+        if table_info and "request_id TEXT NOT NULL UNIQUE" not in table_info["sql"]:
+            # 可能是其他版本的表结构，或者已经是新结构了
+            return
+
+        # 执行迁移：重建表
+        self.conn.executescript("""
+            -- 创建新表
+            CREATE TABLE usage_logs_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL DEFAULT 0,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                action TEXT NOT NULL,
+                model TEXT,
+                width INTEGER,
+                height INTEGER,
+                steps INTEGER,
+                n_samples INTEGER,
+                estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
+                final_anlas_cost INTEGER,
+                queued_ms INTEGER,
+                status TEXT NOT NULL,
+                error_code TEXT,
+                error_message TEXT,
+                log_level TEXT NOT NULL DEFAULT 'INFO',
+                upstream_id TEXT,
+                request_payload TEXT,
+                output_files TEXT,
+                image_urls TEXT,
+                is_retry_success INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(request_id, attempt_number)
+            );
+
+            -- 复制旧数据（所有记录的 attempt_number 默认为 0）
+            INSERT INTO usage_logs_new (
+                id, request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, final_anlas_cost, queued_ms, status, error_code, error_message,
+                log_level, upstream_id, request_payload, output_files, image_urls, is_retry_success,
+                created_at, completed_at
+            )
+            SELECT
+                id, request_id, 0, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, final_anlas_cost, queued_ms, status, error_code, error_message,
+                log_level, upstream_id, request_payload, output_files, image_urls, is_retry_success,
+                created_at, completed_at
+            FROM usage_logs;
+
+            -- 删除旧表
+            DROP TABLE usage_logs;
+
+            -- 重命名新表
+            ALTER TABLE usage_logs_new RENAME TO usage_logs;
+
+            -- 重建索引
+            CREATE INDEX IF NOT EXISTS idx_usage_user_created
+                ON usage_logs(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_usage_status
+                ON usage_logs(status);
+            CREATE INDEX IF NOT EXISTS idx_usage_request_id
+                ON usage_logs(request_id);
+        """)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import itertools
 import random
 import time
@@ -39,6 +40,7 @@ class QueueItem:
     handler: Callable[[], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
     is_retry_success: bool = field(default=False, compare=False)
+    attempt_number: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ class DispatchQueueItem:
     handler: Callable[[Any], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
     has_retried_429: bool = field(default=False, compare=False)
+    attempt_number: int = field(default=0, compare=False)
 
 
 class ProxyQueue:
@@ -160,6 +163,7 @@ class ProxyQueue:
         sequence_override: int | None = None,
         manage_quota: bool = True,
         is_retry_success: bool = False,
+        attempt_number: int = 0,
     ) -> asyncio.Future:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
@@ -181,6 +185,7 @@ class ProxyQueue:
             handler=handler,
             future=future,
             is_retry_success=is_retry_success,
+            attempt_number=attempt_number,
         )
         try:
             self.queue.put_nowait(item)
@@ -223,12 +228,13 @@ class ProxyQueue:
             self._running_started_at = time.monotonic()
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
             try:
-                self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id)
+                self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
                 logger.info(
-                    "proxy request running request_id=%s upstream_id=%s queued_ms=%s",
+                    "proxy request running request_id=%s upstream_id=%s queued_ms=%s attempt_number=%s",
                     item.request_id,
                     item.upstream_id,
                     queued_ms,
+                    item.attempt_number,
                 )
                 await self._wait_for_upstream_interval(item.request_id)
                 payload = await item.handler()
@@ -249,10 +255,12 @@ class ProxyQueue:
                             queued_ms=queued_ms,
                             error_code=code,
                             error_message=message,
+                            attempt_number=item.attempt_number,
                         )
                         logger.warning(
-                            "proxy request 429 error, will retry request_id=%s queue_size=%s threshold=%s",
+                            "proxy request 429 error, will retry request_id=%s attempt_number=%s queue_size=%s threshold=%s",
                             item.request_id,
+                            item.attempt_number,
                             self.queue.qsize(),
                             self.retry_429_queue_length_threshold,
                         )
@@ -279,6 +287,7 @@ class ProxyQueue:
                     queued_ms=queued_ms,
                     error_code=code,
                     error_message=message,
+                    attempt_number=item.attempt_number,
                 )
                 logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
                 if not item.future.done():
@@ -304,6 +313,7 @@ class ProxyQueue:
                     final_cost=item.estimated_cost,
                     output_files=saved_files,
                     is_retry_success=item.is_retry_success,
+                    attempt_number=item.attempt_number,
                 )
                 log_color = "white" if item.is_retry_success else "default"
                 logger.info(
@@ -657,6 +667,7 @@ class RoutingProxyQueue:
                         sequence_override=item.sequence,
                         manage_quota=item.manage_quota,
                         is_retry_success=item.has_retried_429,
+                        attempt_number=item.attempt_number,
                     )
                 except QueueFull as exc:
                     errors.append(exc)
@@ -677,15 +688,17 @@ class RoutingProxyQueue:
                 except Retry429Error as exc:
                     # 记录这个上游返回了 429，排除它，继续尝试其他上游
                     excluded_upstreams.add(upstream_id)
-                    item.has_retried_429 = True
+                    # 标记已重试，并增加 attempt_number
+                    item = dataclasses.replace(item, has_retried_429=True, attempt_number=item.attempt_number + 1)
                     if last_429_error is None:
                         last_429_error = exc.original_error
                     logger.info(
-                        "proxy request 429 retry attempt=%s excluded_count=%s request_id=%s upstream_id=%s",
+                        "proxy request 429 retry attempt=%s excluded_count=%s request_id=%s upstream_id=%s next_attempt_number=%s",
                         attempt + 1,
                         len(excluded_upstreams),
                         item.request_id,
                         upstream_id,
+                        item.attempt_number,
                     )
                     # 跳出内层循环，重新选择候选上游
                     break
