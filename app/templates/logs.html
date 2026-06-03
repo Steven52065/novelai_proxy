@@ -62,8 +62,8 @@
         {% endif %}
 
         {% for log in logs %}
-        <tr class="log-row" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};">
-          <td class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}</td>
+        <tr class="log-row" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};{% if log.is_retry_success %} background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);{% endif %}">
+          <td class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span style="margin-left: 4px; font-size: 10px; color: #fbbf24; vertical-align: middle;" title="重试后成功">⟳</span>{% endif %}</td>
           <td>
             <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
           </td>
@@ -99,7 +99,7 @@
           </td>
           <td>
             {% if log.status == 'success' %}
-            <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">成功</span>
+            <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">{% if log.is_retry_success %}<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>{% endif %}成功</span>
             {% elif log.status == 'failed' %}
             <span class="status-pill status-error">失败</span>
             {% elif log.status == 'running' %}
@@ -691,6 +691,9 @@
     const requestId = String(log.request_id ?? "");
     const status = String(log.status ?? "");
     const logLevel = log.log_level || "INFO";
+    const isRetrySuccess = log.is_retry_success ? true : false;
+    const retryIcon = isRetrySuccess ? `<span style="margin-left: 4px; font-size: 10px; color: #fbbf24; vertical-align: middle;" title="重试后成功">⟳</span>` : "";
+    const rowStyle = isRetrySuccess ? ` background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);` : "";
     const model = log.model
       ? `<span class="badge badge-normal" style="font-size: 11px;">${escapeHtml(log.model)}</span>`
       : `<span class="muted">-</span>`;
@@ -706,8 +709,8 @@
       : "";
 
     return `
-        <tr class="log-row" style="border-left: 4px solid ${borderColorFor(status)};">
-          <td class="mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}</td>
+        <tr class="log-row" style="border-left: 4px solid ${borderColorFor(status)};${rowStyle}">
+          <td class="mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}${retryIcon}</td>
           <td>
             <span class="level level-${escapeAttr(String(logLevel).toLowerCase())}">${escapeHtml(logLevel)}</span>
           </td>
@@ -723,7 +726,7 @@
             <span style="color: rgba(255,255,255,0.15)">/</span>
             <span style="color: #34d399; font-weight: 700;">${escapeHtml(finalCost)}</span>
           </td>
-          <td>${renderStatusPill(status)}</td>
+          <td>${renderStatusPill(status, isRetrySuccess)}</td>
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
           <td>
             <div class="log-actions">
@@ -780,9 +783,10 @@
     return "var(--warning)";
   }
 
-  function renderStatusPill(status) {
+  function renderStatusPill(status, isRetrySuccess = false) {
+    const retryIcon = isRetrySuccess ? `<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>` : "";
     if (status === "success") {
-      return `<span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">成功</span>`;
+      return `<span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">${retryIcon}成功</span>`;
     }
     if (status === "failed") {
       return `<span class="status-pill status-error">失败</span>`;

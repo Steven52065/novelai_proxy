@@ -85,6 +85,7 @@ class ProxyQueue:
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
         retry_429_queue_length_threshold: int = 3,
+        get_total_queue_length: callable | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
         self.upstream_id = upstream_id
@@ -98,6 +99,7 @@ class ProxyQueue:
             raise ValueError("upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
         self.upstream_error_extra_delay_seconds = max(0.0, float(upstream_error_extra_delay_seconds))
         self.retry_429_queue_length_threshold = int(retry_429_queue_length_threshold)
+        self.get_total_queue_length = get_total_queue_length
         self._last_upstream_completed_at: float | None = None
         self._apply_error_extra_delay_next = False
         self._sequence = itertools.count()
@@ -254,7 +256,7 @@ class ProxyQueue:
 
                 # 检查是否为 429 错误且应该重试
                 if isinstance(exc, APIError) and str(exc.code) == "429":
-                    should_retry = self._should_retry_429()
+                    should_retry = self._should_retry_429(self.get_total_queue_length) if self.get_total_queue_length else False
                     if should_retry:
                         # 将 429 错误标记到日志，但状态仍为 failed
                         code, message = self._error_details(exc)
@@ -265,11 +267,12 @@ class ProxyQueue:
                             error_message=message,
                             attempt_number=item.attempt_number,
                         )
+                        total_queue_length = self.get_total_queue_length() if self.get_total_queue_length else self.queue.qsize()
                         logger.warning(
-                            "proxy request 429 error, will retry request_id=%s attempt_number=%s queue_size=%s threshold=%s",
+                            "proxy request 429 error, will retry request_id=%s attempt_number=%s total_queue_length=%s threshold=%s",
                             item.request_id,
                             item.attempt_number,
-                            self.queue.qsize(),
+                            total_queue_length,
                             self.retry_429_queue_length_threshold,
                         )
                         # 429 是 API 错误，需要对下一个请求应用额外延迟
@@ -335,7 +338,7 @@ class ProxyQueue:
                 if not item.future.done():
                     item.future.set_result(payload)
                 if item.process_zip_response and self.image_hosting is not None:
-                    self._schedule_image_upload(zip_payload=payload, request_id=item.request_id)
+                    self._schedule_image_upload(zip_payload=payload, request_id=item.request_id, attempt_number=item.attempt_number)
             finally:
                 self._running_item = None
                 self._running_started_at = None
@@ -347,11 +350,16 @@ class ProxyQueue:
             return str(exc.code or "upstream_error"), exc.message
         return exc.__class__.__name__, str(exc)
 
-    def _should_retry_429(self) -> bool:
-        """检查当前队列状态是否允许重试 429 错误"""
+    def _should_retry_429(self, get_total_queue_length: callable) -> bool:
+        """检查当前队列状态是否允许重试 429 错误
+
+        Args:
+            get_total_queue_length: 获取所有上游总排队长度的回调函数
+        """
         if self.retry_429_queue_length_threshold < 0:
             return False
-        return self.queue.qsize() <= self.retry_429_queue_length_threshold
+        total_queue_length = get_total_queue_length()
+        return total_queue_length <= self.retry_429_queue_length_threshold
 
     async def _wait_for_upstream_interval(self, request_id: str) -> None:
         interval = self._next_upstream_interval()
@@ -380,7 +388,7 @@ class ProxyQueue:
             return self.upstream_interval_min_seconds
         return random.uniform(self.upstream_interval_min_seconds, self.upstream_interval_max_seconds)
 
-    def _schedule_image_upload(self, *, zip_payload: bytes, request_id: str) -> None:
+    def _schedule_image_upload(self, *, zip_payload: bytes, request_id: str, attempt_number: int) -> None:
         if self.image_hosting is None:
             return
         max_pending = int(self.image_hosting.max_pending_uploads)
@@ -393,11 +401,11 @@ class ProxyQueue:
                 max_pending,
             )
             return
-        task = asyncio.create_task(self._upload_images_and_update_log(zip_payload=zip_payload, request_id=request_id))
+        task = asyncio.create_task(self._upload_images_and_update_log(zip_payload=zip_payload, request_id=request_id, attempt_number=attempt_number))
         self._image_upload_tasks.add(task)
         task.add_done_callback(self._image_upload_tasks.discard)
 
-    async def _upload_images_and_update_log(self, *, zip_payload: bytes, request_id: str) -> None:
+    async def _upload_images_and_update_log(self, *, zip_payload: bytes, request_id: str, attempt_number: int) -> None:
         if self.image_hosting is None:
             return
         try:
@@ -412,8 +420,8 @@ class ProxyQueue:
             return
         if not image_urls:
             return
-        self.usage_logs.update_image_urls(request_id, image_urls)
-        logger.info("image host upload succeeded request_id=%s image_urls=%s", request_id, len(image_urls))
+        self.usage_logs.update_image_urls(request_id, image_urls, attempt_number)
+        logger.info("image host upload succeeded request_id=%s image_urls=%s attempt_number=%s", request_id, len(image_urls), attempt_number)
 
     @staticmethod
     def _item_snapshot(item: QueueItem, now: float, status: str, position: int) -> dict[str, object]:
@@ -470,9 +478,11 @@ class RoutingProxyQueue:
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
         retry_429_queue_length_threshold: int = 3,
+        retry_429_max_attempts: int = 5,
         image_hosting: ImageHostingServiceLike | None = None,
     ):
         self._quota_manager = quota_manager
+        self._retry_429_max_attempts = int(retry_429_max_attempts)
         enabled_targets = [target for target in targets if target.id]
         if not enabled_targets:
             raise ValueError("at least one upstream target is required")
@@ -504,6 +514,7 @@ class RoutingProxyQueue:
                 upstream_interval_max_seconds=upstream_interval_max_seconds,
                 upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
                 retry_429_queue_length_threshold=retry_429_queue_length_threshold,
+                get_total_queue_length=self._get_total_queue_length,
                 image_hosting=image_hosting,
             )
             for target in enabled_targets
@@ -590,6 +601,10 @@ class RoutingProxyQueue:
             "upstreams": upstreams,
         }
 
+    def _get_total_queue_length(self) -> int:
+        """获取所有上游的总排队长度（不包括正在执行的请求）"""
+        return sum(queue.qsize() for queue in self._queues.values())
+
     async def submit(
         self,
         *,
@@ -647,10 +662,9 @@ class RoutingProxyQueue:
     async def _dispatch_to_upstream(self, item: DispatchQueueItem) -> None:
         errors = []
         excluded_upstreams = set()
-        max_retries = 5  # 最多尝试 5 次（包括初次尝试）
         last_429_error: APIError | None = None
 
-        for attempt in range(max_retries):
+        for attempt in range(self._retry_429_max_attempts):
             candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=(attempt == 0))
             # 排除已经返回 429 的上游
             candidates = [uid for uid in candidates if uid not in excluded_upstreams]
