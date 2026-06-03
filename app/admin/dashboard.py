@@ -38,7 +38,7 @@ async def admin_stats(request: Request):
     today_start, today_end = local_day_range(datetime.now(DISPLAY_TIMEZONE))
     today_requests = db.query_one(
         """
-        SELECT COUNT(*) AS c
+        SELECT COUNT(DISTINCT request_id) AS c
         FROM usage_logs
         WHERE datetime(created_at) >= datetime(?)
           AND datetime(created_at) < datetime(?)
@@ -74,7 +74,7 @@ async def dashboard(request: Request):
     total_users = db.query_one("SELECT COUNT(*) AS c FROM users")["c"]
     today_requests = db.query_one(
         """
-        SELECT COUNT(*) AS c
+        SELECT COUNT(DISTINCT request_id) AS c
         FROM usage_logs
         WHERE datetime(created_at) >= datetime(?)
           AND datetime(created_at) < datetime(?)
@@ -152,7 +152,7 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
         db.query_all(
             """
             SELECT CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) AS bucket,
-                   COUNT(*) AS requests,
+                   COUNT(DISTINCT request_id) AS requests,
                    SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
                    SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
             FROM usage_logs
@@ -182,7 +182,7 @@ def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id:
     return db.query_all(
         """
         SELECT date(datetime(created_at, '+8 hours')) AS bucket,
-               COUNT(*) AS requests,
+               COUNT(DISTINCT request_id) AS requests,
                SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
                SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
         FROM usage_logs

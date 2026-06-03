@@ -82,10 +82,13 @@ def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):
         assert "请求数量趋势" in dashboard.text
         assert "今日生成请求" in dashboard.text
         today_metric = dashboard.text.split("今日生成请求", 1)[1].split("</div>", 1)[0]
-        assert "<strong>3</strong>" in today_metric
+        # 使用 COUNT(DISTINCT request_id) 后，3个不同的 request_id 应该统计为 3
+        # HTML 中的格式是 <strong id="stat-today-requests">3</strong>
+        assert 'id="stat-today-requests">3</strong>' in today_metric
         assert 'id="request-trends"' in dashboard.text
         trend_json = dashboard.text.split('<script id="request-trends" type="application/json">', 1)[1].split("</script>", 1)[0]
         trends = json.loads(trend_json)
+        # COUNT(DISTINCT request_id) 统计请求数，失败和拒绝用 COUNT(*) 统计记录数
         assert trends["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 1}
         assert sum(trends["today"]["series"]["requests"]) == 3
         assert sum(trends["week"]["series"]["failed"]) == 1
