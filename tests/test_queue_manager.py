@@ -558,6 +558,50 @@ def test_cancelled_429_retry_releases_reserved_quota():
     asyncio.run(run_test())
 
 
+def test_cancelled_before_dispatch_marks_failed_log_and_releases_quota():
+    async def run_test():
+        quota = _RecordingQuota()
+        usage_logs = _RecordingUsageLogs()
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=FakeUpstream)],
+            quota_manager=quota,
+            usage_logs=usage_logs,
+            max_queue_size=2,
+        )
+        task = asyncio.create_task(
+            queue.submit(
+                request_id="cancel-before-dispatch",
+                user_id=42,
+                tier="normal",
+                action="generate",
+                logging_config=object(),
+                estimated_cost=7,
+                handler=lambda upstream: upstream.generate_image_payload_zip(PAYLOAD),
+                process_zip_response=False,
+            )
+        )
+        await _wait_until_async(lambda: queue._dispatch_queue.qsize() == 1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        queue.start()
+        try:
+            await _wait_until_async(lambda: quota.released == [(42, 7)] and len(usage_logs.failed) == 1)
+        finally:
+            await queue.stop()
+
+        assert usage_logs.failed == [
+            {
+                "request_id": "cancel-before-dispatch",
+                "error_code": "client_cancelled",
+                "error_message": "Client cancelled before dispatch",
+                "attempt_number": 0,
+            }
+        ]
+
+    asyncio.run(run_test())
+
+
 def test_queue_snapshot_orders_queued_items_by_actual_dispatch_sequence(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(
         "NOVELAI_PROXY_CONFIG",
@@ -822,6 +866,21 @@ class _RecordingQuota:
 
     def release(self, user_id: int, cost: int):
         self.released.append((user_id, cost))
+
+
+class _RecordingUsageLogs(_NoopUsageLogs):
+    def __init__(self):
+        self.failed = []
+
+    def mark_failed(self, request_id, *, queued_ms, error_code, error_message, attempt_number=0):
+        self.failed.append(
+            {
+                "request_id": request_id,
+                "error_code": error_code,
+                "error_message": error_message,
+                "attempt_number": attempt_number,
+            }
+        )
 
 
 def _api_429() -> APIError:

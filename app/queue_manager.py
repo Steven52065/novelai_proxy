@@ -521,6 +521,7 @@ class RoutingProxyQueue:
         image_hosting: ImageHostingServiceLike | None = None,
     ):
         self._quota_manager = quota_manager
+        self._usage_logs = usage_logs
         self._retry_429_max_attempts = int(retry_429_max_attempts)
         enabled_targets = [target for target in targets if target.id]
         if not enabled_targets:
