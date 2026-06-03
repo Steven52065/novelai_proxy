@@ -154,7 +154,8 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
             SELECT CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) AS bucket,
                    COUNT(DISTINCT request_id) AS requests,
                    SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
-                   SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
+                   SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+                   SUM(CASE WHEN lower(status) = 'success' AND is_retry_success = 1 THEN 1 ELSE 0 END) AS retry_success
             FROM usage_logs
             WHERE datetime(created_at) >= datetime(?)
               AND datetime(created_at) < datetime(?)
@@ -184,7 +185,8 @@ def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id:
         SELECT date(datetime(created_at, '+8 hours')) AS bucket,
                COUNT(DISTINCT request_id) AS requests,
                SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
-               SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected
+               SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+               SUM(CASE WHEN lower(status) = 'success' AND is_retry_success = 1 THEN 1 ELSE 0 END) AS retry_success
         FROM usage_logs
         WHERE datetime(created_at) >= datetime(?)
           AND datetime(created_at) < datetime(?)
@@ -217,12 +219,15 @@ def _fill_trend_range_from_rows(trend_range: dict, rows: list, bucket_indexes: d
         requests = int(row["requests"] or 0)
         failed = int(row["failed"] or 0)
         rejected = int(row["rejected"] or 0)
+        retry_success = int(row["retry_success"] or 0)
         trend_range["series"]["requests"][index] = requests
         trend_range["series"]["failed"][index] = failed
         trend_range["series"]["rejected"][index] = rejected
+        trend_range["series"]["retry_success"][index] = retry_success
         trend_range["totals"]["requests"] += requests
         trend_range["totals"]["failed"] += failed
         trend_range["totals"]["rejected"] += rejected
+        trend_range["totals"]["retry_success"] += retry_success
 
 
 def _empty_trend_range(labels: list[str], bucket_count: int) -> dict:
@@ -232,8 +237,9 @@ def _empty_trend_range(labels: list[str], bucket_count: int) -> dict:
             "requests": [0 for _ in range(bucket_count)],
             "failed": [0 for _ in range(bucket_count)],
             "rejected": [0 for _ in range(bucket_count)],
+            "retry_success": [0 for _ in range(bucket_count)],
         },
-        "totals": {"requests": 0, "failed": 0, "rejected": 0},
+        "totals": {"requests": 0, "failed": 0, "rejected": 0, "retry_success": 0},
     }
 
 

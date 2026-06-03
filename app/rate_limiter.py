@@ -43,7 +43,7 @@ class RateLimiter:
             window_start = (now - timedelta(seconds=seconds)).isoformat()
             count = self.db.query_one(
                 """
-                SELECT COUNT(*) AS c
+                SELECT COUNT(DISTINCT request_id) AS c
                 FROM usage_logs
                 WHERE user_id = ?
                   AND created_at >= ?

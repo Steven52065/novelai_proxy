@@ -49,7 +49,7 @@
         <i data-lucide="chart-line" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
         请求数量趋势
       </h2>
-      <p class="muted" style="margin-top: 4px;">统计全部代理请求、上游失败请求和中转拒绝请求</p>
+      <p class="muted" style="margin-top: 4px;">统计全部代理请求、上游失败请求、中转拒绝请求和重试后成功请求</p>
     </div>
     <div class="dashboard-controls">
       <label class="inline-filter">
@@ -81,6 +81,10 @@
       <span>拒绝数量</span>
       <strong id="trend-total-rejected">0</strong>
     </div>
+    <div>
+      <span>重试成功</span>
+      <strong id="trend-total-retry-success">0</strong>
+    </div>
   </div>
   <div class="trend-chart-card">
     <svg id="request-trend-chart" class="trend-chart" viewBox="0 0 960 360" role="img" aria-label="请求数量趋势折线图"></svg>
@@ -91,6 +95,7 @@
     <span><i style="background:#60a5fa;"></i>请求数量</span>
     <span><i style="background:#ef4444;"></i>失败数量</span>
     <span><i style="background:#f59e0b;"></i>拒绝数量</span>
+    <span><i style="background:#22c55e;"></i>重试成功</span>
   </div>
 </section>
 
@@ -186,10 +191,12 @@
   const totalRequests = document.getElementById("trend-total-requests");
   const totalFailed = document.getElementById("trend-total-failed");
   const totalRejected = document.getElementById("trend-total-rejected");
+  const totalRetrySuccess = document.getElementById("trend-total-retry-success");
   const seriesConfig = [
     {key: "requests", label: "请求数量", color: "#60a5fa", fill: "rgba(96, 165, 250, 0.08)"},
     {key: "failed", label: "失败数量", color: "#ef4444", fill: "rgba(239, 68, 68, 0.06)"},
     {key: "rejected", label: "拒绝数量", color: "#f59e0b", fill: "rgba(245, 158, 11, 0.06)"},
+    {key: "retry_success", label: "重试成功", color: "#22c55e", fill: "rgba(34, 197, 94, 0.05)"},
   ];
   let trends = {};
   let activeRange = "today";
@@ -365,7 +372,7 @@
         fill: "transparent",
         class: "trend-point-hit",
         tabindex: "0",
-        "aria-label": `${label} 请求数量 ${values.requests} 失败数量 ${values.failed} 拒绝数量 ${values.rejected}`,
+        "aria-label": `${label} 请求数量 ${values.requests} 失败数量 ${values.failed} 拒绝数量 ${values.rejected} 重试成功 ${values.retry_success}`,
       });
 
       hitArea.addEventListener("mouseenter", (event) => showTrendTooltip(event, anchor, label, values, markers));
@@ -397,6 +404,7 @@
     totalRequests.textContent = Number(totals.requests || 0);
     totalFailed.textContent = Number(totals.failed || 0);
     totalRejected.textContent = Number(totals.rejected || 0);
+    totalRetrySuccess.textContent = Number(totals.retry_success || 0);
     empty.style.display = Number(totals.requests || 0) > 0 ? "none" : "flex";
     chart.replaceChildren();
     clearTrendTooltip();

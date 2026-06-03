@@ -99,7 +99,7 @@
           </td>
           <td>
             {% if log.status == 'success' %}
-            <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">{% if log.is_retry_success %}<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>{% endif %}成功</span>
+            <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">{% if log.is_retry_success %}<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>重试成功{% else %}成功{% endif %}</span>
             {% elif log.status == 'failed' %}
             <span class="status-pill status-error">失败</span>
             {% elif log.status == 'running' %}
@@ -787,7 +787,7 @@
   function renderStatusPill(status, isRetrySuccess = false) {
     const retryIcon = isRetrySuccess ? `<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>` : "";
     if (status === "success") {
-      return `<span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">${retryIcon}成功</span>`;
+      return `<span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">${retryIcon}${isRetrySuccess ? "重试成功" : "成功"}</span>`;
     }
     if (status === "failed") {
       return `<span class="status-pill status-error">失败</span>`;

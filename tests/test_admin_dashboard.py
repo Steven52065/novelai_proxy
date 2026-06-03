@@ -88,11 +88,12 @@ def test_admin_dashboard_shows_request_trend_stats(tmp_path: Path, monkeypatch):
         assert 'id="request-trends"' in dashboard.text
         trend_json = dashboard.text.split('<script id="request-trends" type="application/json">', 1)[1].split("</script>", 1)[0]
         trends = json.loads(trend_json)
-        # COUNT(DISTINCT request_id) 统计请求数，失败和拒绝用 COUNT(*) 统计记录数
-        assert trends["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 1}
+        # COUNT(DISTINCT request_id) 统计请求数，失败、拒绝和重试成功用 COUNT(*) 统计记录数
+        assert trends["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 1, "retry_success": 0}
         assert sum(trends["today"]["series"]["requests"]) == 3
         assert sum(trends["week"]["series"]["failed"]) == 1
         assert sum(trends["month"]["series"]["rejected"]) == 1
+        assert sum(trends["today"]["series"]["retry_success"]) == 0
 
 
 def test_admin_request_trends_can_filter_by_upstream(tmp_path: Path, monkeypatch):
@@ -107,19 +108,20 @@ def test_admin_request_trends_can_filter_by_upstream(tmp_path: Path, monkeypatch
         )
         user_id = create_resp.json()["user_id"]
         now = datetime.now(timezone.utc).isoformat()
-        for request_id, upstream_id, status in (
-            ("trend-a-success", "opus-a", "success"),
-            ("trend-a-failed", "opus-a", "failed"),
-            ("trend-b-success", "opus-b", "success"),
+        for request_id, upstream_id, status, is_retry_success in (
+            ("trend-a-success", "opus-a", "success", 0),
+            ("trend-a-failed", "opus-a", "failed", 0),
+            ("trend-b-success", "opus-b", "success", 0),
+            ("trend-a-retry-success", "opus-a", "success", 1),
         ):
             app.state.db.execute(
                 """
                 INSERT INTO usage_logs (
-                    request_id, user_id, action, estimated_anlas_cost, status, log_level, upstream_id, created_at
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, upstream_id, is_retry_success, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (request_id, user_id, "generate", 0, status, "INFO", upstream_id, now),
+                (request_id, user_id, "generate", 0, status, "INFO", upstream_id, is_retry_success, now),
             )
 
         client.post("/admin/login", data={"username": "admin", "password": "admin123"})
@@ -133,8 +135,8 @@ def test_admin_request_trends_can_filter_by_upstream(tmp_path: Path, monkeypatch
 
         assert all_resp.status_code == 200
         assert filtered_resp.status_code == 200
-        assert all_resp.json()["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 0}
-        assert filtered_resp.json()["today"]["totals"] == {"requests": 2, "failed": 1, "rejected": 0}
+        assert all_resp.json()["today"]["totals"] == {"requests": 4, "failed": 1, "rejected": 0, "retry_success": 1}
+        assert filtered_resp.json()["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 0, "retry_success": 1}
 
 
 def test_admin_queue_status_can_filter_by_upstream(tmp_path: Path, monkeypatch):

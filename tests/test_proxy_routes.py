@@ -11,6 +11,7 @@ from helpers import (
     FakeImageHosting,
     FakeUpstream,
     write_test_config,
+    write_test_config_with_upstreams,
     write_test_config_with_image_format_policy,
     _wait_for_log_image_urls,
 )
@@ -40,6 +41,17 @@ class InternalErrorFake(FakeUpstream):
 
     async def suggest_tags(self, model: str, prompt: str, lang: str = "en"):
         raise RuntimeError("secret suggest internal detail")
+
+
+class Always429Upstream(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(threading.get_native_id())
+        raise APIError(
+            "Too many requests",
+            request=payload,
+            response={"message": "Too many requests"},
+            code="429",
+        )
 
 
 def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
@@ -570,6 +582,46 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert len(success_log["output_files"]) == 1
         assert Path(success_log["output_files"][0]).read_bytes() == b"fake-image"
         assert success_log["image_urls"] == []
+
+
+def test_rate_limit_counts_retry_attempts_as_one_user_request(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        upstream_a = Always429Upstream()
+        upstream_b = FakeUpstream()
+        app.state.upstream = upstream_a
+        app.state.upstream_clients["opus-b"] = upstream_b
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "retry-rate-limit", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+        client.post(
+            f"/admin/api/users/{user_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "minute", "max_requests": 2},
+        )
+
+        retried = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        second = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        third = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+
+        assert retried.status_code == 201
+        assert second.status_code == 201
+        assert third.status_code == 429
+
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        retry_success_log = next(row for row in logs if row["status"] == "success" and row["is_retry_success"] == 1)
+        retried_rows = [row for row in logs if row["request_id"] == retry_success_log["request_id"]]
+        retry_failed_log = next(row for row in logs if row["request_id"] == retry_success_log["request_id"] and row["status"] == "failed")
+        assert retry_success_log["upstream_id"] == "opus-b"
+        assert retry_failed_log["upstream_id"] == "opus-a"
+        assert len(retried_rows) == 2
 
 def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
