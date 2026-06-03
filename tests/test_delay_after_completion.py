@@ -13,6 +13,7 @@ import asyncio
 import time
 
 import pytest
+from pytest import approx
 
 
 class MockProxyQueue:
@@ -59,7 +60,7 @@ class MockProxyQueue:
             await asyncio.sleep(delay)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_delay_after_completion():
     """测试请求完成后延迟
 
@@ -90,7 +91,7 @@ async def test_delay_after_completion():
         f"Expected at least 0.5s delay after completion, got {time_between_completion_and_next_start:.3f}s"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_delay_with_queue_idle():
     """测试队列长时间空闲后无需等待
 
@@ -119,7 +120,7 @@ async def test_delay_with_queue_idle():
         f"Expected B duration ~{expected_b_duration}s (no delay), got {actual_b_duration:.3f}s"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_first_request_no_delay():
     """测试首次请求无需等待"""
     queue = MockProxyQueue(interval=0.5)
@@ -134,7 +135,7 @@ async def test_first_request_no_delay():
         f"Expected first request to take ~0.1s (no delay), got {elapsed:.3f}s"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_zero_interval_no_delay():
     """测试延迟为 0 时无需等待"""
     queue = MockProxyQueue(interval=0.0)
