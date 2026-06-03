@@ -281,11 +281,11 @@ class ProxyQueue:
                         )
                         # 429 是 API 错误，需要对下一个请求应用额外延迟
                         self._apply_error_extra_delay_next = True
-                        # 抛出 Retry429Error 让调度层（RoutingProxyQueue）重新分配到其他上游
+                        # 抛出 Retry429Error 让调度层（RoutingProxyQueue）按常规路由策略重新调度。
                         if not item.future.done():
                             item.future.set_exception(Retry429Error(exc))
                         # 重要：429 重试时不释放额度，因为请求还在重试中，额度应保持 reserved 状态。
-                        # 如果所有上游都重试失败，调度层会统一释放额度。
+                        # 如果最终超过最大尝试次数，调度层会统一释放额度。
                         # 注意：不在这里调用 task_done()，由 finally 块统一处理。
                         continue
 
@@ -667,15 +667,10 @@ class RoutingProxyQueue:
         self,
         item: DispatchQueueItem,
         *,
-        excluded_upstreams: set[str] | None = None,
         last_429_error: APIError | None = None,
     ) -> None:
         errors = []
-        excluded_upstreams = set() if excluded_upstreams is None else set(excluded_upstreams)
-
-        candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=(item.attempt_number == 0))
-        # 排除已经返回 429 的上游
-        candidates = [uid for uid in candidates if uid not in excluded_upstreams]
+        candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=True)
 
         if not candidates:
             self._finish_unavailable_dispatch(item, errors=errors, last_429_error=last_429_error)
@@ -708,12 +703,10 @@ class RoutingProxyQueue:
                 lambda completed,
                 item=item,
                 upstream_id=upstream_id,
-                excluded_upstreams=frozenset(excluded_upstreams),
                 last_429_error=last_429_error: self._handle_upstream_completion(
                     completed,
                     item=item,
                     upstream_id=upstream_id,
-                    excluded_upstreams=set(excluded_upstreams),
                     last_429_error=last_429_error,
                 )
             )
@@ -727,7 +720,6 @@ class RoutingProxyQueue:
         *,
         item: DispatchQueueItem,
         upstream_id: str,
-        excluded_upstreams: set[str],
         last_429_error: APIError | None,
     ) -> None:
         self._record_adaptive_result(upstream_id, completed)
@@ -739,7 +731,6 @@ class RoutingProxyQueue:
 
         exc = completed.exception()
         if isinstance(exc, Retry429Error):
-            excluded_upstreams.add(upstream_id)
             next_attempt_number = item.attempt_number + 1
             retry_error = last_429_error or exc.original_error
             if next_attempt_number >= self._retry_429_max_attempts:
@@ -751,9 +742,8 @@ class RoutingProxyQueue:
                 attempt_number=next_attempt_number,
             )
             logger.info(
-                "proxy request 429 retry attempt=%s excluded_count=%s request_id=%s upstream_id=%s next_attempt_number=%s",
+                "proxy request 429 retry attempt=%s request_id=%s upstream_id=%s next_attempt_number=%s",
                 next_attempt_number,
-                len(excluded_upstreams),
                 item.request_id,
                 upstream_id,
                 next_attempt_number,
@@ -761,7 +751,6 @@ class RoutingProxyQueue:
             try:
                 self._dispatch_to_upstream(
                     next_item,
-                    excluded_upstreams=excluded_upstreams,
                     last_429_error=retry_error,
                 )
             except Exception as dispatch_exc:

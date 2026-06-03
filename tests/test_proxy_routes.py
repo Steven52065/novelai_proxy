@@ -623,6 +623,34 @@ def test_rate_limit_counts_retry_attempts_as_one_user_request(tmp_path: Path, mo
         assert retry_failed_log["upstream_id"] == "opus-a"
         assert len(retried_rows) == 2
 
+
+def test_429_retry_can_reuse_same_upstream_until_max_attempts(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(write_test_config_with_upstreams(tmp_path, ["opus-a"], retry_429_max_attempts=3)),
+    )
+    from app.main import app
+
+    with TestClient(app) as client:
+        upstream_a = Always429Upstream()
+        app.state.upstream = upstream_a
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "single-upstream-retry", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 429
+        assert len(upstream_a.generate_started_at) == 3
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        failed_rows = [row for row in logs if row["status"] == "failed"]
+        assert [row["attempt_number"] for row in sorted(failed_rows, key=lambda row: row["attempt_number"])] == [0, 1, 2]
+        assert {row["upstream_id"] for row in failed_rows} == {"opus-a"}
+
+
 def test_generate_uploads_images_to_configured_image_host(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

@@ -70,9 +70,9 @@ def test_queue_adds_extra_delay_after_upstream_api_error(tmp_path: Path, monkeyp
         first = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
         second = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
 
-        assert first.status_code == 429
+        assert first.status_code == 201
         assert second.status_code == 201
-        assert len(fake_upstream.generate_started_at) == 2
+        assert len(fake_upstream.generate_started_at) == 3
         assert fake_upstream.generate_started_at[1] - fake_upstream.generate_started_at[0] >= 0.065
 
 def test_admin_queue_status_includes_live_items(tmp_path: Path, monkeypatch):

@@ -206,6 +206,7 @@ def write_test_config_with_upstreams(
     dispatch_max_queue_size: int | None = None,
     routing_strategy: str = "round_robin",
     upstream_interval_min_seconds: float = 0,
+    retry_429_max_attempts: int = 5,
     routing_adaptive_yaml: str = "",
 ) -> Path:
     db_path = tmp_path / "test.db"
@@ -230,6 +231,7 @@ queue:
   upstream_interval_min_seconds: {upstream_interval_min_seconds}
   upstream_interval_max_seconds: {upstream_interval_min_seconds}
   upstream_error_extra_delay_seconds: 0
+  retry_429_max_attempts: {retry_429_max_attempts}
 routing:
   strategy: {routing_strategy}
 {routing_adaptive_yaml.rstrip()}
