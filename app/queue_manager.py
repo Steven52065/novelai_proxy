@@ -116,9 +116,12 @@ class ProxyQueue:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run())
 
-    async def stop(self) -> None:
+    async def stop(self, *, drain: bool = True) -> None:
         if self._worker is None:
             return
+        if drain:
+            await self.queue.join()
+            await self.wait_for_image_uploads()
         self._worker.cancel()
         try:
             await self._worker
@@ -506,6 +509,10 @@ class QueueFull(Exception):
     pass
 
 
+class QueueClosed(Exception):
+    pass
+
+
 class NoAvailableUpstream(Exception):
     pass
 
@@ -587,6 +594,8 @@ class RoutingProxyQueue:
         self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
         self._dispatch_running_item: DispatchQueueItem | None = None
+        self._accepting = True
+        self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
         self._queues = {
             target.id: ProxyQueue(
@@ -621,14 +630,17 @@ class RoutingProxyQueue:
         for queue in self._queues.values():
             queue.start()
 
-    async def stop(self) -> None:
+    async def stop(self, *, drain: bool = True) -> None:
+        self._accepting = False
+        if drain:
+            await self._wait_for_active_futures()
         if self._dispatch_worker is not None:
             self._dispatch_worker.cancel()
             try:
                 await self._dispatch_worker
             except asyncio.CancelledError:
                 pass
-        await asyncio.gather(*(queue.stop() for queue in self._queues.values()))
+        await asyncio.gather(*(queue.stop(drain=drain) for queue in self._queues.values()))
 
     async def wait_for_image_uploads(self) -> None:
         await asyncio.gather(*(queue.wait_for_image_uploads() for queue in self._queues.values()))
@@ -705,6 +717,8 @@ class RoutingProxyQueue:
         manage_quota: bool = True,
         allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
     ) -> bytes:
+        if not self._accepting:
+            raise QueueClosed
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         priority = priority_override if priority_override is not None else self.VIP_PRIORITY if tier == "vip" else self.NORMAL_PRIORITY
@@ -729,12 +743,19 @@ class RoutingProxyQueue:
             )
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
+        self._active_futures.add(future)
+        future.add_done_callback(self._active_futures.discard)
         self._notify_change()
         try:
             return await future
         except asyncio.CancelledError:
             future.cancel()
             raise
+
+    async def _wait_for_active_futures(self) -> None:
+        while self._active_futures:
+            await asyncio.gather(*tuple(self._active_futures), return_exceptions=True)
+            await asyncio.sleep(0)
 
     async def _run_dispatcher(self) -> None:
         while True:

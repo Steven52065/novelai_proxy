@@ -18,7 +18,7 @@ from helpers import (
     write_test_config,
     write_test_config_with_upstreams,
 )
-from app.queue_manager import DispatchQueueItem, QueueFull, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
+from app.queue_manager import DispatchQueueItem, QueueClosed, QueueFull, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
 
 
 def test_queue_waits_between_upstream_requests(tmp_path: Path, monkeypatch):
@@ -511,6 +511,90 @@ def test_vip_request_goes_to_upstream_queue_front_even_when_full():
         finally:
             release_first.set()
             await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_stop_drains_accepted_requests_and_rejects_new_submissions():
+    async def run_test():
+        release_first = threading.Event()
+        upstream = FirstRequestBlockingLabelUpstream(release_first)
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        stop_task = None
+        try:
+            first = asyncio.create_task(
+                queue.submit(
+                    request_id="shutdown-first",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "shutdown-first"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            await _wait_until_async(lambda: upstream.started_labels == ["shutdown-first"])
+
+            second = asyncio.create_task(
+                queue.submit(
+                    request_id="shutdown-second",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "shutdown-second"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            await _wait_until_async(lambda: queue._queues["opus-a"].qsize() == 1)
+
+            stop_task = asyncio.create_task(queue.stop())
+            await _wait_until_async(lambda: not queue._accepting)
+            assert not stop_task.done()
+
+            try:
+                await queue.submit(
+                    request_id="shutdown-rejected",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "shutdown-rejected"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            except QueueClosed:
+                pass
+            else:
+                raise AssertionError("expected QueueClosed")
+
+            release_first.set()
+            assert b"shutdown-first" in await asyncio.wait_for(first, timeout=2)
+            assert b"shutdown-second" in await asyncio.wait_for(second, timeout=2)
+            await asyncio.wait_for(stop_task, timeout=2)
+            assert upstream.started_labels == ["shutdown-first", "shutdown-second"]
+        finally:
+            release_first.set()
+            if stop_task is None:
+                await queue.stop()
+            elif stop_task.done():
+                await asyncio.gather(stop_task, return_exceptions=True)
+            elif not stop_task.done():
+                await asyncio.wait_for(stop_task, timeout=2)
 
     asyncio.run(run_test())
 

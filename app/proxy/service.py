@@ -10,7 +10,7 @@ from novelai_python._exceptions import APIError
 from ..auth import UserContext
 from ..config import LoggingConfig
 from ..logging_utils import json_dumps, logger
-from ..queue_manager import NoAvailableUpstream, QueueFull, RoutingProxyQueue, UserUnavailable
+from ..queue_manager import NoAvailableUpstream, QueueClosed, QueueFull, RoutingProxyQueue, UserUnavailable
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
 from ..usage_logs import UsageLogCreate, UsageLogRepository
@@ -113,6 +113,19 @@ class ProxyRequestService:
                 handler=task.handler,
                 process_zip_response=task.process_zip_response,
                 allowed_upstreams=task.user.allowed_upstreams,
+            )
+        except QueueClosed:
+            self.quota_manager.release(task.user.id, task.estimated_cost)
+            self.usage_logs.mark_rejected(
+                request_id,
+                error_code="server_shutting_down",
+                error_message="Server is shutting down, please retry later",
+                log_level="INFO",
+            )
+            logger.info("proxy queue closed during shutdown request_id=%s user_id=%s", request_id, task.user.id)
+            return ProxyTaskResult(
+                status_code=503,
+                content={"message": "Server is shutting down, please retry later"},
             )
         except QueueFull:
             self.quota_manager.release(task.user.id, task.estimated_cost)
