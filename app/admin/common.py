@@ -47,6 +47,7 @@ def serialize_allowed_endpoints(value: list[str] | None) -> str:
         return DEFAULT_ALLOWED_ENDPOINTS
     valid = []
     for endpoint in value:
+        endpoint = endpoint.strip()
         if endpoint in ALLOWED_ENDPOINT_CHOICES and endpoint not in valid:
             valid.append(endpoint)
     return ",".join(valid or [DEFAULT_ALLOWED_ENDPOINTS])

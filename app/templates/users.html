@@ -104,13 +104,13 @@
   </div>
 </div>
 
-{% if request.query_params.get('api_key') %}
+{% if new_api_key %}
 <section class="notice" style="animation: fadeIn 0.4s ease-out;">
   <div style="display: flex; align-items: center; gap: 10px;">
     <i data-lucide="key" style="width: 20px; height: 20px; stroke: #3b82f6;"></i>
     <div>
       <span style="font-size: 13px; color: #94a3b8; display: block;">成功创建用户！请立即复制并保存您的新 API Key：</span>
-      <code id="new-api-key" style="font-size: 15px; font-weight: 700; color: #fff; background: rgba(59,130,246,0.15);">{{ request.query_params.get('api_key') }}</code>
+      <code id="new-api-key" style="font-size: 15px; font-weight: 700; color: #fff; background: rgba(59,130,246,0.15);">{{ new_api_key }}</code>
     </div>
   </div>
   <button class="secondary copy-button" type="button" data-copy-target="new-api-key" style="min-height: 38px; padding: 6px 14px;">

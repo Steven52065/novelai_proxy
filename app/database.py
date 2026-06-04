@@ -36,6 +36,7 @@ class Database:
                     free_small_only INTEGER NOT NULL DEFAULT 0,
                     allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
                     allowed_upstreams TEXT,
+                    deleted_at TEXT,
                     created_at TEXT NOT NULL
                 );
 
@@ -118,6 +119,8 @@ class Database:
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("users", "allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'")
             self._add_column_if_missing("users", "allowed_upstreams", "TEXT")
+            self._add_column_if_missing("users", "deleted_at", "TEXT")
+            self._clear_stored_user_api_keys()
 
     @contextmanager
     def transaction(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:
@@ -151,6 +154,10 @@ class Database:
         existing = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in existing:
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _clear_stored_user_api_keys(self) -> None:
+        # API keys are shown only once on create/reset. Authentication uses api_key_hash.
+        self.conn.execute("UPDATE users SET api_key = NULL WHERE api_key IS NOT NULL")
 
     def _migrate_usage_logs_unique_constraint(self) -> None:
         """迁移 usage_logs 表的唯一约束，从 request_id 改为 (request_id, attempt_number)"""

@@ -276,6 +276,24 @@ class ProxyQueue:
                         item.attempt_number,
                     )
                     continue
+                if item.manage_quota and not _user_is_available(self.quota_manager, item.user_id):
+                    self.quota_manager.release(item.user_id, item.estimated_cost)
+                    self.usage_logs.mark_rejected(
+                        item.request_id,
+                        error_code="user_unavailable",
+                        error_message="User is no longer active",
+                        log_level="INFO",
+                        attempt_number=item.attempt_number,
+                    )
+                    if not item.future.done():
+                        item.future.set_exception(UserUnavailable("User is no longer active"))
+                    logger.info(
+                        "proxy request skipped because user is unavailable request_id=%s user_id=%s attempt_number=%s",
+                        item.request_id,
+                        item.user_id,
+                        item.attempt_number,
+                    )
+                    continue
                 self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
                 logger.info(
                     "proxy request running request_id=%s upstream_id=%s queued_ms=%s attempt_number=%s",
@@ -492,6 +510,10 @@ class NoAvailableUpstream(Exception):
     pass
 
 
+class UserUnavailable(Exception):
+    pass
+
+
 class Retry429Error(Exception):
     """Raised when a 429 error should be retried at the routing layer."""
     def __init__(self, original_error: APIError):
@@ -503,6 +525,17 @@ def _without_sequence(item: dict[str, object]) -> dict[str, object]:
     clean = dict(item)
     clean.pop("sequence", None)
     return clean
+
+
+def _user_is_available(quota_manager: QuotaManager, user_id: int) -> bool:
+    db = getattr(quota_manager, "db", None)
+    if db is None:
+        return True
+    row = db.query_one(
+        "SELECT is_active, deleted_at FROM users WHERE id = ?",
+        (user_id,),
+    )
+    return row is not None and bool(row["is_active"]) and row["deleted_at"] is None
 
 
 class RoutingProxyQueue:
@@ -719,6 +752,15 @@ class RoutingProxyQueue:
                         item.attempt_number,
                     )
                     continue
+                if item.manage_quota and not _user_is_available(self._quota_manager, item.user_id):
+                    self._finish_user_unavailable(item)
+                    logger.info(
+                        "proxy request skipped by dispatcher because user is unavailable request_id=%s user_id=%s attempt_number=%s",
+                        item.request_id,
+                        item.user_id,
+                        item.attempt_number,
+                    )
+                    continue
                 self._dispatch_to_upstream(item)
             except Exception as exc:
                 if not item.future.done():
@@ -888,6 +930,19 @@ class RoutingProxyQueue:
             error_message="Client cancelled before dispatch",
             attempt_number=item.attempt_number,
         )
+
+    def _finish_user_unavailable(self, item: DispatchQueueItem) -> None:
+        if item.manage_quota:
+            self._quota_manager.release(item.user_id, item.estimated_cost)
+        self._usage_logs.mark_rejected(
+            item.request_id,
+            error_code="user_unavailable",
+            error_message="User is no longer active",
+            log_level="INFO",
+            attempt_number=item.attempt_number,
+        )
+        if not item.future.done():
+            item.future.set_exception(UserUnavailable("User is no longer active"))
 
     def _candidate_upstreams(
         self,

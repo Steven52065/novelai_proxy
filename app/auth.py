@@ -45,13 +45,15 @@ async def get_current_user(
     api_key_hash = hash_api_key(api_key)
     row = db.query_one(
         """
-        SELECT id, api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams
+        SELECT id, api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams, deleted_at
         FROM users
         WHERE api_key_hash = ?
         """,
         (api_key_hash,),
     )
     if row is None or not secrets.compare_digest(row["api_key_hash"], api_key_hash):
+        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API Key"})
+    if row["deleted_at"] is not None:
         raise HTTPException(status_code=401, detail={"message": "Invalid or missing API Key"})
     if not bool(row["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account disabled"})

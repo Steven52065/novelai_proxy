@@ -11,13 +11,13 @@
   </a>
 </div>
 
-{% if request.query_params.get('api_key') %}
+{% if new_api_key %}
 <section class="notice" style="animation: fadeIn 0.4s ease-out;">
   <div style="display: flex; align-items: center; gap: 10px;">
     <i data-lucide="key" style="width: 20px; height: 20px; stroke: #3b82f6;"></i>
     <div>
       <span style="font-size: 13px; color: #94a3b8; display: block;">成功重置 API Key！请立即保存它，离开此页后将无法再次完整查阅：</span>
-      <code id="new-api-key" style="font-size: 15px; font-weight: 700; color: #fff; background: rgba(59,130,246,0.15);">{{ request.query_params.get('api_key') }}</code>
+      <code id="new-api-key" style="font-size: 15px; font-weight: 700; color: #fff; background: rgba(59,130,246,0.15);">{{ new_api_key }}</code>
     </div>
   </div>
   <button class="secondary copy-button" type="button" data-copy-target="new-api-key" style="min-height: 38px; padding: 6px 14px;">
@@ -60,7 +60,7 @@
         {% else %}
         <p class="muted" style="font-size: 13px; padding: 8px 0; display: inline-flex; align-items: center; gap: 6px;">
           <i data-lucide="alert-triangle" style="width: 16px; height: 16px; color: #f59e0b;"></i>
-          此用户在保存明文机制上线前创建，需重置密钥后才能查阅复制。
+          API Key 仅在创建或重置后显示一次；如需再次分发，请重置密钥。
         </p>
         {% endif %}
       </div>
@@ -137,7 +137,7 @@
         修改基本配置信息
       </h2>
       
-      <form method="post" action="/admin/users/{{ user.id }}" class="stack">
+      <form id="user-settings-form" method="post" action="/admin/users/{{ user.id }}" class="stack">
         <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
           <label>
             备注名称
@@ -210,21 +210,20 @@
           </div>
           <p class="muted" style="font-size: 12px; margin-top: 6px;">不勾选表示允许使用全部已启用上游。</p>
         </div>
-
-        <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
-          <button type="submit" style="min-height: 42px; padding: 0 24px;">
-            <i data-lucide="save" style="width: 16px; height: 16px;"></i>
-            保存修改配置
-          </button>
-          
-          <form method="post" action="/admin/users/{{ user.id }}/delete" onsubmit="return confirm('警告：确定要彻底删除此用户及其全部频率限制规则吗？此操作不可逆！');" style="display: inline;">
-            <button class="danger" type="submit" style="min-height: 42px; padding: 0 16px;">
-              <i data-lucide="user-x" style="width: 16px; height: 16px;"></i>
-              注销删除用户
-            </button>
-          </form>
-        </div>
       </form>
+      <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
+        <button type="submit" form="user-settings-form" style="min-height: 42px; padding: 0 24px;">
+          <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+          保存修改配置
+        </button>
+
+        <form method="post" action="/admin/users/{{ user.id }}/delete" onsubmit="return confirm('警告：确定要删除此用户吗？用户将被禁用并撤销 Key，历史日志会保留。');" style="display: inline;">
+          <button class="danger" type="submit" style="min-height: 42px; padding: 0 16px;">
+            <i data-lucide="user-x" style="width: 16px; height: 16px;"></i>
+            注销删除用户
+          </button>
+        </form>
+      </div>
     </section>
   </div>
 
@@ -282,32 +281,29 @@
           <tbody>
             {% for rule in rules %}
             <tr>
-              <!-- Edit form per rule -->
-              <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}">
-                <td style="color:#64748b; font-weight:600;">{{ rule.id }}<input type="hidden" name="user_id" value="{{ user.id }}"></td>
-                <td>
-                  <select name="period" style="min-height:32px; padding: 4px 8px; font-size:13px; background:rgba(0,0,0,0.3);">
-                    {% for period in ["minute", "hour", "day", "month"] %}
-                    <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
-                    {% endfor %}
-                  </select>
-                </td>
-                <td>
-                  <input name="max_requests" type="number" min="1" value="{{ rule.max_requests }}" style="min-height:32px; padding: 4px 8px; font-size:13px; width:80px; background:rgba(0,0,0,0.3);">
-                </td>
-                <td>
-                  <label class="check" style="min-height:auto; font-size: 13px; font-weight:500;">
-                    <input name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }} style="width:14px; height:14px;">
-                    激活
-                  </label>
-                </td>
-                <td>
-                  <button type="submit" class="secondary" style="min-height: 32px; padding: 4px 10px; font-size: 12px; border-color: rgba(99,102,241,0.25); background: rgba(99,102,241,0.06); color:#a5b4fc;">
-                    <i data-lucide="save" style="width: 12px; height: 12px;"></i>
-                    <span>保存</span>
-                  </button>
-                </td>
-              </form>
+              <td style="color:#64748b; font-weight:600;">{{ rule.id }}<input form="rate-limit-rule-{{ rule.id }}" type="hidden" name="user_id" value="{{ user.id }}"></td>
+              <td>
+                <select form="rate-limit-rule-{{ rule.id }}" name="period" style="min-height:32px; padding: 4px 8px; font-size:13px; background:rgba(0,0,0,0.3);">
+                  {% for period in ["minute", "hour", "day", "month"] %}
+                  <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td>
+                <input form="rate-limit-rule-{{ rule.id }}" name="max_requests" type="number" min="1" value="{{ rule.max_requests }}" style="min-height:32px; padding: 4px 8px; font-size:13px; width:80px; background:rgba(0,0,0,0.3);">
+              </td>
+              <td>
+                <label class="check" style="min-height:auto; font-size: 13px; font-weight:500;">
+                  <input form="rate-limit-rule-{{ rule.id }}" name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }} style="width:14px; height:14px;">
+                  激活
+                </label>
+              </td>
+              <td>
+                <button form="rate-limit-rule-{{ rule.id }}" type="submit" class="secondary" style="min-height: 32px; padding: 4px 10px; font-size: 12px; border-color: rgba(99,102,241,0.25); background: rgba(99,102,241,0.06); color:#a5b4fc;">
+                  <i data-lucide="save" style="width: 12px; height: 12px;"></i>
+                  <span>保存</span>
+                </button>
+              </td>
               <td>
                 <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirm('确认要删除此限制规则吗？');">
                   <input type="hidden" name="user_id" value="{{ user.id }}">
@@ -322,6 +318,9 @@
           </tbody>
         </table>
       </div>
+      {% for rule in rules %}
+      <form id="rate-limit-rule-{{ rule.id }}" method="post" action="/admin/rate-limit-rules/{{ rule.id }}"></form>
+      {% endfor %}
       {% endif %}
     </section>
   </div>

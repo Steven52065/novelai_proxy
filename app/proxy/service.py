@@ -10,7 +10,7 @@ from novelai_python._exceptions import APIError
 from ..auth import UserContext
 from ..config import LoggingConfig
 from ..logging_utils import json_dumps, logger
-from ..queue_manager import NoAvailableUpstream, QueueFull, RoutingProxyQueue
+from ..queue_manager import NoAvailableUpstream, QueueFull, RoutingProxyQueue, UserUnavailable
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
 from ..usage_logs import UsageLogCreate, UsageLogRepository
@@ -139,6 +139,12 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=503,
                 content={"message": "No enabled upstream is available for this user"},
+            )
+        except UserUnavailable as exc:
+            logger.info("proxy request rejected because user is unavailable request_id=%s user_id=%s", request_id, task.user.id)
+            return ProxyTaskResult(
+                status_code=403,
+                content={"message": str(exc)},
             )
         except APIError as exc:
             status_code = int(exc.code) if str(exc.code or "").isdigit() else 502

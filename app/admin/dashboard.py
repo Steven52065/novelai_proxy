@@ -187,7 +187,7 @@ def dashboard_snapshot_payload(
 def _dashboard_stats(request: Request | WebSocket) -> dict:
     db: Database = request.app.state.db
     today_start, today_end = local_day_range(datetime.now(DISPLAY_TIMEZONE))
-    total_users = db.query_one("SELECT COUNT(*) AS c FROM users")["c"]
+    total_users = db.query_one("SELECT COUNT(*) AS c FROM users WHERE deleted_at IS NULL")["c"]
     today_requests = db.query_one(
         """
         SELECT COUNT(DISTINCT request_id) AS c

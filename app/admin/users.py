@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+import secrets
+import time
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -21,6 +24,8 @@ from .common import (
 
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin")
+API_KEY_FLASH_COOKIE = "novelai_proxy_api_key_flash"
+API_KEY_FLASH_TTL_SECONDS = 5 * 60
 
 
 class CreateUserRequest(BaseModel):
@@ -58,12 +63,13 @@ async def list_users(request: Request):
     rows = db.query_all(
         """
         SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.created_at,
-               u.api_key,
+               NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
                COALESCE(q.reserved, 0) AS anlas_reserved
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        WHERE u.deleted_at IS NULL
         ORDER BY u.id DESC
         """
     )
@@ -74,18 +80,18 @@ async def list_users(request: Request):
 async def create_user(payload: CreateUserRequest, request: Request):
     db: Database = request.app.state.db
     quota_manager: QuotaManager = request.app.state.quota_manager
+    _validate_allowed_endpoints(payload.allowed_endpoints)
     _validate_allowed_upstreams(payload.allowed_upstreams, request)
     api_key = generate_api_key()
     now = utc_now_iso()
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (api_key_hash, api_key, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams, created_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+            INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams, created_at)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?)
             """,
             (
                 hash_api_key(api_key),
-                api_key,
                 payload.name,
                 payload.tier,
                 1 if payload.free_small_only else 0,
@@ -103,6 +109,9 @@ async def create_user(payload: CreateUserRequest, request: Request):
 @api_router.patch("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def update_user(user_id: int, payload: UpdateUserRequest, request: Request):
     db: Database = request.app.state.db
+    _ensure_user_exists(db, user_id)
+    if payload.allowed_endpoints is not None:
+        _validate_allowed_endpoints(payload.allowed_endpoints)
     if payload.allowed_upstreams is not None:
         _validate_allowed_upstreams(payload.allowed_upstreams, request)
     fields = []
@@ -129,21 +138,21 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
         params.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
 
-    quota_fields = []
-    quota_params = []
-    if payload.anlas_total is not None:
-        quota_fields.append("total = ?")
-        quota_params.append(payload.anlas_total)
-    if payload.reset_period is not None:
-        quota_fields.append("reset_period = ?")
-        quota_params.append(payload.reset_period)
-    if payload.reset_day is not None:
-        quota_fields.append("reset_day = ?")
-        quota_params.append(payload.reset_day)
-    if quota_fields:
-        quota_params.append(user_id)
-        db.execute(f"UPDATE user_anlas_quota SET {', '.join(quota_fields)} WHERE user_id = ?", tuple(quota_params))
-    if fields or quota_fields:
+    has_quota_update = (
+        payload.anlas_total is not None
+        or payload.reset_period is not None
+        or payload.reset_day is not None
+    )
+    if has_quota_update:
+        quota = db.query_one(
+            "SELECT total, reset_period, reset_day FROM user_anlas_quota WHERE user_id = ?",
+            (user_id,),
+        )
+        total = payload.anlas_total if payload.anlas_total is not None else int(quota["total"]) if quota else 0
+        reset_period = payload.reset_period if payload.reset_period is not None else str(quota["reset_period"]) if quota else "month"
+        reset_day = payload.reset_day if payload.reset_day is not None else int(quota["reset_day"]) if quota else None
+        request.app.state.quota_manager.create_or_update(user_id, total, reset_period, reset_day)
+    if fields or has_quota_update:
         _notify_dashboard_change(request)
     return {"ok": True}
 
@@ -151,26 +160,39 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
 @api_router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def delete_user(user_id: int, request: Request):
     db: Database = request.app.state.db
-    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    _ensure_user_exists(db, user_id)
+    deleted_hash = f"deleted:{user_id}:{secrets.token_urlsafe(24)}"
+    db.execute(
+        """
+        UPDATE users
+        SET is_active = 0,
+            deleted_at = ?,
+            api_key_hash = ?,
+            api_key = NULL
+        WHERE id = ? AND deleted_at IS NULL
+        """,
+        (utc_now_iso(), deleted_hash, user_id),
+    )
     _notify_dashboard_change(request)
     return {"ok": True}
 
 
 @api_router.post("/users/{user_id}/reset-quota", dependencies=[Depends(require_admin)])
 async def reset_user_quota(user_id: int, request: Request):
+    _ensure_user_exists(request.app.state.db, user_id)
     request.app.state.quota_manager.reset_usage(user_id)
+    _notify_dashboard_change(request)
     return {"ok": True}
 
 
 @api_router.post("/users/{user_id}/reset-key", dependencies=[Depends(require_admin)])
 async def reset_user_key(user_id: int, request: Request):
     db: Database = request.app.state.db
-    if db.query_one("SELECT id FROM users WHERE id = ?", (user_id,)) is None:
-        raise HTTPException(status_code=404, detail={"message": "User not found"})
+    _ensure_user_exists(db, user_id)
     api_key = generate_api_key()
     db.execute(
-        "UPDATE users SET api_key_hash = ?, api_key = ? WHERE id = ?",
-        (hash_api_key(api_key), api_key, user_id),
+        "UPDATE users SET api_key_hash = ?, api_key = NULL WHERE id = ?",
+        (hash_api_key(api_key), user_id),
     )
     return {"user_id": user_id, "api_key": api_key}
 
@@ -178,6 +200,7 @@ async def reset_user_key(user_id: int, request: Request):
 @api_router.post("/users/{user_id}/rate-limit-rules", dependencies=[Depends(require_admin)])
 async def add_rate_limit_rule(user_id: int, payload: RateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
+    _ensure_user_exists(db, user_id)
     now = utc_now_iso()
     db.execute(
         """
@@ -192,6 +215,7 @@ async def add_rate_limit_rule(user_id: int, payload: RateLimitRuleRequest, reque
 @api_router.patch("/rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
 async def update_rate_limit_rule(rule_id: int, payload: RateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
+    _ensure_rate_limit_rule_exists(db, rule_id)
     db.execute(
         """
         UPDATE rate_limit_rules
@@ -206,6 +230,7 @@ async def update_rate_limit_rule(rule_id: int, payload: RateLimitRuleRequest, re
 @api_router.delete("/rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
 async def delete_rate_limit_rule(rule_id: int, request: Request):
     db: Database = request.app.state.db
+    _ensure_rate_limit_rule_exists(db, rule_id)
     db.execute("DELETE FROM rate_limit_rules WHERE id = ?", (rule_id,))
     return {"ok": True}
 
@@ -215,10 +240,11 @@ async def users_page(request: Request):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
+    new_api_key = _pop_api_key_flash(request)
     rows = db.query_all(
         """
         SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.created_at,
-               u.api_key,
+               NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
                COALESCE(q.reserved, 0) AS anlas_reserved,
@@ -226,10 +252,11 @@ async def users_page(request: Request):
                COALESCE(q.reset_day, 1) AS reset_day
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        WHERE u.deleted_at IS NULL
         ORDER BY u.id DESC
         """
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "users.html",
         {
@@ -237,8 +264,12 @@ async def users_page(request: Request):
             "users": [user_row_to_dict(row) for row in rows],
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
+            "new_api_key": new_api_key,
         },
     )
+    if new_api_key is not None:
+        response.delete_cookie(API_KEY_FLASH_COOKIE)
+    return response
 
 
 @web_router.post("/users")
@@ -263,12 +294,14 @@ async def create_user_form(
             reset_period=reset_period,
             reset_day=reset_day,
             free_small_only=free_small_only == "on",
-            allowed_endpoints=allowed_endpoints or [DEFAULT_ALLOWED_ENDPOINTS],
+            allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
         ),
         request,
     )
-    return RedirectResponse(f"/admin/users?api_key={result['api_key']}", status_code=303)
+    response = RedirectResponse("/admin/users", status_code=303)
+    _set_api_key_flash(response, request, result["api_key"])
+    return response
 
 
 @web_router.get("/users/{user_id}", response_class=HTMLResponse)
@@ -276,14 +309,15 @@ async def user_edit_page(user_id: int, request: Request):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
+    new_api_key = _pop_api_key_flash(request)
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.api_key,
+        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, NULL AS api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
-        WHERE u.id = ?
+        WHERE u.id = ? AND u.deleted_at IS NULL
         """,
         (user_id,),
     )
@@ -293,7 +327,7 @@ async def user_edit_page(user_id: int, request: Request):
         "SELECT id, period, max_requests, is_active FROM rate_limit_rules WHERE user_id = ? ORDER BY id",
         (user_id,),
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "user_edit.html",
         {
@@ -302,8 +336,12 @@ async def user_edit_page(user_id: int, request: Request):
             "rules": [row_to_dict(row) for row in rules],
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
+            "new_api_key": new_api_key,
         },
     )
+    if new_api_key is not None:
+        response.delete_cookie(API_KEY_FLASH_COOKIE)
+    return response
 
 
 @web_router.post("/users/{user_id}")
@@ -332,7 +370,7 @@ async def update_user_form(
             anlas_total=anlas_total,
             reset_period=reset_period,
             reset_day=reset_day,
-            allowed_endpoints=allowed_endpoints or [DEFAULT_ALLOWED_ENDPOINTS],
+            allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
         ),
         request,
@@ -361,7 +399,9 @@ async def reset_key_form(user_id: int, request: Request):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
     result = await reset_user_key(user_id, request)
-    return RedirectResponse(f"/admin/users/{user_id}?api_key={result['api_key']}", status_code=303)
+    response = RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+    _set_api_key_flash(response, request, result["api_key"])
+    return response
 
 
 @web_router.post("/users/{user_id}/rate-limit-rules")
@@ -402,6 +442,86 @@ async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: i
         return RedirectResponse("/admin/login", status_code=303)
     await delete_rate_limit_rule(rule_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+def _ensure_user_exists(db: Database, user_id: int) -> None:
+    row = db.query_one(
+        "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL",
+        (user_id,),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail={"message": "User not found"})
+
+
+def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
+    row = db.query_one(
+        """
+        SELECT r.id
+        FROM rate_limit_rules r
+        JOIN users u ON u.id = r.user_id
+        WHERE r.id = ? AND u.deleted_at IS NULL
+        """,
+        (rule_id,),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail={"message": "Rate limit rule not found"})
+
+
+def _validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
+    if allowed_endpoints is None:
+        return
+    normalized = [item.strip() for item in allowed_endpoints if item.strip()]
+    if not normalized:
+        raise HTTPException(status_code=400, detail={"message": "At least one endpoint must be allowed"})
+    unknown = sorted({item for item in normalized if item not in ALLOWED_ENDPOINT_CHOICES})
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": f"Unknown endpoint: {', '.join(unknown)}"},
+        )
+
+
+def _set_api_key_flash(response: Response, request: Request, api_key: str) -> None:
+    token = secrets.token_urlsafe(24)
+    _cleanup_api_key_flash_store(request)
+    _api_key_flash_store(request)[token] = (api_key, time.monotonic() + API_KEY_FLASH_TTL_SECONDS)
+    response.set_cookie(
+        API_KEY_FLASH_COOKIE,
+        token,
+        max_age=API_KEY_FLASH_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _pop_api_key_flash(request: Request) -> str | None:
+    token = request.cookies.get(API_KEY_FLASH_COOKIE)
+    if not token:
+        return None
+    _cleanup_api_key_flash_store(request)
+    value = _api_key_flash_store(request).pop(token, None)
+    if value is None:
+        return None
+    api_key, expires_at = value
+    if time.monotonic() > expires_at:
+        return None
+    return api_key
+
+
+def _api_key_flash_store(request: Request) -> dict[str, tuple[str, float]]:
+    store = getattr(request.app.state, "admin_api_key_flash_store", None)
+    if store is None:
+        store = {}
+        request.app.state.admin_api_key_flash_store = store
+    return store
+
+
+def _cleanup_api_key_flash_store(request: Request) -> None:
+    now = time.monotonic()
+    store = _api_key_flash_store(request)
+    for token, (_, expires_at) in list(store.items()):
+        if expires_at <= now:
+            store.pop(token, None)
 
 
 def _upstream_choices(request: Request) -> list[str]:
