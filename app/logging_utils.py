@@ -36,6 +36,10 @@ def configure_logging(config: LoggingConfig) -> None:
 
     for handler in list(root_logger.handlers):
         root_logger.removeHandler(handler)
+        try:
+            handler.flush()
+        finally:
+            handler.close()
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)

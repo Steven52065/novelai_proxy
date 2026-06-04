@@ -86,6 +86,59 @@ def test_validation_error_is_logged(tmp_path: Path, monkeypatch):
     log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
     assert "generate-image payload validation failed errors=" in log_text
 
+def test_generate_malformed_json_returns_400(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "bad-json-generate", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post(
+            "/ai/generate-image",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            content="{",
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"message": "Invalid request"}
+
+    log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
+    assert "generate-image JSON parsing failed errors=" in log_text
+
+def test_encode_vibe_malformed_json_returns_400(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "bad-json-vibe",
+                "tier": "normal",
+                "anlas_total": 100,
+                "allowed_endpoints": ["generate-image", "encode-vibe"],
+            },
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post(
+            "/ai/encode-vibe",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            content="{",
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"message": "Invalid request"}
+
+    log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
+    assert "encode-vibe JSON parsing failed errors=" in log_text
+
 def test_generate_preserves_non_cost_official_payload_fields(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

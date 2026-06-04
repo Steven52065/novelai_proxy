@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from json import JSONDecodeError
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,7 +42,10 @@ async def generate_image(
     if endpoint_denied is not None:
         return endpoint_denied
 
-    payload = await request.json()
+    payload, parse_error_response = await _read_json_payload(request, ENDPOINT_GENERATE_IMAGE)
+    if parse_error_response is not None:
+        return parse_error_response
+
     try:
         request_payload = _normalize_generate_image_payload(payload)
         cost_inputs = _generate_cost_estimator.extract_inputs(request_payload)
@@ -138,7 +142,10 @@ async def encode_vibe(
     if endpoint_denied is not None:
         return endpoint_denied
 
-    payload = await request.json()
+    payload, parse_error_response = await _read_json_payload(request, ENDPOINT_ENCODE_VIBE)
+    if parse_error_response is not None:
+        return parse_error_response
+
     if not isinstance(payload, dict):
         return JSONResponse(status_code=400, content={"message": "Invalid request"})
 
@@ -297,6 +304,14 @@ async def subscription(
 
 def _proxy_service(request: Request) -> ProxyRequestService:
     return request.app.state.proxy_service
+
+
+async def _read_json_payload(request: Request, endpoint: str) -> tuple[Any, JSONResponse | None]:
+    try:
+        return await request.json(), None
+    except (JSONDecodeError, UnicodeDecodeError) as exc:
+        logger.error("%s JSON parsing failed errors=%s", endpoint, str(exc))
+        return None, JSONResponse(status_code=400, content={"message": "Invalid request"})
 
 
 def _task_result_to_response(result: ProxyTaskResult) -> Response | JSONResponse:
