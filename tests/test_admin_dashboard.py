@@ -141,6 +141,68 @@ def test_admin_request_trends_can_filter_by_upstream(tmp_path: Path, monkeypatch
         assert filtered_resp.json()["today"]["totals"] == {"requests": 3, "failed": 1, "rejected": 0, "retry_success": 1}
 
 
+def test_admin_dashboard_deduplicates_cross_hour_retry_attempts_for_day_counts(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "cross-hour-retry-user", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        local_today_start = datetime.now(timezone(timedelta(hours=8))).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        first_attempt_at = (local_today_start + timedelta(hours=1, minutes=10)).astimezone(timezone.utc).isoformat()
+        retry_attempt_at = (local_today_start + timedelta(hours=2, minutes=10)).astimezone(timezone.utc).isoformat()
+        separate_request_at = (local_today_start + timedelta(hours=3, minutes=10)).astimezone(timezone.utc).isoformat()
+
+        for request_id, attempt_number, status, is_retry_success, created_at in (
+            ("cross-hour-retry", 0, "failed", 0, first_attempt_at),
+            ("cross-hour-retry", 1, "success", 1, retry_attempt_at),
+            ("separate-today-request", 0, "success", 0, separate_request_at),
+        ):
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, attempt_number, user_id, action, estimated_anlas_cost,
+                    final_anlas_cost, status, log_level, upstream_id, is_retry_success, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    attempt_number,
+                    user_id,
+                    "generate",
+                    0,
+                    0 if status == "success" else None,
+                    status,
+                    "INFO",
+                    "opus-a",
+                    is_retry_success,
+                    created_at,
+                ),
+            )
+
+        dashboard_resp = client.get("/admin/api/dashboard", auth=("admin", "admin123"))
+        trend_resp = client.get("/admin/api/request-trends?upstream_id=opus-a", auth=("admin", "admin123"))
+
+        assert dashboard_resp.status_code == 200
+        assert dashboard_resp.json()["stats"]["today_requests"] == 2
+        assert trend_resp.status_code == 200
+        trends = trend_resp.json()
+        assert trends["week"]["totals"]["requests"] == 2
+        assert trends["month"]["totals"]["requests"] == 2
+        assert trends["week"]["totals"]["failed"] == 1
+        assert trends["week"]["totals"]["retry_success"] == 1
+
+
 def test_dashboard_hourly_stats_track_usage_log_changes(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
     from app.main import app

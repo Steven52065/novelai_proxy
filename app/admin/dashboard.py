@@ -187,16 +187,7 @@ def _dashboard_stats(request: Request | WebSocket) -> dict:
     db: Database = request.app.state.db
     today_start, today_end = local_day_range(datetime.now(DISPLAY_TIMEZONE))
     total_users = db.query_one("SELECT COUNT(*) AS c FROM users WHERE deleted_at IS NULL")["c"]
-    today_requests = db.query_one(
-        """
-        SELECT COALESCE(SUM(request_count), 0) AS c
-        FROM dashboard_hourly_stats
-        WHERE upstream_id = '__all__'
-          AND bucket_hour >= ?
-          AND bucket_hour < ?
-        """,
-        (_hour_bucket(today_start), _hour_bucket(today_end)),
-    )["c"]
+    today_requests = _request_count_for_range(db, today_start, today_end)
     total_anlas = db.query_one(
         "SELECT COALESCE(SUM(anlas_cost), 0) AS c FROM dashboard_hourly_stats WHERE upstream_id = '__all__'"
     )["c"]
@@ -346,21 +337,7 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
 
     _fill_trend_range_from_rows(
         ranges["today"],
-        db.query_all(
-            """
-            SELECT CAST(substr(bucket_hour, 12, 2) AS INTEGER) AS bucket,
-                   SUM(request_count) AS requests,
-                   SUM(failed_count) AS failed,
-                   SUM(rejected_count) AS rejected,
-                   SUM(retry_success_count) AS retry_success
-            FROM dashboard_hourly_stats
-            WHERE bucket_hour >= ?
-              AND bucket_hour < ?
-              AND upstream_id = ?
-            GROUP BY bucket
-            """,
-            (_hour_bucket(today_start), _hour_bucket(today_end), _stats_upstream_id(upstream_id)),
-        ),
+        _hour_bucket_rows(db, today_start, today_end, upstream_id=upstream_id),
     )
     _fill_trend_range_from_rows(
         ranges["week"],
@@ -376,21 +353,121 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
     return ranges
 
 
-def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
-    return db.query_all(
+def _request_count_for_range(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> int:
+    row = db.query_one(
         """
-        SELECT substr(bucket_hour, 1, 10) AS bucket,
-               SUM(request_count) AS requests,
-               SUM(failed_count) AS failed,
-               SUM(rejected_count) AS rejected,
-               SUM(retry_success_count) AS retry_success
-        FROM dashboard_hourly_stats
+        SELECT COUNT(DISTINCT request_id) AS c
+        FROM dashboard_hourly_request_refs
         WHERE bucket_hour >= ?
           AND bucket_hour < ?
           AND upstream_id = ?
-        GROUP BY bucket
         """,
         (_hour_bucket(start), _hour_bucket(end), _stats_upstream_id(upstream_id)),
+    )
+    return int(row["c"] or 0)
+
+
+def _hour_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
+    start_bucket = _hour_bucket(start)
+    end_bucket = _hour_bucket(end)
+    stats_upstream_id = _stats_upstream_id(upstream_id)
+    return db.query_all(
+        """
+        WITH request_rows AS (
+            SELECT CAST(substr(bucket_hour, 12, 2) AS INTEGER) AS bucket,
+                   COUNT(DISTINCT request_id) AS requests
+            FROM dashboard_hourly_request_refs
+            WHERE bucket_hour >= ?
+              AND bucket_hour < ?
+              AND upstream_id = ?
+            GROUP BY bucket
+        ),
+        status_rows AS (
+            SELECT CAST(substr(bucket_hour, 12, 2) AS INTEGER) AS bucket,
+                   SUM(failed_count) AS failed,
+                   SUM(rejected_count) AS rejected,
+                   SUM(retry_success_count) AS retry_success
+            FROM dashboard_hourly_stats
+            WHERE bucket_hour >= ?
+              AND bucket_hour < ?
+              AND upstream_id = ?
+            GROUP BY bucket
+        ),
+        buckets AS (
+            SELECT bucket FROM request_rows
+            UNION
+            SELECT bucket FROM status_rows
+        )
+        SELECT buckets.bucket AS bucket,
+               COALESCE(request_rows.requests, 0) AS requests,
+               COALESCE(status_rows.failed, 0) AS failed,
+               COALESCE(status_rows.rejected, 0) AS rejected,
+               COALESCE(status_rows.retry_success, 0) AS retry_success
+        FROM buckets
+        LEFT JOIN request_rows ON request_rows.bucket = buckets.bucket
+        LEFT JOIN status_rows ON status_rows.bucket = buckets.bucket
+        ORDER BY buckets.bucket
+        """,
+        (
+            start_bucket,
+            end_bucket,
+            stats_upstream_id,
+            start_bucket,
+            end_bucket,
+            stats_upstream_id,
+        ),
+    )
+
+
+def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
+    start_bucket = _hour_bucket(start)
+    end_bucket = _hour_bucket(end)
+    stats_upstream_id = _stats_upstream_id(upstream_id)
+    return db.query_all(
+        """
+        WITH request_rows AS (
+            SELECT substr(bucket_hour, 1, 10) AS bucket,
+                   COUNT(DISTINCT request_id) AS requests
+            FROM dashboard_hourly_request_refs
+            WHERE bucket_hour >= ?
+              AND bucket_hour < ?
+              AND upstream_id = ?
+            GROUP BY bucket
+        ),
+        status_rows AS (
+            SELECT substr(bucket_hour, 1, 10) AS bucket,
+                   SUM(failed_count) AS failed,
+                   SUM(rejected_count) AS rejected,
+                   SUM(retry_success_count) AS retry_success
+            FROM dashboard_hourly_stats
+            WHERE bucket_hour >= ?
+              AND bucket_hour < ?
+              AND upstream_id = ?
+            GROUP BY bucket
+        ),
+        buckets AS (
+            SELECT bucket FROM request_rows
+            UNION
+            SELECT bucket FROM status_rows
+        )
+        SELECT buckets.bucket AS bucket,
+               COALESCE(request_rows.requests, 0) AS requests,
+               COALESCE(status_rows.failed, 0) AS failed,
+               COALESCE(status_rows.rejected, 0) AS rejected,
+               COALESCE(status_rows.retry_success, 0) AS retry_success
+        FROM buckets
+        LEFT JOIN request_rows ON request_rows.bucket = buckets.bucket
+        LEFT JOIN status_rows ON status_rows.bucket = buckets.bucket
+        ORDER BY buckets.bucket
+        """,
+        (
+            start_bucket,
+            end_bucket,
+            stats_upstream_id,
+            start_bucket,
+            end_bucket,
+            stats_upstream_id,
+        ),
     )
 
 

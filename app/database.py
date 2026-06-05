@@ -121,6 +121,9 @@ class Database:
                     ref_count INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY(bucket_hour, upstream_id, request_id)
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_dashboard_hourly_refs_upstream_bucket
+                    ON dashboard_hourly_request_refs(upstream_id, bucket_hour, request_id);
                 """
             )
             self._add_column_if_missing("usage_logs", "model", "TEXT")
