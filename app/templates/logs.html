@@ -28,6 +28,28 @@
       <i data-lucide="search" style="width: 16px; height: 16px;"></i>
       执行筛选
     </button>
+
+    <div class="logs-column-filter">
+      <button id="logs-column-filter-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="logs-column-filter-menu" style="min-height: 44px; padding: 0 16px;">
+        <i data-lucide="columns-3" style="width: 16px; height: 16px;"></i>
+        筛选列
+      </button>
+      <div id="logs-column-filter-menu" class="logs-column-filter-menu" hidden>
+        <label class="check"><input type="checkbox" data-log-column-toggle="request_id" checked>日志 ID</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="log_level" checked>记录级别</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="user" checked>操作用户</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="action" checked>API动作</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="upstream" checked>上游</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="model" checked>使用模型</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="size" checked>图像尺寸</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="anlas" checked>Anlas</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="status" checked>运行状态</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="total_ms" checked>总时长</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="upstream_ms" checked>上游时长</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="created_at" checked>创建时间</label>
+        <label class="check"><input type="checkbox" data-log-column-toggle="actions" checked>操作</label>
+      </div>
+    </div>
   </form>
 </section>
 
@@ -36,25 +58,25 @@
     <table class="logs-table">
       <thead>
         <tr>
-          <th>日志 ID</th>
-          <th>记录级别</th>
-          <th>操作用户</th>
-          <th>API动作</th>
-          <th>上游</th>
-          <th>使用模型</th>
-          <th>图像尺寸</th>
-          <th>Anlas (预估/实际)</th>
-          <th>运行状态</th>
-          <th>总时长</th>
-          <th>上游时长</th>
-          <th>创建时间</th>
-          <th>操作</th>
+          <th data-log-column="request_id">日志 ID</th>
+          <th data-log-column="log_level">记录级别</th>
+          <th data-log-column="user">操作用户</th>
+          <th data-log-column="action">API动作</th>
+          <th data-log-column="upstream">上游</th>
+          <th data-log-column="model">使用模型</th>
+          <th data-log-column="size">图像尺寸</th>
+          <th data-log-column="anlas">Anlas (预估/实际)</th>
+          <th data-log-column="status">运行状态</th>
+          <th data-log-column="total_ms">总时长</th>
+          <th data-log-column="upstream_ms">上游时长</th>
+          <th data-log-column="created_at">创建时间</th>
+          <th data-log-column="actions">操作</th>
         </tr>
       </thead>
       <tbody id="logs-table-body" data-next-before-id="{{ next_before_id if next_before_id is not none else '' }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
-          <td colspan="13" style="text-align: center; padding: 48px 0;">
+          <td data-log-colspan colspan="13" style="text-align: center; padding: 48px 0;">
             <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
               <i data-lucide="info" style="width:32px; height:32px; stroke:#64748b;"></i>
               <span class="muted">当前没有任何符合条件的日志记录</span>
@@ -65,41 +87,41 @@
 
         {% for log in logs %}
         <tr class="log-row" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};{% if log.is_retry_success %} background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);{% endif %}">
-          <td class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span style="margin-left: 4px; font-size: 10px; color: #fbbf24; vertical-align: middle;" title="重试后成功">⟳</span>{% endif %}</td>
-          <td>
+          <td data-log-column="request_id" class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span style="margin-left: 4px; font-size: 10px; color: #fbbf24; vertical-align: middle;" title="重试后成功">⟳</span>{% endif %}</td>
+          <td data-log-column="log_level">
             <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
           </td>
-          <td style="font-weight: 700; color: #fff;">{{ log.user_name }}</td>
-          <td>
+          <td data-log-column="user" style="font-weight: 700; color: #fff;">{{ log.user_name }}</td>
+          <td data-log-column="action">
             <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">{{ log.action }}</span>
           </td>
-          <td class="mono">
+          <td data-log-column="upstream" class="mono">
             {% if log.upstream_id %}
             <code>{{ log.upstream_id }}</code>
             {% else %}
             <span class="muted">-</span>
             {% endif %}
           </td>
-          <td>
+          <td data-log-column="model">
             {% if log.model %}
             <span class="badge badge-normal" style="font-size: 11px;">{{ log.model }}</span>
             {% else %}
             <span class="muted">-</span>
             {% endif %}
           </td>
-          <td class="mono">
+          <td data-log-column="size" class="mono">
             {% if log.width and log.height %}
             <code>{{ log.width }}x{{ log.height }}</code>
             {% else %}
             <span class="muted">-</span>
             {% endif %}
           </td>
-          <td class="mono">
+          <td data-log-column="anlas" class="mono">
             <span style="color: #94a3b8;">{{ log.estimated_anlas_cost }}</span>
             <span style="color: rgba(255,255,255,0.15)">/</span>
             <span style="color: #34d399; font-weight: 700;">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
           </td>
-          <td>
+          <td data-log-column="status">
             {% if log.status == 'success' %}
             <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">{% if log.is_retry_success %}<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>重试成功{% else %}成功{% endif %}</span>
             {% elif log.status == 'failed' %}
@@ -110,22 +132,22 @@
             <span class="status-pill">{{ log.status }}</span>
             {% endif %}
           </td>
-          <td class="mono">
+          <td data-log-column="total_ms" class="mono">
             {% if log.total_ms is not none %}
             <span title="{{ log.total_ms }} ms">{{ log.total_ms_display }}</span>
             {% else %}
             <span class="muted">-</span>
             {% endif %}
           </td>
-          <td class="mono">
+          <td data-log-column="upstream_ms" class="mono">
             {% if log.upstream_ms is not none %}
             <span title="{{ log.upstream_ms }} ms">{{ log.upstream_ms_display }}</span>
             {% else %}
             <span class="muted">-</span>
             {% endif %}
           </td>
-          <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
-          <td>
+          <td data-log-column="created_at" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
+          <td data-log-column="actions">
             <div class="log-actions">
               <button class="secondary log-toggle-btn" data-log-id="{{ log.id }}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
                 <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
@@ -143,7 +165,7 @@
           </td>
         </tr>
         <tr class="log-detail-row" data-log-id="{{ log.id }}" hidden>
-          <td colspan="13">
+          <td data-log-colspan colspan="13">
             <div class="log-details-block" data-log-id="{{ log.id }}">
               <div class="log-details-content">
                 <div id="replay-result-log-{{ log.id }}" class="replay-result" hidden></div>
@@ -243,11 +265,46 @@
 <script>
 (() => {
   const logsLimitStorageKey = "novelai_proxy_logs_limit";
+  const logsColumnStorageKey = "novelai_proxy_logs_visible_columns";
+  const logColumns = [
+    "request_id",
+    "log_level",
+    "user",
+    "action",
+    "upstream",
+    "model",
+    "size",
+    "anlas",
+    "status",
+    "total_ms",
+    "upstream_ms",
+    "created_at",
+    "actions",
+  ];
+  const logColumnWidths = {
+    request_id: 76,
+    log_level: 82,
+    user: 96,
+    action: 104,
+    upstream: 112,
+    model: 94,
+    size: 104,
+    anlas: 92,
+    status: 90,
+    total_ms: 78,
+    upstream_ms: 78,
+    created_at: 122,
+    actions: 100,
+  };
+  const logsTable = document.querySelector(".logs-table");
   const filterForm = document.getElementById("logs-filter-form");
   const limitInput = document.getElementById("logs-limit-input");
   const tableBody = document.getElementById("logs-table-body");
   const infiniteStatus = document.getElementById("logs-infinite-status");
   const infiniteSentinel = document.getElementById("logs-infinite-sentinel");
+  const columnFilterToggle = document.getElementById("logs-column-filter-toggle");
+  const columnFilterMenu = document.getElementById("logs-column-filter-menu");
+  const columnToggles = Array.from(document.querySelectorAll("[data-log-column-toggle]"));
 
   // Stash large base64 values into a temporary cache map for copier and previewer
   const base64Cache = new Map();
@@ -255,7 +312,9 @@
   let loadingMoreLogs = false;
 
   applyStoredLimit();
+  applyStoredColumns();
   bindLimitPersistence();
+  bindColumnFilter();
   bindLogInteractions();
   setupInfiniteScroll();
 
@@ -309,6 +368,83 @@
     const parsed = Number.parseInt(value, 10);
     if (!Number.isFinite(parsed)) return null;
     return Math.max(1, Math.min(parsed, 500));
+  }
+
+  function applyStoredColumns() {
+    const selected = readStoredColumns();
+    syncColumnToggles(selected);
+    applyVisibleColumns(selected);
+  }
+
+  function bindColumnFilter() {
+    if (!columnFilterToggle || !columnFilterMenu) return;
+    columnFilterToggle.addEventListener("click", () => {
+      const willOpen = columnFilterMenu.hidden;
+      columnFilterMenu.hidden = !willOpen;
+      columnFilterToggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+    document.addEventListener("click", (event) => {
+      if (columnFilterMenu.hidden) return;
+      const target = event.target;
+      if (columnFilterMenu.contains(target) || columnFilterToggle.contains(target)) return;
+      columnFilterMenu.hidden = true;
+      columnFilterToggle.setAttribute("aria-expanded", "false");
+    });
+    columnToggles.forEach((input) => {
+      input.addEventListener("change", () => {
+        let selected = getSelectedColumnsFromToggles();
+        if (selected.length === 0) {
+          selected = ["request_id"];
+        }
+        writeStoredValue(logsColumnStorageKey, JSON.stringify(selected));
+        syncColumnToggles(selected);
+        applyVisibleColumns(selected);
+      });
+    });
+  }
+
+  function readStoredColumns() {
+    const raw = readStoredValue(logsColumnStorageKey);
+    if (!raw) return [...logColumns];
+    try {
+      const parsed = JSON.parse(raw);
+      const selected = Array.isArray(parsed)
+        ? parsed.filter((column) => logColumns.includes(column))
+        : [];
+      return selected.length > 0 ? selected : [...logColumns];
+    } catch (err) {
+      return [...logColumns];
+    }
+  }
+
+  function getSelectedColumnsFromToggles() {
+    return columnToggles
+      .filter((input) => input.checked)
+      .map((input) => input.dataset.logColumnToggle)
+      .filter((column) => logColumns.includes(column));
+  }
+
+  function syncColumnToggles(selectedColumns) {
+    const selected = new Set(selectedColumns);
+    columnToggles.forEach((input) => {
+      input.checked = selected.has(input.dataset.logColumnToggle);
+    });
+  }
+
+  function applyVisibleColumns(selectedColumns) {
+    const selected = new Set(selectedColumns);
+    logColumns.forEach((column) => {
+      document.querySelectorAll(`[data-log-column="${column}"]`).forEach((cell) => {
+        cell.hidden = !selected.has(column);
+      });
+    });
+    document.querySelectorAll("[data-log-colspan]").forEach((cell) => {
+      cell.colSpan = Math.max(1, selected.size);
+    });
+    if (logsTable) {
+      const selectedWidth = selectedColumns.reduce((sum, column) => sum + (logColumnWidths[column] || 96), 0);
+      logsTable.style.minWidth = `${Math.max(520, selectedWidth)}px`;
+    }
   }
 
   // Event delegation keeps interactions working for both server-rendered rows
@@ -449,6 +585,7 @@
       Array.from(template.children).forEach((row) => fragment.appendChild(row));
     });
     tableBody.appendChild(fragment);
+    applyVisibleColumns(readStoredColumns());
     lucide.createIcons();
   }
 
@@ -729,27 +866,27 @@
 
     return `
         <tr class="log-row" style="border-left: 4px solid ${borderColorFor(status)};${rowStyle}">
-          <td class="mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}${retryIcon}</td>
-          <td>
+          <td data-log-column="request_id" class="mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}${retryIcon}</td>
+          <td data-log-column="log_level">
             <span class="level level-${escapeAttr(String(logLevel).toLowerCase())}">${escapeHtml(logLevel)}</span>
           </td>
-          <td style="font-weight: 700; color: #fff;">${escapeHtml(log.user_name ?? "")}</td>
-          <td>
+          <td data-log-column="user" style="font-weight: 700; color: #fff;">${escapeHtml(log.user_name ?? "")}</td>
+          <td data-log-column="action">
             <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">${escapeHtml(log.action ?? "")}</span>
           </td>
-          <td class="mono">${log.upstream_id ? `<code>${escapeHtml(log.upstream_id)}</code>` : `<span class="muted">-</span>`}</td>
-          <td>${model}</td>
-          <td class="mono">${size}</td>
-          <td class="mono">
+          <td data-log-column="upstream" class="mono">${log.upstream_id ? `<code>${escapeHtml(log.upstream_id)}</code>` : `<span class="muted">-</span>`}</td>
+          <td data-log-column="model">${model}</td>
+          <td data-log-column="size" class="mono">${size}</td>
+          <td data-log-column="anlas" class="mono">
             <span style="color: #94a3b8;">${escapeHtml(log.estimated_anlas_cost ?? 0)}</span>
             <span style="color: rgba(255,255,255,0.15)">/</span>
             <span style="color: #34d399; font-weight: 700;">${escapeHtml(finalCost)}</span>
           </td>
-          <td>${renderStatusPill(status, isRetrySuccess)}</td>
-          <td class="mono">${totalDuration}</td>
-          <td class="mono">${upstreamDuration}</td>
-          <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
-          <td>
+          <td data-log-column="status">${renderStatusPill(status, isRetrySuccess)}</td>
+          <td data-log-column="total_ms" class="mono">${totalDuration}</td>
+          <td data-log-column="upstream_ms" class="mono">${upstreamDuration}</td>
+          <td data-log-column="created_at" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
+          <td data-log-column="actions">
             <div class="log-actions">
               <button class="secondary log-toggle-btn" data-log-id="${escapeAttr(logId)}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
                 <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
@@ -760,7 +897,7 @@
           </td>
         </tr>
         <tr class="log-detail-row" data-log-id="${escapeAttr(logId)}" hidden>
-          <td colspan="13">
+          <td data-log-colspan colspan="13">
             <div class="log-details-block" data-log-id="${escapeAttr(logId)}">
               <div class="log-details-content">
                 <div id="replay-result-log-${escapeAttr(logId)}" class="replay-result" hidden></div>
