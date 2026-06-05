@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from json import JSONDecodeError
 from typing import Any
@@ -191,7 +192,7 @@ async def _submit_zip_task(
             process_zip_response=True,
         )
     )
-    return _task_result_to_response(result)
+    return _task_result_to_response(request, result)
 
 
 async def _submit_binary_task(
@@ -222,7 +223,7 @@ async def _submit_binary_task(
         media_type=media_type,
         response_headers=response_headers,
     )
-    return _task_result_to_response(result)
+    return _task_result_to_response(request, result)
 
 
 @router.get("/ai/generate-image/suggest-tags")
@@ -314,7 +315,8 @@ async def _read_json_payload(request: Request, endpoint: str) -> tuple[Any, JSON
         return None, JSONResponse(status_code=400, content={"message": "Invalid request"})
 
 
-def _task_result_to_response(result: ProxyTaskResult) -> Response | JSONResponse:
+def _task_result_to_response(request: Request, result: ProxyTaskResult) -> Response | JSONResponse:
+    _mark_total_duration(request, result.request_id)
     if result.is_binary:
         return Response(
             content=result.content,
@@ -327,6 +329,17 @@ def _task_result_to_response(result: ProxyTaskResult) -> Response | JSONResponse
         content=result.content,
         headers=result.headers,
     )
+
+
+def _mark_total_duration(request: Request, request_id: str | None) -> None:
+    if not request_id:
+        return
+    started_at = getattr(request.state, "request_started_at", None)
+    try:
+        total_ms = int((time.perf_counter() - float(started_at)) * 1000)
+    except (TypeError, ValueError):
+        return
+    request.app.state.usage_logs.mark_total_duration(request_id, max(0, total_ms))
 
 
 def _generate_metadata(params: GenerateCostInputs) -> dict[str, Any]:

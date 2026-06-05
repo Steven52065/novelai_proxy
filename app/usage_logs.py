@@ -113,6 +113,7 @@ class UsageLogRepository:
         final_cost: int,
         output_files: list[dict[str, object]],
         image_urls: list[dict[str, object]] | None = None,
+        upstream_ms: int | None = None,
         is_retry_success: bool = False,
         attempt_number: int = 0,
     ) -> None:
@@ -121,6 +122,7 @@ class UsageLogRepository:
             UPDATE usage_logs
             SET status = 'success',
                 queued_ms = COALESCE(queued_ms, ?),
+                upstream_ms = COALESCE(upstream_ms, ?),
                 final_anlas_cost = ?,
                 output_files = ?,
                 image_urls = COALESCE(image_urls, ?),
@@ -132,6 +134,7 @@ class UsageLogRepository:
             """,
             (
                 queued_ms,
+                upstream_ms,
                 final_cost,
                 json_dumps(output_files),
                 json_dumps([] if image_urls is None else image_urls),
@@ -143,19 +146,29 @@ class UsageLogRepository:
         )
         self._notify_change()
 
-    def mark_failed(self, request_id: str, *, queued_ms: int, error_code: str, error_message: str, attempt_number: int = 0) -> None:
+    def mark_failed(
+        self,
+        request_id: str,
+        *,
+        queued_ms: int,
+        error_code: str,
+        error_message: str,
+        upstream_ms: int | None = None,
+        attempt_number: int = 0,
+    ) -> None:
         self.db.execute(
             """
             UPDATE usage_logs
             SET status = 'failed',
                 queued_ms = COALESCE(queued_ms, ?),
+                upstream_ms = COALESCE(upstream_ms, ?),
                 error_code = ?,
                 error_message = ?,
                 log_level = 'ERROR',
                 completed_at = ?
             WHERE request_id = ? AND attempt_number = ?
             """,
-            (queued_ms, error_code, error_message[:500], utc_now_iso(), request_id, attempt_number),
+            (queued_ms, upstream_ms, error_code, error_message[:500], utc_now_iso(), request_id, attempt_number),
         )
         self._notify_change()
 
@@ -191,6 +204,27 @@ class UsageLogRepository:
             """,
             (json_dumps(image_urls), request_id, attempt_number),
         )
+        self._notify_change()
+
+    def mark_total_duration(self, request_id: str, total_ms: int, attempt_number: int | None = None) -> None:
+        if attempt_number is None:
+            self.db.execute(
+                """
+                UPDATE usage_logs
+                SET total_ms = ?
+                WHERE request_id = ?
+                """,
+                (total_ms, request_id),
+            )
+        else:
+            self.db.execute(
+                """
+                UPDATE usage_logs
+                SET total_ms = ?
+                WHERE request_id = ? AND attempt_number = ?
+                """,
+                (total_ms, request_id, attempt_number),
+            )
         self._notify_change()
 
     def insert_retry_attempt(

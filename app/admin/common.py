@@ -74,6 +74,8 @@ def usage_log_to_dict(row):
     data = row_to_dict(row)
     data["created_at_display"] = format_display_time(data.get("created_at"))
     data["completed_at_display"] = format_display_time(data.get("completed_at"))
+    data["total_ms_display"] = format_duration_ms(data.get("total_ms"))
+    data["upstream_ms_display"] = format_duration_ms(data.get("upstream_ms"))
     data["request_payload"] = json_or_none(data.get("request_payload"))
     data["output_files"] = json_or_empty_list(data.get("output_files"))
     data["image_urls"] = json_or_empty_list(data.get("image_urls"))
@@ -90,6 +92,25 @@ def format_display_time(value: str | None) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(DISPLAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S UTC+8")
+
+
+def format_duration_ms(value) -> str:
+    if value is None:
+        return "-"
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    if milliseconds < 0:
+        return "-"
+    if milliseconds < 1000:
+        return f"{milliseconds} ms"
+    seconds = milliseconds / 1000
+    if seconds < 60:
+        return f"{seconds:.2f} s"
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds - minutes * 60
+    return f"{minutes} min {remaining_seconds:.1f} s"
 
 
 def json_or_none(value):

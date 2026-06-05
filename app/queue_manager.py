@@ -263,6 +263,7 @@ class ProxyQueue:
             self._running_started_at = time.monotonic()
             self._notify_change()
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
+            upstream_ms: int | None = None
             try:
                 if item.cancel_future is not None and item.cancel_future.done():
                     if item.manage_quota:
@@ -310,7 +311,11 @@ class ProxyQueue:
                     item.attempt_number,
                 )
                 await self._wait_for_upstream_interval(item.request_id)
-                payload = await self._execute_handler_with_timeout(item)
+                upstream_started_at = time.monotonic()
+                try:
+                    payload = await self._execute_handler_with_timeout(item)
+                finally:
+                    upstream_ms = int((time.monotonic() - upstream_started_at) * 1000)
                 # 记录请求完成时间（成功情况）
                 self._last_upstream_completed_at = time.monotonic()
             except Exception as exc:
@@ -328,6 +333,7 @@ class ProxyQueue:
                             queued_ms=queued_ms,
                             error_code=code,
                             error_message=message,
+                            upstream_ms=upstream_ms,
                             attempt_number=item.attempt_number,
                         )
                         total_queue_length = self.get_total_queue_length() if self.get_total_queue_length else self.queue.qsize()
@@ -361,6 +367,7 @@ class ProxyQueue:
                     queued_ms=queued_ms,
                     error_code=code,
                     error_message=message,
+                    upstream_ms=upstream_ms,
                     attempt_number=item.attempt_number,
                 )
                 logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
@@ -386,6 +393,7 @@ class ProxyQueue:
                     queued_ms=queued_ms,
                     final_cost=item.estimated_cost,
                     output_files=saved_files,
+                    upstream_ms=upstream_ms,
                     is_retry_success=item.is_retry_success,
                     attempt_number=item.attempt_number,
                 )

@@ -46,6 +46,7 @@ class ProxyTaskResult:
     content: bytes | dict[str, Any]
     media_type: str | None = None
     headers: dict[str, str] | None = None
+    request_id: str | None = None
 
     @property
     def is_binary(self) -> bool:
@@ -134,6 +135,7 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=503,
                 content={"message": "Server is shutting down, please retry later"},
+                request_id=request_id,
             )
         except QueueFull:
             self.quota_manager.release(task.user.id, task.estimated_cost)
@@ -147,6 +149,7 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=503,
                 content={"message": "Queue full, please retry later"},
+                request_id=request_id,
             )
         except NoAvailableUpstream as exc:
             self.quota_manager.release(task.user.id, task.estimated_cost)
@@ -160,12 +163,14 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=503,
                 content={"message": "No enabled upstream is available for this user"},
+                request_id=request_id,
             )
         except UserUnavailable as exc:
             logger.info("proxy request rejected because user is unavailable request_id=%s user_id=%s", request_id, task.user.id)
             return ProxyTaskResult(
                 status_code=403,
                 content={"message": str(exc)},
+                request_id=request_id,
             )
         except APIError as exc:
             status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
@@ -173,22 +178,25 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=status_code,
                 content={"message": MESSAGE_UPSTREAM_REQUEST_FAILED},
+                request_id=request_id,
             )
         except UpstreamExecutionTimeout:
             logger.error("upstream execution timed out request_id=%s", request_id)
             return ProxyTaskResult(
                 status_code=504,
                 content={"message": MESSAGE_UPSTREAM_REQUEST_TIMED_OUT},
+                request_id=request_id,
             )
         except Exception as exc:
             logger.exception("proxy request failed request_id=%s", request_id)
-            return ProxyTaskResult(status_code=502, content={"message": MESSAGE_PROXY_REQUEST_FAILED})
+            return ProxyTaskResult(status_code=502, content={"message": MESSAGE_PROXY_REQUEST_FAILED}, request_id=request_id)
 
         return ProxyTaskResult(
             status_code=201,
             content=binary_payload,
             media_type=media_type,
             headers=response_headers,
+            request_id=request_id,
         )
 
     def _reject_before_queue(self, request_id: str, task: ProxyTaskRequest) -> ProxyTaskResult | None:
@@ -211,6 +219,7 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=403,
                 content={"message": "User is limited to definitely free small image generations"},
+                request_id=request_id,
             )
 
         rate = self.rate_limiter.check(task.user.id)
@@ -228,6 +237,7 @@ class ProxyRequestService:
                 status_code=429,
                 content={"message": rate.message, "retry_after": rate.retry_after},
                 headers={"Retry-After": str(rate.retry_after)},
+                request_id=request_id,
             )
 
         if task.estimated_cost < 0:
@@ -242,6 +252,7 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=400,
                 content={"message": "Request exceeds supported cost bounds"},
+                request_id=request_id,
             )
 
         try:
@@ -264,6 +275,7 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=402,
                 content={"message": str(exc), "need": exc.need, "have": exc.have},
+                request_id=request_id,
             )
 
         return None

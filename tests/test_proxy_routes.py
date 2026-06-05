@@ -174,6 +174,41 @@ def test_generate_preserves_non_cost_official_payload_fields(tmp_path: Path, mon
         assert success_log["request_payload"]["parameters"]["skip_cfg_above_sigma"] == 59.04722600415217
         assert success_log["request_payload"]["parameters"]["seed"] == 6816488388
 
+
+def test_generate_records_duration_metrics_in_usage_log_and_page(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "duration-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 201
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        success_log = next(row for row in logs if row["status"] == "success")
+        assert isinstance(success_log["total_ms"], int)
+        assert isinstance(success_log["upstream_ms"], int)
+        assert success_log["total_ms"] >= 0
+        assert success_log["upstream_ms"] >= 0
+        assert success_log["total_ms_display"] != "-"
+        assert success_log["upstream_ms_display"] != "-"
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        page = client.get("/admin/logs")
+        assert page.status_code == 200
+        assert "总时长" in page.text
+        assert "上游时长" in page.text
+        assert success_log["total_ms_display"] in page.text
+        assert success_log["upstream_ms_display"] in page.text
+
 def test_generate_passes_unknown_official_fields_without_sdk_validation(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

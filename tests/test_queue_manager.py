@@ -1053,7 +1053,7 @@ class _RecordingUsageLogs(_NoopUsageLogs):
     def __init__(self):
         self.failed = []
 
-    def mark_failed(self, request_id, *, queued_ms, error_code, error_message, attempt_number=0):
+    def mark_failed(self, request_id, *, queued_ms, error_code, error_message, upstream_ms=None, attempt_number=0):
         self.failed.append(
             {
                 "request_id": request_id,

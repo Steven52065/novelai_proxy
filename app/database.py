@@ -75,6 +75,8 @@ class Database:
                     estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
                     final_anlas_cost INTEGER,
                     queued_ms INTEGER,
+                    upstream_ms INTEGER,
+                    total_ms INTEGER,
                     status TEXT NOT NULL,
                     error_code TEXT,
                     error_message TEXT,
@@ -104,6 +106,8 @@ class Database:
             self._add_column_if_missing("usage_logs", "n_samples", "INTEGER")
             self._add_column_if_missing("usage_logs", "final_anlas_cost", "INTEGER")
             self._add_column_if_missing("usage_logs", "queued_ms", "INTEGER")
+            self._add_column_if_missing("usage_logs", "upstream_ms", "INTEGER")
+            self._add_column_if_missing("usage_logs", "total_ms", "INTEGER")
             self._add_column_if_missing("usage_logs", "error_code", "TEXT")
             self._add_column_if_missing("usage_logs", "error_message", "TEXT")
             self._add_column_if_missing("usage_logs", "log_level", "TEXT NOT NULL DEFAULT 'INFO'")
@@ -188,6 +192,8 @@ class Database:
                 estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
                 final_anlas_cost INTEGER,
                 queued_ms INTEGER,
+                upstream_ms INTEGER,
+                total_ms INTEGER,
                 status TEXT NOT NULL,
                 error_code TEXT,
                 error_message TEXT,
@@ -205,13 +211,13 @@ class Database:
             -- 复制旧数据（所有记录的 attempt_number 默认为 0）
             INSERT INTO usage_logs_new (
                 id, request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, final_anlas_cost, queued_ms, status, error_code, error_message,
+                estimated_anlas_cost, final_anlas_cost, queued_ms, upstream_ms, total_ms, status, error_code, error_message,
                 log_level, upstream_id, request_payload, output_files, image_urls, is_retry_success,
                 created_at, completed_at
             )
             SELECT
                 id, request_id, 0, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, final_anlas_cost, queued_ms, status, error_code, error_message,
+                estimated_anlas_cost, final_anlas_cost, queued_ms, upstream_ms, total_ms, status, error_code, error_message,
                 log_level, upstream_id, request_payload, output_files, image_urls, is_retry_success,
                 created_at, completed_at
             FROM usage_logs;

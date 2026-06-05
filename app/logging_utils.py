@@ -74,6 +74,7 @@ class RequestLoggingMiddleware:
             return
 
         started_at = time.perf_counter()
+        scope.setdefault("state", {})["request_started_at"] = started_at
         status_code = 500
 
         async def send_wrapper(message: Message) -> None:

@@ -45,6 +45,8 @@
           <th>图像尺寸</th>
           <th>Anlas (预估/实际)</th>
           <th>运行状态</th>
+          <th>总时长</th>
+          <th>上游时长</th>
           <th>创建时间</th>
           <th>操作</th>
         </tr>
@@ -52,7 +54,7 @@
       <tbody id="logs-table-body" data-next-before-id="{{ next_before_id if next_before_id is not none else '' }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
-          <td colspan="11" style="text-align: center; padding: 48px 0;">
+          <td colspan="13" style="text-align: center; padding: 48px 0;">
             <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
               <i data-lucide="info" style="width:32px; height:32px; stroke:#64748b;"></i>
               <span class="muted">当前没有任何符合条件的日志记录</span>
@@ -108,6 +110,20 @@
             <span class="status-pill">{{ log.status }}</span>
             {% endif %}
           </td>
+          <td class="mono">
+            {% if log.total_ms is not none %}
+            <span title="{{ log.total_ms }} ms">{{ log.total_ms_display }}</span>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="mono">
+            {% if log.upstream_ms is not none %}
+            <span title="{{ log.upstream_ms }} ms">{{ log.upstream_ms_display }}</span>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
           <td>
             <div class="log-actions">
@@ -127,7 +143,7 @@
           </td>
         </tr>
         <tr class="log-detail-row" data-log-id="{{ log.id }}" hidden>
-          <td colspan="11">
+          <td colspan="13">
             <div class="log-details-block" data-log-id="{{ log.id }}">
               <div class="log-details-content">
                 <div id="replay-result-log-{{ log.id }}" class="replay-result" hidden></div>
@@ -702,6 +718,8 @@
       ? `<code>${escapeHtml(log.width)}x${escapeHtml(log.height)}</code>`
       : `<span class="muted">-</span>`;
     const finalCost = (log.final_anlas_cost === null || log.final_anlas_cost === undefined) ? "-" : log.final_anlas_cost;
+    const totalDuration = renderDuration(log.total_ms_display, log.total_ms);
+    const upstreamDuration = renderDuration(log.upstream_ms_display, log.upstream_ms);
     const replayCell = log.request_payload
       ? `<button class="secondary btn-replay-log" data-log-id="${escapeAttr(logId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
       : `<span class="muted" style="font-size: 12px;">不可重放</span>`;
@@ -728,6 +746,8 @@
             <span style="color: #34d399; font-weight: 700;">${escapeHtml(finalCost)}</span>
           </td>
           <td>${renderStatusPill(status, isRetrySuccess)}</td>
+          <td class="mono">${totalDuration}</td>
+          <td class="mono">${upstreamDuration}</td>
           <td style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
           <td>
             <div class="log-actions">
@@ -740,7 +760,7 @@
           </td>
         </tr>
         <tr class="log-detail-row" data-log-id="${escapeAttr(logId)}" hidden>
-          <td colspan="11">
+          <td colspan="13">
             <div class="log-details-block" data-log-id="${escapeAttr(logId)}">
               <div class="log-details-content">
                 <div id="replay-result-log-${escapeAttr(logId)}" class="replay-result" hidden></div>
@@ -796,6 +816,27 @@
       return `<span class="status-pill" style="color: var(--info); background: var(--info-bg); border-color: var(--info-border);">运行中</span>`;
     }
     return `<span class="status-pill">${escapeHtml(status)}</span>`;
+  }
+
+  function renderDuration(display, value) {
+    const label = display || formatDurationMs(value);
+    if (!label || label === "-") {
+      return `<span class="muted">-</span>`;
+    }
+    const raw = Number.parseInt(value, 10);
+    const title = Number.isFinite(raw) ? `${raw} ms` : label;
+    return `<span title="${escapeAttr(title)}">${escapeHtml(label)}</span>`;
+  }
+
+  function formatDurationMs(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    const milliseconds = Number.parseInt(value, 10);
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) return "-";
+    if (milliseconds < 1000) return `${milliseconds} ms`;
+    const seconds = milliseconds / 1000;
+    if (seconds < 60) return `${seconds.toFixed(2)} s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes} min ${(seconds - minutes * 60).toFixed(1)} s`;
   }
 
   function renderHostedImages(images) {

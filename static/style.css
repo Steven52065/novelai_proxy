@@ -774,7 +774,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 
 .logs-table {
   table-layout: fixed;
-  min-width: 1180px;
+  min-width: 1400px;
 }
 
 .logs-table th:nth-child(1), .logs-table td:nth-child(1) { width: 96px; }
@@ -785,8 +785,11 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 .logs-table th:nth-child(6), .logs-table td:nth-child(6) { width: 108px; }
 .logs-table th:nth-child(7), .logs-table td:nth-child(7) { width: 150px; }
 .logs-table th:nth-child(8), .logs-table td:nth-child(8) { width: 100px; }
-.logs-table th:nth-child(9), .logs-table td:nth-child(9) { width: 150px; }
-.logs-table th:nth-child(10), .logs-table td:nth-child(10) { width: 110px; }
+.logs-table th:nth-child(9), .logs-table td:nth-child(9) { width: 110px; }
+.logs-table th:nth-child(10), .logs-table td:nth-child(10) { width: 96px; }
+.logs-table th:nth-child(11), .logs-table td:nth-child(11) { width: 96px; }
+.logs-table th:nth-child(12), .logs-table td:nth-child(12) { width: 150px; }
+.logs-table th:nth-child(13), .logs-table td:nth-child(13) { width: 130px; }
 
 .logs-table th,
 .logs-table td {
