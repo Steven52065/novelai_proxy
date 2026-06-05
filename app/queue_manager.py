@@ -373,6 +373,10 @@ class ProxyQueue:
                 logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
                 if not item.future.done():
                     item.future.set_exception(exc)
+                if isinstance(exc, UpstreamExecutionTimeout):
+                    # 调用方可以立刻收到超时，但同一上游槽位要等 handler 真正结束后才能释放。
+                    await self._wait_for_timed_out_handler(item.request_id, exc.handler_task)
+                    self._last_upstream_completed_at = time.monotonic()
             else:
                 saved_files = []
                 if item.process_zip_response:
@@ -439,8 +443,20 @@ class ProxyQueue:
         if handler_task in done:
             return handler_task.result()
         handler_task.cancel()
-        handler_task.add_done_callback(self._consume_timed_out_handler_result)
-        raise UpstreamExecutionTimeout(self.upstream_execution_timeout_seconds)
+        raise UpstreamExecutionTimeout(self.upstream_execution_timeout_seconds, handler_task=handler_task)
+
+    async def _wait_for_timed_out_handler(self, request_id: str, handler_task: asyncio.Task | None) -> None:
+        if handler_task is None:
+            return
+        try:
+            await asyncio.shield(handler_task)
+        except asyncio.CancelledError:
+            if not handler_task.done():
+                handler_task.add_done_callback(self._consume_timed_out_handler_result)
+                logger.info("timed out upstream handler cleanup interrupted request_id=%s", request_id)
+                raise
+        except Exception:
+            logger.debug("timed out upstream handler finished with an exception request_id=%s", request_id, exc_info=True)
 
     @staticmethod
     def _consume_timed_out_handler_result(task: asyncio.Task) -> None:
@@ -562,8 +578,9 @@ class UserUnavailable(Exception):
 
 
 class UpstreamExecutionTimeout(Exception):
-    def __init__(self, timeout_seconds: float):
+    def __init__(self, timeout_seconds: float, *, handler_task: asyncio.Task | None = None):
         self.timeout_seconds = timeout_seconds
+        self.handler_task = handler_task
         super().__init__(f"Upstream execution exceeded {timeout_seconds:g} seconds")
 
 

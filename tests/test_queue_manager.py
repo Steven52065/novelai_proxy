@@ -409,6 +409,78 @@ def test_upstream_execution_timeout_excludes_interval_and_frees_queue():
     asyncio.run(run_test())
 
 
+def test_upstream_execution_timeout_keeps_upstream_serial_until_handler_finishes():
+    async def run_test():
+        cleanup_event = asyncio.Event()
+        upstream = CancellationResistantTimeoutUpstream(cleanup_event=cleanup_event)
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+            upstream_execution_timeout_seconds=0.02,
+        )
+        queue.start()
+        fast_task = None
+        try:
+            slow_task = asyncio.create_task(
+                queue.submit(
+                    request_id="slow-timeout",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "slow"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            try:
+                await asyncio.wait_for(slow_task, timeout=1)
+            except UpstreamExecutionTimeout:
+                pass
+            else:
+                raise AssertionError("expected upstream execution timeout")
+
+            assert upstream.cancel_seen
+
+            fast_task = asyncio.create_task(
+                queue.submit(
+                    request_id="fast-after-timeout",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "fast"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            await asyncio.sleep(0.05)
+
+            assert upstream.started_labels == ["slow"]
+            assert upstream.max_active == 1
+            assert not fast_task.done()
+
+            cleanup_event.set()
+            assert await asyncio.wait_for(fast_task, timeout=1) == b"fast"
+            assert upstream.started_labels == ["slow", "fast"]
+            assert upstream.finished_labels == ["slow", "fast"]
+            assert upstream.max_active == 1
+        finally:
+            cleanup_event.set()
+            if fast_task is not None and not fast_task.done():
+                fast_task.cancel()
+            await queue.stop(drain=False)
+
+    asyncio.run(run_test())
+
+
 def test_normal_429_retry_returns_to_queue_tail():
     async def run_test():
         release_first = threading.Event()
@@ -1039,6 +1111,35 @@ class TimeoutByLabelUpstream(FakeUpstream):
         if label == self.timeout_label:
             await asyncio.Event().wait()
         return label.encode("utf-8")
+
+
+class CancellationResistantTimeoutUpstream(FakeUpstream):
+    def __init__(self, *, cleanup_event: asyncio.Event):
+        super().__init__()
+        self.cleanup_event = cleanup_event
+        self.started_labels = []
+        self.finished_labels = []
+        self.active = 0
+        self.max_active = 0
+        self.cancel_seen = False
+
+    async def generate_image_payload_zip(self, payload):
+        label = payload["label"]
+        self.started_labels.append(label)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            if label == "slow":
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.cancel_seen = True
+                    await self.cleanup_event.wait()
+                    return b"late"
+            return label.encode("utf-8")
+        finally:
+            self.active -= 1
+            self.finished_labels.append(label)
 
 
 class _RecordingQuota:
