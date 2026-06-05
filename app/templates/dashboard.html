@@ -201,6 +201,7 @@
   let activeRange = "today";
   let activeTrendHit = null;
   let activeTrendMarkers = [];
+  let trendRefreshTimer = null;
 
   function svgEl(name, attrs = {}) {
     const node = document.createElementNS("http://www.w3.org/2000/svg", name);
@@ -475,8 +476,24 @@
     }
   }
 
+  function millisecondsUntilNextHour() {
+    const now = new Date();
+    const nextHour = new Date(now);
+    nextHour.setMinutes(0, 0, 0);
+    nextHour.setHours(nextHour.getHours() + 1);
+    return Math.max(0, nextHour.getTime() - now.getTime());
+  }
+
+  function scheduleTrendRefresh() {
+    window.clearTimeout(trendRefreshTimer);
+    trendRefreshTimer = window.setTimeout(() => {
+      refreshTrends();
+      scheduleTrendRefresh();
+    }, millisecondsUntilNextHour());
+  }
+
   upstreamFilter.addEventListener("change", refreshTrends);
-  window.setInterval(refreshTrends, 60 * 60 * 1000);
+  scheduleTrendRefresh();
   renderTrend("today");
 })();
 </script>
