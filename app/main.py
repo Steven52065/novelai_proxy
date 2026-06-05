@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI):
         upstream_interval_min_seconds=config.queue.upstream_interval_min_seconds,
         upstream_interval_max_seconds=config.queue.upstream_interval_max_seconds,
         upstream_error_extra_delay_seconds=config.queue.upstream_error_extra_delay_seconds,
+        upstream_execution_timeout_seconds=config.queue.upstream_execution_timeout_seconds,
         retry_429_queue_length_threshold=config.queue.retry_429_queue_length_threshold,
         retry_429_max_attempts=config.queue.retry_429_max_attempts,
         image_hosting=ImageHostingService(config.image_hosting),

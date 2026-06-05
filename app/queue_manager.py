@@ -86,6 +86,7 @@ class ProxyQueue:
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
+        upstream_execution_timeout_seconds: float = 60,
         retry_429_queue_length_threshold: int = 3,
         get_total_queue_length: callable | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
@@ -101,6 +102,9 @@ class ProxyQueue:
         if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
             raise ValueError("upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
         self.upstream_error_extra_delay_seconds = max(0.0, float(upstream_error_extra_delay_seconds))
+        self.upstream_execution_timeout_seconds = float(upstream_execution_timeout_seconds)
+        if self.upstream_execution_timeout_seconds <= 0:
+            raise ValueError("upstream_execution_timeout_seconds must be greater than 0")
         self.retry_429_queue_length_threshold = int(retry_429_queue_length_threshold)
         self.get_total_queue_length = get_total_queue_length
         self._last_upstream_completed_at: float | None = None
@@ -306,7 +310,7 @@ class ProxyQueue:
                     item.attempt_number,
                 )
                 await self._wait_for_upstream_interval(item.request_id)
-                payload = await item.handler()
+                payload = await self._execute_handler_with_timeout(item)
                 # 记录请求完成时间（成功情况）
                 self._last_upstream_completed_at = time.monotonic()
             except Exception as exc:
@@ -345,7 +349,7 @@ class ProxyQueue:
                         continue
 
                 # 所有 API 错误（包括不满足重试条件的 429）都应用额外延迟
-                if isinstance(exc, APIError):
+                if isinstance(exc, (APIError, UpstreamExecutionTimeout)):
                     self._apply_error_extra_delay_next = True
 
                 # 普通错误处理：释放额度、记录日志、设置异常
@@ -407,9 +411,37 @@ class ProxyQueue:
 
     @staticmethod
     def _error_details(exc: Exception) -> tuple[str, str]:
+        if isinstance(exc, UpstreamExecutionTimeout):
+            return "upstream_timeout", str(exc)
         if isinstance(exc, APIError):
             return str(exc.code or "upstream_error"), exc.message
         return exc.__class__.__name__, str(exc)
+
+    async def _execute_handler_with_timeout(self, item: QueueItem) -> bytes:
+        handler_task = asyncio.create_task(item.handler())
+        try:
+            done, _pending = await asyncio.wait(
+                {handler_task},
+                timeout=self.upstream_execution_timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            handler_task.cancel()
+            handler_task.add_done_callback(self._consume_timed_out_handler_result)
+            raise
+        if handler_task in done:
+            return handler_task.result()
+        handler_task.cancel()
+        handler_task.add_done_callback(self._consume_timed_out_handler_result)
+        raise UpstreamExecutionTimeout(self.upstream_execution_timeout_seconds)
+
+    @staticmethod
+    def _consume_timed_out_handler_result(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except asyncio.CancelledError:
+            pass
 
     def _should_retry_429(self, get_total_queue_length: callable) -> bool:
         """检查当前队列状态是否允许重试 429 错误
@@ -521,6 +553,12 @@ class UserUnavailable(Exception):
     pass
 
 
+class UpstreamExecutionTimeout(Exception):
+    def __init__(self, timeout_seconds: float):
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Upstream execution exceeded {timeout_seconds:g} seconds")
+
+
 class Retry429Error(Exception):
     """Raised when a 429 error should be retried at the routing layer."""
     def __init__(self, original_error: APIError):
@@ -565,6 +603,7 @@ class RoutingProxyQueue:
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
+        upstream_execution_timeout_seconds: float = 60,
         retry_429_queue_length_threshold: int = 3,
         retry_429_max_attempts: int = 5,
         image_hosting: ImageHostingServiceLike | None = None,
@@ -606,6 +645,7 @@ class RoutingProxyQueue:
                 upstream_interval_min_seconds=upstream_interval_min_seconds,
                 upstream_interval_max_seconds=upstream_interval_max_seconds,
                 upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
+                upstream_execution_timeout_seconds=upstream_execution_timeout_seconds,
                 retry_429_queue_length_threshold=retry_429_queue_length_threshold,
                 get_total_queue_length=self._get_total_queue_length,
                 image_hosting=image_hosting,

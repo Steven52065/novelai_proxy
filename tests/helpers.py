@@ -156,6 +156,7 @@ def write_test_config(
     upstream_interval_min_seconds: float = 0,
     upstream_interval_max_seconds: float | None = None,
     upstream_error_extra_delay_seconds: float = 0,
+    upstream_execution_timeout_seconds: float = 60,
 ) -> Path:
     if upstream_interval_max_seconds is None:
         upstream_interval_max_seconds = upstream_interval_min_seconds
@@ -175,6 +176,7 @@ queue:
   upstream_interval_min_seconds: {upstream_interval_min_seconds}
   upstream_interval_max_seconds: {upstream_interval_max_seconds}
   upstream_error_extra_delay_seconds: {upstream_error_extra_delay_seconds}
+  upstream_execution_timeout_seconds: {upstream_execution_timeout_seconds}
 novelai:
   api_key: ""
   account_tier: 3
@@ -206,6 +208,7 @@ def write_test_config_with_upstreams(
     dispatch_max_queue_size: int | None = None,
     routing_strategy: str = "round_robin",
     upstream_interval_min_seconds: float = 0,
+    upstream_execution_timeout_seconds: float = 60,
     retry_429_max_attempts: int = 5,
     routing_adaptive_yaml: str = "",
 ) -> Path:
@@ -231,6 +234,7 @@ queue:
   upstream_interval_min_seconds: {upstream_interval_min_seconds}
   upstream_interval_max_seconds: {upstream_interval_min_seconds}
   upstream_error_extra_delay_seconds: 0
+  upstream_execution_timeout_seconds: {upstream_execution_timeout_seconds}
   retry_429_max_attempts: {retry_429_max_attempts}
 routing:
   strategy: {routing_strategy}

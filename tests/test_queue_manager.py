@@ -18,7 +18,15 @@ from helpers import (
     write_test_config,
     write_test_config_with_upstreams,
 )
-from app.queue_manager import DispatchQueueItem, QueueClosed, QueueFull, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
+from app.queue_manager import (
+    DispatchQueueItem,
+    QueueClosed,
+    QueueFull,
+    Retry429Error,
+    RoutingProxyQueue,
+    UpstreamExecutionTimeout,
+    UpstreamQueueTarget,
+)
 
 
 def test_queue_waits_between_upstream_requests(tmp_path: Path, monkeypatch):
@@ -323,6 +331,79 @@ def test_dispatcher_does_not_wait_for_upstream_completion():
             assert b"fake-image" in await asyncio.wait_for(first, timeout=1)
         finally:
             release_a.set()
+            await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_upstream_execution_timeout_excludes_interval_and_frees_queue():
+    async def run_test():
+        upstream = TimeoutByLabelUpstream(timeout_label="slow")
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0.05,
+            upstream_interval_max_seconds=0.05,
+            upstream_error_extra_delay_seconds=0,
+            upstream_execution_timeout_seconds=0.02,
+        )
+        queue.start()
+        try:
+            first = await queue.submit(
+                request_id="fast-first",
+                user_id=1,
+                tier="normal",
+                action="generate",
+                logging_config=object(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({"label": "fast"}),
+                process_zip_response=False,
+                manage_quota=False,
+            )
+            assert first == b"fast"
+
+            slow = asyncio.create_task(
+                queue.submit(
+                    request_id="slow-timeout",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "slow"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            try:
+                await asyncio.wait_for(slow, timeout=1)
+            except UpstreamExecutionTimeout as exc:
+                assert exc.timeout_seconds == 0.02
+            else:
+                raise AssertionError("expected upstream execution timeout")
+
+            assert upstream.started_labels == ["fast", "slow"]
+            assert upstream.started_at[1] - upstream.started_at[0] >= 0.045
+
+            after = await asyncio.wait_for(
+                queue.submit(
+                    request_id="after-timeout",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "after"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                ),
+                timeout=1,
+            )
+            assert after == b"after"
+            assert upstream.started_labels == ["fast", "slow", "after"]
+        finally:
             await queue.stop()
 
     asyncio.run(run_test())
@@ -941,6 +1022,22 @@ class FirstRequestBlockingLabelUpstream(FakeUpstream):
         self.started_labels.append(label)
         if len(self.started_labels) == 1:
             await asyncio.to_thread(self.first_release_event.wait)
+        return label.encode("utf-8")
+
+
+class TimeoutByLabelUpstream(FakeUpstream):
+    def __init__(self, *, timeout_label: str):
+        super().__init__()
+        self.timeout_label = timeout_label
+        self.started_labels = []
+        self.started_at = []
+
+    async def generate_image_payload_zip(self, payload):
+        label = payload["label"]
+        self.started_labels.append(label)
+        self.started_at.append(time.monotonic())
+        if label == self.timeout_label:
+            await asyncio.Event().wait()
         return label.encode("utf-8")
 
 

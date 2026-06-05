@@ -10,13 +10,21 @@ from novelai_python._exceptions import APIError
 from ..auth import UserContext
 from ..config import LoggingConfig
 from ..logging_utils import json_dumps, logger
-from ..queue_manager import NoAvailableUpstream, QueueClosed, QueueFull, RoutingProxyQueue, UserUnavailable
+from ..queue_manager import (
+    NoAvailableUpstream,
+    QueueClosed,
+    QueueFull,
+    RoutingProxyQueue,
+    UpstreamExecutionTimeout,
+    UserUnavailable,
+)
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 
 MESSAGE_UPSTREAM_REQUEST_FAILED = "Upstream request failed"
+MESSAGE_UPSTREAM_REQUEST_TIMED_OUT = "Upstream request timed out"
 MESSAGE_PROXY_REQUEST_FAILED = "Proxy request failed"
 
 
@@ -165,6 +173,12 @@ class ProxyRequestService:
             return ProxyTaskResult(
                 status_code=status_code,
                 content={"message": MESSAGE_UPSTREAM_REQUEST_FAILED},
+            )
+        except UpstreamExecutionTimeout:
+            logger.error("upstream execution timed out request_id=%s", request_id)
+            return ProxyTaskResult(
+                status_code=504,
+                content={"message": MESSAGE_UPSTREAM_REQUEST_TIMED_OUT},
             )
         except Exception as exc:
             logger.exception("proxy request failed request_id=%s", request_id)

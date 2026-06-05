@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from pathlib import Path
 
@@ -41,6 +42,13 @@ class InternalErrorFake(FakeUpstream):
 
     async def suggest_tags(self, model: str, prompt: str, lang: str = "en"):
         raise RuntimeError("secret suggest internal detail")
+
+
+class NeverReturningUpstream(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(0)
+        self.last_generate_payload = payload
+        await asyncio.Event().wait()
 
 
 class Always429Upstream(FakeUpstream):
@@ -255,6 +263,37 @@ def test_generate_internal_error_returns_generic_message(tmp_path: Path, monkeyp
         assert resp.status_code == 502
         assert resp.json() == {"message": "Proxy request failed"}
         assert "secret" not in resp.text
+
+
+def test_generate_upstream_execution_timeout_returns_504_and_releases_quota(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(write_test_config(tmp_path, upstream_execution_timeout_seconds=0.02)),
+    )
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = NeverReturningUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "timeout-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+        paid_payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"steps": 29}}
+
+        resp = client.post("/ai/generate-image", headers=headers, json=paid_payload)
+
+        assert resp.status_code == 504
+        assert resp.json() == {"message": "Upstream request timed out"}
+        quota = client.get("/user/subscription", headers=headers).json()["proxyQuota"]
+        assert quota["used"] == 0
+        assert quota["reserved"] == 0
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        failed_log = next(row for row in logs if row["status"] == "failed")
+        assert failed_log["error_code"] == "upstream_timeout"
+        assert "0.02" in failed_log["error_message"]
 
 
 def test_suggest_tags_upstream_api_error_returns_generic_message(tmp_path: Path, monkeypatch):

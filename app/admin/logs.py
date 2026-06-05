@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from novelai_python._exceptions import APIError
 
-from ..queue_manager import NoAvailableUpstream, QueueFull
+from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 from .auth import has_admin_session, require_admin_or_session
 from .common import json_or_none, optional_query_int, row_to_dict, templates, usage_log_to_dict
@@ -123,6 +123,8 @@ async def _replay_log_source(source, request: Request):
     except APIError as exc:
         status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
         raise HTTPException(status_code=status_code, detail={"message": exc.message}) from exc
+    except UpstreamExecutionTimeout as exc:
+        raise HTTPException(status_code=504, detail={"message": str(exc)}) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail={"message": str(exc)}) from exc
 
