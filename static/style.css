@@ -802,6 +802,17 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   position: relative;
 }
 
+.logs-filter-panel {
+  position: relative;
+  z-index: 30;
+  overflow: visible;
+}
+
+.logs-table-panel {
+  position: relative;
+  z-index: 1;
+}
+
 .logs-column-filter-menu {
   position: absolute;
   right: 0;
