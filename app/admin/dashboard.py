@@ -16,7 +16,6 @@ from .common import (
     local_day_range,
     row_to_dict,
     templates,
-    to_utc_iso,
 )
 
 
@@ -190,15 +189,16 @@ def _dashboard_stats(request: Request | WebSocket) -> dict:
     total_users = db.query_one("SELECT COUNT(*) AS c FROM users WHERE deleted_at IS NULL")["c"]
     today_requests = db.query_one(
         """
-        SELECT COUNT(DISTINCT request_id) AS c
-        FROM usage_logs
-        WHERE datetime(created_at) >= datetime(?)
-          AND datetime(created_at) < datetime(?)
+        SELECT COALESCE(SUM(request_count), 0) AS c
+        FROM dashboard_hourly_stats
+        WHERE upstream_id = '__all__'
+          AND bucket_hour >= ?
+          AND bucket_hour < ?
         """,
-        (to_utc_iso(today_start), to_utc_iso(today_end)),
+        (_hour_bucket(today_start), _hour_bucket(today_end)),
     )["c"]
     total_anlas = db.query_one(
-        "SELECT COALESCE(SUM(final_anlas_cost), 0) AS c FROM usage_logs WHERE status = 'success'"
+        "SELECT COALESCE(SUM(anlas_cost), 0) AS c FROM dashboard_hourly_stats WHERE upstream_id = '__all__'"
     )["c"]
     return {
         "total_users": total_users,
@@ -348,18 +348,18 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
         ranges["today"],
         db.query_all(
             """
-            SELECT CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) AS bucket,
-                   COUNT(DISTINCT request_id) AS requests,
-                   SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
-                   SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected,
-                   SUM(CASE WHEN lower(status) = 'success' AND is_retry_success = 1 THEN 1 ELSE 0 END) AS retry_success
-            FROM usage_logs
-            WHERE datetime(created_at) >= datetime(?)
-              AND datetime(created_at) < datetime(?)
-              AND (? IS NULL OR upstream_id = ?)
+            SELECT CAST(substr(bucket_hour, 12, 2) AS INTEGER) AS bucket,
+                   SUM(request_count) AS requests,
+                   SUM(failed_count) AS failed,
+                   SUM(rejected_count) AS rejected,
+                   SUM(retry_success_count) AS retry_success
+            FROM dashboard_hourly_stats
+            WHERE bucket_hour >= ?
+              AND bucket_hour < ?
+              AND upstream_id = ?
             GROUP BY bucket
             """,
-            (to_utc_iso(today_start), to_utc_iso(today_end), upstream_id, upstream_id),
+            (_hour_bucket(today_start), _hour_bucket(today_end), _stats_upstream_id(upstream_id)),
         ),
     )
     _fill_trend_range_from_rows(
@@ -379,19 +379,28 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
 def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
     return db.query_all(
         """
-        SELECT date(datetime(created_at, '+8 hours')) AS bucket,
-               COUNT(DISTINCT request_id) AS requests,
-               SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END) AS failed,
-               SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected,
-               SUM(CASE WHEN lower(status) = 'success' AND is_retry_success = 1 THEN 1 ELSE 0 END) AS retry_success
-        FROM usage_logs
-        WHERE datetime(created_at) >= datetime(?)
-          AND datetime(created_at) < datetime(?)
-          AND (? IS NULL OR upstream_id = ?)
+        SELECT substr(bucket_hour, 1, 10) AS bucket,
+               SUM(request_count) AS requests,
+               SUM(failed_count) AS failed,
+               SUM(rejected_count) AS rejected,
+               SUM(retry_success_count) AS retry_success
+        FROM dashboard_hourly_stats
+        WHERE bucket_hour >= ?
+          AND bucket_hour < ?
+          AND upstream_id = ?
         GROUP BY bucket
         """,
-        (to_utc_iso(start), to_utc_iso(end), upstream_id, upstream_id),
+        (_hour_bucket(start), _hour_bucket(end), _stats_upstream_id(upstream_id)),
     )
+
+
+def _stats_upstream_id(upstream_id: str | None) -> str:
+    return upstream_id or "__all__"
+
+
+def _hour_bucket(value: datetime) -> str:
+    local = value.astimezone(DISPLAY_TIMEZONE).replace(minute=0, second=0, microsecond=0)
+    return local.strftime("%Y-%m-%dT%H:00:00+08:00")
 
 
 def _date_index_map(start: datetime, bucket_count: int) -> dict[str, int]:

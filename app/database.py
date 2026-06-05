@@ -97,6 +97,30 @@ class Database:
                     ON usage_logs(status);
                 CREATE INDEX IF NOT EXISTS idx_usage_request_id
                     ON usage_logs(request_id);
+
+                CREATE TABLE IF NOT EXISTS dashboard_hourly_stats (
+                    bucket_hour TEXT NOT NULL,
+                    upstream_id TEXT NOT NULL,
+                    request_count INTEGER NOT NULL DEFAULT 0,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    rejected_count INTEGER NOT NULL DEFAULT 0,
+                    retry_success_count INTEGER NOT NULL DEFAULT 0,
+                    anlas_cost INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(bucket_hour, upstream_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_dashboard_hourly_upstream_bucket
+                    ON dashboard_hourly_stats(upstream_id, bucket_hour);
+
+                CREATE TABLE IF NOT EXISTS dashboard_hourly_request_refs (
+                    bucket_hour TEXT NOT NULL,
+                    upstream_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    ref_count INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY(bucket_hour, upstream_id, request_id)
+                );
                 """
             )
             self._add_column_if_missing("usage_logs", "model", "TEXT")
@@ -125,6 +149,67 @@ class Database:
             self._add_column_if_missing("users", "allowed_upstreams", "TEXT")
             self._add_column_if_missing("users", "deleted_at", "TEXT")
             self._clear_stored_user_api_keys()
+            self._init_dashboard_hourly_triggers()
+            self._backfill_dashboard_hourly_stats_if_empty()
+
+    def rebuild_dashboard_hourly_stats(self) -> None:
+        with self._lock:
+            self.conn.executescript(
+                """
+                DELETE FROM dashboard_hourly_stats;
+                DELETE FROM dashboard_hourly_request_refs;
+
+                INSERT INTO dashboard_hourly_request_refs (bucket_hour, upstream_id, request_id, ref_count)
+                SELECT strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')),
+                       '__all__',
+                       request_id,
+                       COUNT(*)
+                FROM usage_logs
+                GROUP BY strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')), request_id;
+
+                INSERT INTO dashboard_hourly_request_refs (bucket_hour, upstream_id, request_id, ref_count)
+                SELECT strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')),
+                       upstream_id,
+                       request_id,
+                       COUNT(*)
+                FROM usage_logs
+                WHERE upstream_id IS NOT NULL AND upstream_id != ''
+                GROUP BY strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')), upstream_id, request_id;
+
+                INSERT INTO dashboard_hourly_stats (
+                    bucket_hour, upstream_id, request_count, success_count, failed_count,
+                    rejected_count, retry_success_count, anlas_cost, updated_at
+                )
+                SELECT strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')),
+                       '__all__',
+                       COUNT(DISTINCT request_id),
+                       SUM(CASE WHEN lower(status) = 'success' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'success' AND is_retry_success = 1 THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'success' THEN COALESCE(final_anlas_cost, 0) ELSE 0 END),
+                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                FROM usage_logs
+                GROUP BY strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours'));
+
+                INSERT INTO dashboard_hourly_stats (
+                    bucket_hour, upstream_id, request_count, success_count, failed_count,
+                    rejected_count, retry_success_count, anlas_cost, updated_at
+                )
+                SELECT strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')),
+                       upstream_id,
+                       COUNT(DISTINCT request_id),
+                       SUM(CASE WHEN lower(status) = 'success' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'failed' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'rejected' THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'success' AND is_retry_success = 1 THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN lower(status) = 'success' THEN COALESCE(final_anlas_cost, 0) ELSE 0 END),
+                       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                FROM usage_logs
+                WHERE upstream_id IS NOT NULL AND upstream_id != ''
+                GROUP BY strftime('%Y-%m-%dT%H:00:00+08:00', datetime(created_at, '+8 hours')), upstream_id;
+                """
+            )
 
     @contextmanager
     def transaction(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:
@@ -162,6 +247,329 @@ class Database:
     def _clear_stored_user_api_keys(self) -> None:
         # API keys are shown only once on create/reset. Authentication uses api_key_hash.
         self.conn.execute("UPDATE users SET api_key = NULL WHERE api_key IS NOT NULL")
+
+    def _backfill_dashboard_hourly_stats_if_empty(self) -> None:
+        has_stats = self.conn.execute("SELECT 1 FROM dashboard_hourly_stats LIMIT 1").fetchone()
+        has_logs = self.conn.execute("SELECT 1 FROM usage_logs LIMIT 1").fetchone()
+        if has_stats is None and has_logs is not None:
+            self.rebuild_dashboard_hourly_stats()
+
+    def _init_dashboard_hourly_triggers(self) -> None:
+        self.conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS trg_usage_logs_dashboard_insert;
+            DROP TRIGGER IF EXISTS trg_usage_logs_dashboard_update_old;
+            DROP TRIGGER IF EXISTS trg_usage_logs_dashboard_update_new;
+            DROP TRIGGER IF EXISTS trg_usage_logs_dashboard_update;
+            DROP TRIGGER IF EXISTS trg_usage_logs_dashboard_delete;
+
+            CREATE TRIGGER trg_usage_logs_dashboard_insert
+            AFTER INSERT ON usage_logs
+            BEGIN
+                INSERT INTO dashboard_hourly_request_refs (bucket_hour, upstream_id, request_id, ref_count)
+                VALUES (strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')), '__all__', NEW.request_id, 1)
+                ON CONFLICT(bucket_hour, upstream_id, request_id)
+                DO UPDATE SET ref_count = ref_count + 1;
+
+                INSERT INTO dashboard_hourly_stats (
+                    bucket_hour, upstream_id, request_count, success_count, failed_count,
+                    rejected_count, retry_success_count, anlas_cost, updated_at
+                )
+                VALUES (
+                    strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')),
+                    '__all__',
+                    CASE WHEN (
+                        SELECT ref_count
+                        FROM dashboard_hourly_request_refs
+                        WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours'))
+                          AND upstream_id = '__all__'
+                          AND request_id = NEW.request_id
+                    ) = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'failed' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'rejected' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' AND NEW.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN COALESCE(NEW.final_anlas_cost, 0) ELSE 0 END,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                )
+                ON CONFLICT(bucket_hour, upstream_id)
+                DO UPDATE SET
+                    request_count = request_count + excluded.request_count,
+                    success_count = success_count + excluded.success_count,
+                    failed_count = failed_count + excluded.failed_count,
+                    rejected_count = rejected_count + excluded.rejected_count,
+                    retry_success_count = retry_success_count + excluded.retry_success_count,
+                    anlas_cost = anlas_cost + excluded.anlas_cost,
+                    updated_at = excluded.updated_at;
+
+                INSERT INTO dashboard_hourly_request_refs (bucket_hour, upstream_id, request_id, ref_count)
+                SELECT strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')), NEW.upstream_id, NEW.request_id, 1
+                WHERE NEW.upstream_id IS NOT NULL AND NEW.upstream_id != ''
+                ON CONFLICT(bucket_hour, upstream_id, request_id)
+                DO UPDATE SET ref_count = ref_count + 1;
+
+                INSERT INTO dashboard_hourly_stats (
+                    bucket_hour, upstream_id, request_count, success_count, failed_count,
+                    rejected_count, retry_success_count, anlas_cost, updated_at
+                )
+                SELECT
+                    strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')),
+                    NEW.upstream_id,
+                    CASE WHEN (
+                        SELECT ref_count
+                        FROM dashboard_hourly_request_refs
+                        WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours'))
+                          AND upstream_id = NEW.upstream_id
+                          AND request_id = NEW.request_id
+                    ) = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'failed' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'rejected' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' AND NEW.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN COALESCE(NEW.final_anlas_cost, 0) ELSE 0 END,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE NEW.upstream_id IS NOT NULL AND NEW.upstream_id != ''
+                ON CONFLICT(bucket_hour, upstream_id)
+                DO UPDATE SET
+                    request_count = request_count + excluded.request_count,
+                    success_count = success_count + excluded.success_count,
+                    failed_count = failed_count + excluded.failed_count,
+                    rejected_count = rejected_count + excluded.rejected_count,
+                    retry_success_count = retry_success_count + excluded.retry_success_count,
+                    anlas_cost = anlas_cost + excluded.anlas_cost,
+                    updated_at = excluded.updated_at;
+            END;
+
+            CREATE TRIGGER trg_usage_logs_dashboard_update
+            AFTER UPDATE OF created_at, request_id, upstream_id, status, is_retry_success, final_anlas_cost ON usage_logs
+            BEGIN
+                UPDATE dashboard_hourly_stats
+                SET success_count = success_count - CASE WHEN lower(OLD.status) = 'success' THEN 1 ELSE 0 END,
+                    failed_count = failed_count - CASE WHEN lower(OLD.status) = 'failed' THEN 1 ELSE 0 END,
+                    rejected_count = rejected_count - CASE WHEN lower(OLD.status) = 'rejected' THEN 1 ELSE 0 END,
+                    retry_success_count = retry_success_count - CASE WHEN lower(OLD.status) = 'success' AND OLD.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    anlas_cost = anlas_cost - CASE WHEN lower(OLD.status) = 'success' THEN COALESCE(OLD.final_anlas_cost, 0) ELSE 0 END,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__';
+
+                UPDATE dashboard_hourly_stats
+                SET success_count = success_count - CASE WHEN lower(OLD.status) = 'success' THEN 1 ELSE 0 END,
+                    failed_count = failed_count - CASE WHEN lower(OLD.status) = 'failed' THEN 1 ELSE 0 END,
+                    rejected_count = rejected_count - CASE WHEN lower(OLD.status) = 'rejected' THEN 1 ELSE 0 END,
+                    retry_success_count = retry_success_count - CASE WHEN lower(OLD.status) = 'success' AND OLD.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    anlas_cost = anlas_cost - CASE WHEN lower(OLD.status) = 'success' THEN COALESCE(OLD.final_anlas_cost, 0) ELSE 0 END,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != '';
+
+                UPDATE dashboard_hourly_request_refs
+                SET ref_count = ref_count - 1
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__'
+                  AND request_id = OLD.request_id;
+
+                UPDATE dashboard_hourly_stats
+                SET request_count = request_count - 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__'
+                  AND (
+                      SELECT ref_count
+                      FROM dashboard_hourly_request_refs
+                      WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                        AND upstream_id = '__all__'
+                        AND request_id = OLD.request_id
+                  ) = 0;
+
+                DELETE FROM dashboard_hourly_request_refs
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__'
+                  AND request_id = OLD.request_id
+                  AND ref_count <= 0;
+
+                UPDATE dashboard_hourly_request_refs
+                SET ref_count = ref_count - 1
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND request_id = OLD.request_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != '';
+
+                UPDATE dashboard_hourly_stats
+                SET request_count = request_count - 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != ''
+                  AND (
+                      SELECT ref_count
+                      FROM dashboard_hourly_request_refs
+                      WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                        AND upstream_id = OLD.upstream_id
+                        AND request_id = OLD.request_id
+                  ) = 0;
+
+                DELETE FROM dashboard_hourly_request_refs
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND request_id = OLD.request_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != ''
+                  AND ref_count <= 0;
+
+                INSERT INTO dashboard_hourly_request_refs (bucket_hour, upstream_id, request_id, ref_count)
+                VALUES (strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')), '__all__', NEW.request_id, 1)
+                ON CONFLICT(bucket_hour, upstream_id, request_id)
+                DO UPDATE SET ref_count = ref_count + 1;
+
+                INSERT INTO dashboard_hourly_stats (
+                    bucket_hour, upstream_id, request_count, success_count, failed_count,
+                    rejected_count, retry_success_count, anlas_cost, updated_at
+                )
+                VALUES (
+                    strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')),
+                    '__all__',
+                    CASE WHEN (
+                        SELECT ref_count
+                        FROM dashboard_hourly_request_refs
+                        WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours'))
+                          AND upstream_id = '__all__'
+                          AND request_id = NEW.request_id
+                    ) = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'failed' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'rejected' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' AND NEW.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN COALESCE(NEW.final_anlas_cost, 0) ELSE 0 END,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                )
+                ON CONFLICT(bucket_hour, upstream_id)
+                DO UPDATE SET
+                    request_count = request_count + excluded.request_count,
+                    success_count = success_count + excluded.success_count,
+                    failed_count = failed_count + excluded.failed_count,
+                    rejected_count = rejected_count + excluded.rejected_count,
+                    retry_success_count = retry_success_count + excluded.retry_success_count,
+                    anlas_cost = anlas_cost + excluded.anlas_cost,
+                    updated_at = excluded.updated_at;
+
+                INSERT INTO dashboard_hourly_request_refs (bucket_hour, upstream_id, request_id, ref_count)
+                SELECT strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')), NEW.upstream_id, NEW.request_id, 1
+                WHERE NEW.upstream_id IS NOT NULL AND NEW.upstream_id != ''
+                ON CONFLICT(bucket_hour, upstream_id, request_id)
+                DO UPDATE SET ref_count = ref_count + 1;
+
+                INSERT INTO dashboard_hourly_stats (
+                    bucket_hour, upstream_id, request_count, success_count, failed_count,
+                    rejected_count, retry_success_count, anlas_cost, updated_at
+                )
+                SELECT
+                    strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours')),
+                    NEW.upstream_id,
+                    CASE WHEN (
+                        SELECT ref_count
+                        FROM dashboard_hourly_request_refs
+                        WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(NEW.created_at, '+8 hours'))
+                          AND upstream_id = NEW.upstream_id
+                          AND request_id = NEW.request_id
+                    ) = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'failed' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'rejected' THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' AND NEW.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    CASE WHEN lower(NEW.status) = 'success' THEN COALESCE(NEW.final_anlas_cost, 0) ELSE 0 END,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE NEW.upstream_id IS NOT NULL AND NEW.upstream_id != ''
+                ON CONFLICT(bucket_hour, upstream_id)
+                DO UPDATE SET
+                    request_count = request_count + excluded.request_count,
+                    success_count = success_count + excluded.success_count,
+                    failed_count = failed_count + excluded.failed_count,
+                    rejected_count = rejected_count + excluded.rejected_count,
+                    retry_success_count = retry_success_count + excluded.retry_success_count,
+                    anlas_cost = anlas_cost + excluded.anlas_cost,
+                    updated_at = excluded.updated_at;
+            END;
+
+            CREATE TRIGGER trg_usage_logs_dashboard_delete
+            AFTER DELETE ON usage_logs
+            BEGIN
+                UPDATE dashboard_hourly_stats
+                SET success_count = success_count - CASE WHEN lower(OLD.status) = 'success' THEN 1 ELSE 0 END,
+                    failed_count = failed_count - CASE WHEN lower(OLD.status) = 'failed' THEN 1 ELSE 0 END,
+                    rejected_count = rejected_count - CASE WHEN lower(OLD.status) = 'rejected' THEN 1 ELSE 0 END,
+                    retry_success_count = retry_success_count - CASE WHEN lower(OLD.status) = 'success' AND OLD.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    anlas_cost = anlas_cost - CASE WHEN lower(OLD.status) = 'success' THEN COALESCE(OLD.final_anlas_cost, 0) ELSE 0 END,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__';
+
+                UPDATE dashboard_hourly_request_refs
+                SET ref_count = ref_count - 1
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__'
+                  AND request_id = OLD.request_id;
+
+                UPDATE dashboard_hourly_stats
+                SET request_count = request_count - 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__'
+                  AND (
+                      SELECT ref_count
+                      FROM dashboard_hourly_request_refs
+                      WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                        AND upstream_id = '__all__'
+                        AND request_id = OLD.request_id
+                  ) = 0;
+
+                DELETE FROM dashboard_hourly_request_refs
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = '__all__'
+                  AND request_id = OLD.request_id
+                  AND ref_count <= 0;
+
+                UPDATE dashboard_hourly_stats
+                SET success_count = success_count - CASE WHEN lower(OLD.status) = 'success' THEN 1 ELSE 0 END,
+                    failed_count = failed_count - CASE WHEN lower(OLD.status) = 'failed' THEN 1 ELSE 0 END,
+                    rejected_count = rejected_count - CASE WHEN lower(OLD.status) = 'rejected' THEN 1 ELSE 0 END,
+                    retry_success_count = retry_success_count - CASE WHEN lower(OLD.status) = 'success' AND OLD.is_retry_success = 1 THEN 1 ELSE 0 END,
+                    anlas_cost = anlas_cost - CASE WHEN lower(OLD.status) = 'success' THEN COALESCE(OLD.final_anlas_cost, 0) ELSE 0 END,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != '';
+
+                UPDATE dashboard_hourly_request_refs
+                SET ref_count = ref_count - 1
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND request_id = OLD.request_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != '';
+
+                UPDATE dashboard_hourly_stats
+                SET request_count = request_count - 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != ''
+                  AND (
+                      SELECT ref_count
+                      FROM dashboard_hourly_request_refs
+                      WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                        AND upstream_id = OLD.upstream_id
+                        AND request_id = OLD.request_id
+                  ) = 0;
+
+                DELETE FROM dashboard_hourly_request_refs
+                WHERE bucket_hour = strftime('%Y-%m-%dT%H:00:00+08:00', datetime(OLD.created_at, '+8 hours'))
+                  AND upstream_id = OLD.upstream_id
+                  AND request_id = OLD.request_id
+                  AND OLD.upstream_id IS NOT NULL AND OLD.upstream_id != ''
+                  AND ref_count <= 0;
+            END;
+            """
+        )
 
     def _migrate_usage_logs_unique_constraint(self) -> None:
         """迁移 usage_logs 表的唯一约束，从 request_id 改为 (request_id, attempt_number)"""
