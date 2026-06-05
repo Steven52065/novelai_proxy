@@ -489,7 +489,7 @@ class ProxyQueue:
             # 首次请求，无需等待
             return
         elapsed = time.monotonic() - self._last_upstream_completed_at
-        delay = max(interval - elapsed, 0.0) + extra_delay
+        delay = max(required_delay - elapsed, 0.0)
         if delay > 0:
             logger.info(
                 "proxy request waiting after last completion request_id=%s delay_seconds=%.3f interval_seconds=%.3f error_extra_delay_seconds=%.3f",
