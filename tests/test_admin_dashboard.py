@@ -197,10 +197,76 @@ def test_admin_dashboard_deduplicates_cross_hour_retry_attempts_for_day_counts(t
         assert dashboard_resp.json()["stats"]["today_requests"] == 2
         assert trend_resp.status_code == 200
         trends = trend_resp.json()
+        assert trends["today"]["totals"]["requests"] == 2
         assert trends["week"]["totals"]["requests"] == 2
         assert trends["month"]["totals"]["requests"] == 2
         assert trends["week"]["totals"]["failed"] == 1
         assert trends["week"]["totals"]["retry_success"] == 1
+
+
+def test_admin_request_trend_totals_deduplicate_across_range_buckets(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    display_timezone = timezone(timedelta(hours=8))
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "range-dedupe-user", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        today_start = datetime.now(display_timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=today_start.weekday())
+        week_end = week_start + timedelta(days=7)
+        month_start = today_start.replace(day=1)
+        month_end = (
+            month_start.replace(year=month_start.year + 1, month=1)
+            if month_start.month == 12
+            else month_start.replace(month=month_start.month + 1)
+        )
+        attempts = [
+            ("today-cross-bucket", 0, "failed", 0, today_start + timedelta(hours=1, minutes=10)),
+            ("today-cross-bucket", 1, "success", 1, today_start + timedelta(hours=2, minutes=10)),
+            ("today-single", 0, "success", 0, today_start + timedelta(hours=3, minutes=10)),
+            ("week-cross-bucket", 0, "failed", 0, week_start + timedelta(hours=1, minutes=10)),
+            ("week-cross-bucket", 1, "success", 1, week_start + timedelta(days=1, hours=1, minutes=10)),
+            ("month-cross-bucket", 0, "failed", 0, month_start + timedelta(hours=1, minutes=10)),
+            ("month-cross-bucket", 1, "success", 1, month_start + timedelta(days=1, hours=1, minutes=10)),
+        ]
+
+        for request_id, attempt_number, status, is_retry_success, local_created_at in attempts:
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, attempt_number, user_id, action, estimated_anlas_cost,
+                    final_anlas_cost, status, log_level, upstream_id, is_retry_success, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    attempt_number,
+                    user_id,
+                    "generate",
+                    0,
+                    0 if status == "success" else None,
+                    status,
+                    "INFO",
+                    "opus-a",
+                    is_retry_success,
+                    local_created_at.astimezone(timezone.utc).isoformat(),
+                ),
+            )
+
+        trend_resp = client.get("/admin/api/request-trends?upstream_id=opus-a", auth=("admin", "admin123"))
+
+        assert trend_resp.status_code == 200
+        trends = trend_resp.json()
+        assert trends["today"]["totals"]["requests"] == _unique_request_count(attempts, today_start, today_start + timedelta(days=1))
+        assert trends["week"]["totals"]["requests"] == _unique_request_count(attempts, week_start, week_end)
+        assert trends["month"]["totals"]["requests"] == _unique_request_count(attempts, month_start, month_end)
 
 
 def test_dashboard_hourly_stats_track_usage_log_changes(tmp_path: Path, monkeypatch):
@@ -390,6 +456,10 @@ def _dashboard_hourly_totals(db, upstream_id: str) -> dict[str, int]:
         (upstream_id,),
     )
     return {key: int(row[key] or 0) for key in row.keys()}
+
+
+def _unique_request_count(attempts: list[tuple[str, int, str, int, datetime]], start: datetime, end: datetime) -> int:
+    return len({request_id for request_id, _, _, _, created_at in attempts if start <= created_at < end})
 
 
 def test_admin_dashboard_snapshot_api_combines_ui_data(tmp_path: Path, monkeypatch):

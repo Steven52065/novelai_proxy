@@ -349,6 +349,9 @@ def _request_trend_stats(db: Database, upstream_id: str | None = None) -> dict:
         _date_bucket_rows(db, month_start, month_end, upstream_id=upstream_id),
         _date_index_map(month_start, (month_end - month_start).days),
     )
+    ranges["today"]["totals"]["requests"] = _request_count_for_range(db, today_start, today_end, upstream_id)
+    ranges["week"]["totals"]["requests"] = _request_count_for_range(db, week_start, week_end, upstream_id)
+    ranges["month"]["totals"]["requests"] = _request_count_for_range(db, month_start, month_end, upstream_id)
 
     return ranges
 

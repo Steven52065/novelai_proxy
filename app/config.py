@@ -7,6 +7,9 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 
+RESERVED_UPSTREAM_IDS = {"__all__"}
+
+
 class AdminConfig(BaseModel):
     username: str = "admin"
     password: str = "admin123"
@@ -45,6 +48,8 @@ class NovelAIUpstreamConfig(BaseModel):
         if not self.id.strip():
             raise ValueError("novelai.upstreams[].id must not be empty")
         self.id = self.id.strip()
+        if self.id in RESERVED_UPSTREAM_IDS:
+            raise ValueError(f"novelai.upstreams[].id is reserved: {self.id}")
         return self
 
 
