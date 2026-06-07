@@ -19,6 +19,7 @@ class CreateUserInput:
     free_small_only: bool = False
     allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     allowed_upstreams: list[str] = field(default_factory=list)
+    group_id: int | None = None
     anlas_total: int = 0
     reset_period: str = "month"
     reset_day: int | None = None
@@ -32,6 +33,8 @@ class UpdateUserInput:
     free_small_only: bool | None = None
     allowed_endpoints: list[str] | None = None
     allowed_upstreams: list[str] | None = None
+    group_id: int | None = None
+    update_group_id: bool = False
     anlas_total: int | None = None
     reset_period: str | None = None
     reset_day: int | None = None
@@ -49,8 +52,11 @@ def create_user(db: Database, quota_manager: QuotaManager, data: CreateUserInput
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams, created_at)
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+            INSERT INTO users (
+                api_key_hash, name, tier, is_active, free_small_only,
+                allowed_endpoints, allowed_upstreams, group_id, created_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
             """,
             (
                 hash_api_key(api_key),
@@ -59,6 +65,7 @@ def create_user(db: Database, quota_manager: QuotaManager, data: CreateUserInput
                 1 if data.free_small_only else 0,
                 serialize_allowed_endpoints(data.allowed_endpoints),
                 serialize_allowed_upstreams(data.allowed_upstreams),
+                data.group_id,
                 now,
             ),
         )
@@ -89,6 +96,9 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
     if data.allowed_upstreams is not None:
         fields.append("allowed_upstreams = ?")
         params.append(serialize_allowed_upstreams(data.allowed_upstreams))
+    if data.update_group_id:
+        fields.append("group_id = ?")
+        params.append(data.group_id)
     if fields:
         params.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
@@ -161,3 +171,16 @@ def serialize_allowed_upstreams(value: list[str] | None) -> str | None:
         if upstream_id and upstream_id not in valid:
             valid.append(upstream_id)
     return ",".join(valid) if valid else None
+
+
+def parse_allowed_endpoints(value: str | None) -> list[str]:
+    if not value:
+        return [DEFAULT_ALLOWED_ENDPOINTS]
+    endpoints = [item.strip() for item in value.split(",") if item.strip()]
+    return endpoints or [DEFAULT_ALLOWED_ENDPOINTS]
+
+
+def parse_allowed_upstreams(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]

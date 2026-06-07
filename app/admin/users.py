@@ -14,6 +14,8 @@ from ..users import (
     create_user as create_user_record,
     delete_user as delete_user_record,
     ensure_user_exists,
+    get_enabled_group,
+    group_defaults,
     reset_api_key,
     update_user as update_user_record,
 )
@@ -35,6 +37,7 @@ API_KEY_FLASH_TTL_SECONDS = 5 * 60
 
 class CreateUserRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+    group_id: int | None = Field(default=None, ge=1)
     tier: str = Field(default="normal", pattern="^(normal|vip)$")
     free_small_only: bool = False
     allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
@@ -46,6 +49,8 @@ class CreateUserRequest(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    group_id: int | None = Field(default=None, ge=1)
+    apply_group_defaults: bool = False
     tier: str | None = Field(default=None, pattern="^(normal|vip)$")
     is_active: bool | None = None
     free_small_only: bool | None = None
@@ -67,7 +72,8 @@ async def list_users(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.created_at,
+        SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
+               u.allowed_endpoints, u.allowed_upstreams, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -84,21 +90,13 @@ async def list_users(request: Request):
 @api_router.post("/users", dependencies=[Depends(require_admin)])
 async def create_user(payload: CreateUserRequest, request: Request):
     db: Database = request.app.state.db
-    _validate_allowed_endpoints(payload.allowed_endpoints)
-    _validate_allowed_upstreams(payload.allowed_upstreams, request)
+    create_input = _build_create_user_input(db, payload)
+    _validate_allowed_endpoints(create_input.allowed_endpoints)
+    _validate_allowed_upstreams(create_input.allowed_upstreams, request)
     created = create_user_record(
         db,
         request.app.state.quota_manager,
-        CreateUserInput(
-            name=payload.name,
-            tier=payload.tier,
-            free_small_only=payload.free_small_only,
-            allowed_endpoints=payload.allowed_endpoints,
-            allowed_upstreams=payload.allowed_upstreams,
-            anlas_total=payload.anlas_total,
-            reset_period=payload.reset_period,
-            reset_day=payload.reset_day,
-        ),
+        create_input,
     )
     _notify_dashboard_change(request)
     return {"user_id": created.user_id, "api_key": created.api_key}
@@ -108,25 +106,16 @@ async def create_user(payload: CreateUserRequest, request: Request):
 async def update_user(user_id: int, payload: UpdateUserRequest, request: Request):
     db: Database = request.app.state.db
     ensure_user_exists(db, user_id)
-    if payload.allowed_endpoints is not None:
-        _validate_allowed_endpoints(payload.allowed_endpoints)
-    if payload.allowed_upstreams is not None:
-        _validate_allowed_upstreams(payload.allowed_upstreams, request)
+    update_input = _build_update_user_input(db, user_id, payload)
+    if update_input.allowed_endpoints is not None:
+        _validate_allowed_endpoints(update_input.allowed_endpoints)
+    if update_input.allowed_upstreams is not None:
+        _validate_allowed_upstreams(update_input.allowed_upstreams, request)
     changed = update_user_record(
         db,
         request.app.state.quota_manager,
         user_id,
-        UpdateUserInput(
-            name=payload.name,
-            tier=payload.tier,
-            is_active=payload.is_active,
-            free_small_only=payload.free_small_only,
-            allowed_endpoints=payload.allowed_endpoints,
-            allowed_upstreams=payload.allowed_upstreams,
-            anlas_total=payload.anlas_total,
-            reset_period=payload.reset_period,
-            reset_day=payload.reset_day,
-        ),
+        update_input,
     )
     if changed:
         _notify_dashboard_change(request)
@@ -202,7 +191,8 @@ async def users_page(request: Request):
     new_api_key = _pop_api_key_flash(request)
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, u.created_at,
+        SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
+               u.allowed_endpoints, u.allowed_upstreams, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -271,7 +261,8 @@ async def user_edit_page(user_id: int, request: Request):
     new_api_key = _pop_api_key_flash(request)
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.tier, u.is_active, u.free_small_only, u.allowed_endpoints, u.allowed_upstreams, NULL AS api_key,
+        SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
+               u.allowed_endpoints, u.allowed_upstreams, NULL AS api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
@@ -401,6 +392,74 @@ async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: i
         return RedirectResponse("/admin/login", status_code=303)
     await delete_rate_limit_rule(rule_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
+
+
+def _build_create_user_input(db: Database, payload: CreateUserRequest) -> CreateUserInput:
+    defaults = None
+    if payload.group_id is not None:
+        defaults = group_defaults(get_enabled_group(db, payload.group_id))
+    fields_set = payload.model_fields_set
+
+    def value(field_name: str):
+        if field_name in fields_set or defaults is None:
+            return getattr(payload, field_name)
+        return defaults[field_name]
+
+    return CreateUserInput(
+        name=payload.name,
+        group_id=payload.group_id,
+        tier=str(value("tier")),
+        free_small_only=bool(value("free_small_only")),
+        allowed_endpoints=list(value("allowed_endpoints")),
+        allowed_upstreams=list(value("allowed_upstreams")),
+        anlas_total=int(value("anlas_total")),
+        reset_period=str(value("reset_period")),
+        reset_day=value("reset_day"),
+    )
+
+
+def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequest) -> UpdateUserInput:
+    fields_set = payload.model_fields_set
+    update_group_id = "group_id" in fields_set
+    if update_group_id and payload.group_id is not None:
+        get_enabled_group(db, payload.group_id)
+
+    defaults = None
+    if payload.apply_group_defaults:
+        default_group_id = payload.group_id if update_group_id else _get_user_group_id(db, user_id)
+        if default_group_id is None:
+            raise HTTPException(status_code=400, detail={"message": "No user group selected"})
+        defaults = group_defaults(get_enabled_group(db, int(default_group_id)))
+
+    def optional_value(field_name: str):
+        if field_name in fields_set:
+            return getattr(payload, field_name)
+        if defaults is not None:
+            return defaults[field_name]
+        return None
+
+    allowed_endpoints = optional_value("allowed_endpoints")
+    allowed_upstreams = optional_value("allowed_upstreams")
+    return UpdateUserInput(
+        name=payload.name if "name" in fields_set else None,
+        group_id=payload.group_id,
+        update_group_id=update_group_id,
+        tier=optional_value("tier"),
+        is_active=payload.is_active if "is_active" in fields_set else None,
+        free_small_only=optional_value("free_small_only"),
+        allowed_endpoints=list(allowed_endpoints) if allowed_endpoints is not None else None,
+        allowed_upstreams=list(allowed_upstreams) if allowed_upstreams is not None else None,
+        anlas_total=optional_value("anlas_total"),
+        reset_period=optional_value("reset_period"),
+        reset_day=optional_value("reset_day"),
+    )
+
+
+def _get_user_group_id(db: Database, user_id: int) -> int | None:
+    row = db.query_one("SELECT group_id FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,))
+    if row is None or row["group_id"] is None:
+        return None
+    return int(row["group_id"])
 
 
 def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:

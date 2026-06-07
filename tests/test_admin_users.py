@@ -172,6 +172,211 @@ def test_admin_rejects_unknown_or_empty_allowed_endpoints(tmp_path: Path, monkey
         assert update_resp.json()["message"] == "At least one endpoint must be allowed"
 
 
+def test_admin_user_group_api_and_create_user_copies_defaults(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="vip-defaults",
+            default_tier="vip",
+            default_free_small_only=False,
+            default_allowed_endpoints=["generate-image", "upscale"],
+            default_anlas_total=123,
+            default_reset_period="week",
+            default_reset_day=3,
+        )
+
+        groups = client.get("/admin/api/user-groups", auth=("admin", "admin123")).json()["groups"]
+        created_group = next(row for row in groups if row["id"] == group_id)
+        assert created_group["member_count"] == 0
+        assert created_group["default_allowed_endpoints_list"] == ["generate-image", "upscale"]
+
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "group-user", "group_id": group_id},
+        )
+        assert create_resp.status_code == 200
+        user_id = create_resp.json()["user_id"]
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        user = next(row for row in users if row["id"] == user_id)
+        assert user["group_id"] == group_id
+        assert user["tier"] == "vip"
+        assert user["free_small_only"] == 0
+        assert user["allowed_endpoints_list"] == ["generate-image", "upscale"]
+        assert user["anlas_total"] == 123
+        quota = client.app.state.db.query_one(
+            "SELECT total, reset_period, reset_day FROM user_anlas_quota WHERE user_id = ?",
+            (user_id,),
+        )
+        assert dict(quota) == {"total": 123, "reset_period": "week", "reset_day": 3}
+
+        explicit_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "explicit-user",
+                "group_id": group_id,
+                "tier": "normal",
+                "free_small_only": True,
+                "allowed_endpoints": ["generate-image"],
+                "anlas_total": 5,
+            },
+        )
+        explicit_user_id = explicit_resp.json()["user_id"]
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        explicit_user = next(row for row in users if row["id"] == explicit_user_id)
+        assert explicit_user["tier"] == "normal"
+        assert explicit_user["free_small_only"] == 1
+        assert explicit_user["allowed_endpoints_list"] == ["generate-image"]
+        assert explicit_user["anlas_total"] == 5
+
+
+def test_user_group_update_does_not_auto_change_members_and_sync_is_selective(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="sync-defaults",
+            default_tier="normal",
+            default_allowed_endpoints=["generate-image"],
+            default_anlas_total=10,
+        )
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "member", "group_id": group_id},
+        ).json()["user_id"]
+        client.app.state.db.execute(
+            "UPDATE user_anlas_quota SET used = 3, reserved = 2 WHERE user_id = ?",
+            (user_id,),
+        )
+
+        patch_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "default_tier": "vip",
+                "default_allowed_endpoints": ["generate-image", "upscale"],
+                "default_anlas_total": 50,
+            },
+        )
+        assert patch_resp.status_code == 200
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        unchanged = next(row for row in users if row["id"] == user_id)
+        assert unchanged["tier"] == "normal"
+        assert unchanged["allowed_endpoints_list"] == ["generate-image"]
+        assert unchanged["anlas_total"] == 10
+
+        sync_tier = client.post(
+            f"/admin/api/user-groups/{group_id}/sync-members",
+            auth=("admin", "admin123"),
+            json={"fields": ["tier"]},
+        )
+        assert sync_tier.status_code == 200
+        assert sync_tier.json()["updated_users"] == 1
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        tier_only = next(row for row in users if row["id"] == user_id)
+        assert tier_only["tier"] == "vip"
+        assert tier_only["allowed_endpoints_list"] == ["generate-image"]
+        assert tier_only["anlas_total"] == 10
+
+        sync_quota = client.post(
+            f"/admin/api/user-groups/{group_id}/sync-members",
+            auth=("admin", "admin123"),
+            json={"fields": ["allowed_endpoints", "anlas_quota"]},
+        )
+        assert sync_quota.status_code == 200
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        synced = next(row for row in users if row["id"] == user_id)
+        assert synced["allowed_endpoints_list"] == ["generate-image", "upscale"]
+        assert synced["anlas_total"] == 50
+        quota = client.app.state.db.query_one(
+            "SELECT total, used, reserved FROM user_anlas_quota WHERE user_id = ?",
+            (user_id,),
+        )
+        assert dict(quota) == {"total": 50, "used": 3, "reserved": 2}
+
+
+def test_disabled_or_missing_user_group_cannot_create_user(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        missing_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "missing-group-user", "group_id": 999},
+        )
+        assert missing_resp.status_code == 404
+        assert missing_resp.json()["message"] == "User group not found"
+
+        group_id = _create_group(client, name="disabled", is_active=False)
+        disabled_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "disabled-group-user", "group_id": group_id},
+        )
+        assert disabled_resp.status_code == 400
+        assert disabled_resp.json()["message"] == "User group is disabled"
+
+        client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"is_active": True},
+        )
+        ok_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "enabled-group-user", "group_id": group_id},
+        )
+        assert ok_resp.status_code == 200
+
+
+def test_admin_update_user_group_and_apply_defaults(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="apply-defaults",
+            default_tier="vip",
+            default_free_small_only=True,
+            default_allowed_endpoints=["generate-image", "upscale"],
+            default_anlas_total=77,
+        )
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "plain-user", "tier": "normal", "anlas_total": 2},
+        )
+        user_id = create_resp.json()["user_id"]
+
+        update_resp = client.patch(
+            f"/admin/api/users/{user_id}",
+            auth=("admin", "admin123"),
+            json={"group_id": group_id, "apply_group_defaults": True, "tier": "normal"},
+        )
+        assert update_resp.status_code == 200
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        updated = next(row for row in users if row["id"] == user_id)
+        assert updated["group_id"] == group_id
+        assert updated["tier"] == "normal"
+        assert updated["free_small_only"] == 1
+        assert updated["allowed_endpoints_list"] == ["generate-image", "upscale"]
+        assert updated["anlas_total"] == 77
+
+
 def test_admin_missing_user_and_rule_operations_return_404(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -313,3 +518,21 @@ def _wait_until(predicate, timeout_seconds: float = 5.0) -> None:
 def _is_user_queued(client: TestClient, user_id: int) -> bool:
     queue = client.get("/admin/api/queue", auth=("admin", "admin123")).json()
     return any(item["user_id"] == user_id for item in queue["queued"])
+
+
+def _create_group(client: TestClient, **overrides) -> int:
+    payload = {
+        "name": "group",
+        "is_active": True,
+        "default_tier": "normal",
+        "default_free_small_only": True,
+        "default_allowed_endpoints": ["generate-image"],
+        "default_allowed_upstreams": [],
+        "default_anlas_total": 0,
+        "default_reset_period": "month",
+        "default_reset_day": 1,
+    }
+    payload.update(overrides)
+    response = client.post("/admin/api/user-groups", auth=("admin", "admin123"), json=payload)
+    assert response.status_code == 200
+    return response.json()["group_id"]
