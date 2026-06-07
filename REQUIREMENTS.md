@@ -106,6 +106,7 @@ Authorization: Bearer <proxy-api-key>
 | 仪表盘 | 总用户数、今日请求量、总 anlas 消耗、活跃队列长度 |
 | 用户列表 | 查看所有用户、启用/禁用、删除 |
 | 用户创建/编辑 | 生成 API Key、设置用户等级、备注名 |
+| 用户组 | 创建和维护用户组，查看固定组 ID、默认权限、默认额度、成员数和组共享限流 |
 | 限频规则编辑 | 为每个用户增删改限频规则（周期 + 次数上限） |
 | 额度编辑 | 设置用户 anlas 总额度、重置周期、手动重置已用额度 |
 | 使用日志 | 按用户和时间范围查询请求记录，展示消耗明细 |
@@ -134,9 +135,23 @@ novelai:
   api_key: ""  # 上游 NovelAI 账号的 JWT token
 ```
 
-### 2.8 暂不实现（预留扩展）
+### 2.8 用户组和 Discord 自助注册
 
-- 用户自助注册 / 自助申请 Key
+用户组是创建用户时复制默认配置的模板，不是实时继承关系。管理员可以在后台“用户组”页面创建用户组，页面会显示固定 SQLite 自增 `id`。启用 Discord 自助注册前，需要先创建一个启用的用户组，并把该 ID 填入本地 `config.yaml` 的 `self_service.discord.default_group_id`。
+
+Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
+
+- `redirect_uri` 必须与 Discord Developer Portal 中登记的 OAuth2 Redirect URI 完全一致。
+- `required_guild_id` 是允许注册的 Discord 服务器 ID（Guild ID），不是频道 ID 或角色 ID。
+- `default_group_id` 是本地 `user_groups.id`，服务启动时会校验该组存在且启用。
+- `client_secret` 和 `session_secret` 只能写入本地 `config.yaml`，不能提交到 Git。
+- 自助账号页只展示和重置本项目 Proxy API Key；代理 API 不接受 Discord token。
+- 系统不持久化 Discord `access_token` 或 `refresh_token`，也不应在日志中输出这些 token。
+
+组共享限流与个人限流同时生效。请求先检查个人限流，再检查用户所属启用用户组的共享限流；任一超限都会返回 `429`。组限流按组内成员在窗口内非 `rejected` 的 `DISTINCT request_id` 统计，重试 attempt 不重复计数。
+
+### 2.9 暂不实现（预留扩展）
+
 - 文字生成（`/ai/generate`、`/ai/generate-stream`）代理
 - 语音生成（`/ai/generate-voice`）代理
 - 多管理员支持
@@ -152,9 +167,25 @@ novelai:
 | id | INTEGER PK | 自增主键 |
 | api_key | TEXT UNIQUE | Proxy 层 API Key |
 | name | TEXT | 用户备注名 |
+| group_id | INTEGER FK→user_groups | 主用户组，可为空 |
 | tier | TEXT | normal / vip |
 | is_active | BOOL | 是否启用 |
 | created_at | TIMESTAMP | 创建时间 |
+
+### user_groups
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | 固定自增主键，可复制到 `config.yaml` |
+| name | TEXT | 用户组名称 |
+| is_active | BOOL | 是否启用 |
+| default_tier | TEXT | 创建用户时复制的默认等级 |
+| default_free_small_only | BOOL | 创建用户时复制的免费小图策略 |
+| default_allowed_endpoints | TEXT | 创建用户时复制的允许接口 |
+| default_allowed_upstreams | TEXT | 创建用户时复制的允许上游 |
+| default_anlas_total | INTEGER | 创建用户时复制的默认额度总额 |
+| default_reset_period | TEXT | 创建用户时复制的重置周期 |
+| default_reset_day | INTEGER | 创建用户时复制的重置日 |
 
 ### rate_limit_rules
 
@@ -166,6 +197,30 @@ novelai:
 | max_requests | INTEGER | 周期内最大请求次数 |
 | is_active | BOOL | 是否启用 |
 | created_at | TIMESTAMP | 创建时间 |
+
+### group_rate_limit_rules
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | 自增主键 |
+| group_id | INTEGER FK→user_groups | 关联用户组 |
+| period | TEXT | minute / hour / day / month |
+| max_requests | INTEGER | 组内共享周期请求上限 |
+| is_active | BOOL | 是否启用 |
+| created_at | TIMESTAMP | 创建时间 |
+
+### discord_user_links
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | 自增主键 |
+| user_id | INTEGER UNIQUE FK→users | 关联本地用户 |
+| discord_user_id | TEXT UNIQUE | Discord 用户稳定 ID |
+| discord_username | TEXT | Discord 用户名 |
+| discord_global_name | TEXT | Discord 全局显示名 |
+| discord_avatar | TEXT | Discord 头像 ID |
+| created_at | TIMESTAMP | 绑定创建时间 |
+| last_login_at | TIMESTAMP | 最近自助登录时间 |
 
 ### user_anlas_quota
 
@@ -272,7 +327,8 @@ novelai_proxy/
 |------|------------|--------|
 | API Key 缺失或无效 | 401 | `{"message": "Invalid or missing API Key"}` |
 | 用户被禁用 | 403 | `{"message": "Account disabled"}` |
-| 限频超限 | 429 | `{"message": "Rate limit exceeded: ...", "retry_after": 30}` |
+| 限频超限 | 429 | `{"message": "Rate limit exceeded: ...", "retry_after": 30, "limit_scope": "user"}` |
+| 用户组限频超限 | 429 | `{"message": "Group rate limit exceeded: ...", "retry_after": 30, "limit_scope": "group"}` |
 | Anlas 余额不足 | 402 | `{"message": "Insufficient anlas: need X, have Y"}` |
 | 队列满载 | 503 | `{"message": "Queue full, please retry later"}` |
 
