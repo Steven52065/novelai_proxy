@@ -452,6 +452,52 @@ def test_admin_user_edit_page_can_change_group(tmp_path: Path, monkeypatch):
         assert user["group_id"] == group_id
 
 
+def test_admin_user_group_rate_limit_rules_api_and_page(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="rate-group")
+        add_resp = client.post(
+            f"/admin/api/user-groups/{group_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "minute", "max_requests": 2},
+        )
+        assert add_resp.status_code == 200
+        rule = client.app.state.db.query_one(
+            "SELECT id, period, max_requests, is_active FROM group_rate_limit_rules WHERE group_id = ?",
+            (group_id,),
+        )
+        assert rule["period"] == "minute"
+        assert rule["max_requests"] == 2
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        page = client.get(f"/admin/user-groups/{group_id}")
+        assert page.status_code == 200
+        assert "组共享限流" in page.text
+        assert "minute" in page.text
+
+        patch_resp = client.patch(
+            f"/admin/api/group-rate-limit-rules/{rule['id']}",
+            auth=("admin", "admin123"),
+            json={"period": "hour", "max_requests": 3, "is_active": False},
+        )
+        assert patch_resp.status_code == 200
+        updated = client.app.state.db.query_one(
+            "SELECT period, max_requests, is_active FROM group_rate_limit_rules WHERE id = ?",
+            (rule["id"],),
+        )
+        assert dict(updated) == {"period": "hour", "max_requests": 3, "is_active": 0}
+
+        delete_resp = client.delete(
+            f"/admin/api/group-rate-limit-rules/{rule['id']}",
+            auth=("admin", "admin123"),
+        )
+        assert delete_resp.status_code == 200
+        assert client.app.state.db.query_one("SELECT id FROM group_rate_limit_rules WHERE id = ?", (rule["id"],)) is None
+
+
 def test_admin_missing_user_and_rule_operations_return_404(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

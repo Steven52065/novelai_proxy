@@ -31,13 +31,13 @@ def rate_limit_db(tmp_path):
         db.close()
 
 
-def _create_user(db: Database) -> int:
+def _create_user(db: Database, group_id: int | None = None) -> int:
     cursor = db.execute(
         """
-        INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, created_at)
-        VALUES (?, 'rate-user', 'normal', 1, 0, 'generate-image', ?)
+        INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, group_id, created_at)
+        VALUES (?, 'rate-user', 'normal', 1, 0, 'generate-image', ?, ?)
         """,
-        (f"hash-{uuid.uuid4().hex}", utc_now_iso()),
+        (f"hash-{uuid.uuid4().hex}", group_id, utc_now_iso()),
     )
     return int(cursor.lastrowid)
 
@@ -49,6 +49,27 @@ def _add_rule(db: Database, user_id: int, *, period: str, max_requests: int, act
         VALUES (?, ?, ?, ?, ?)
         """,
         (user_id, period, max_requests, 1 if active else 0, utc_now_iso()),
+    )
+
+
+def _create_group(db: Database, *, active: bool = True) -> int:
+    cursor = db.execute(
+        """
+        INSERT INTO user_groups(name, is_active, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (f"group-{uuid.uuid4().hex}", 1 if active else 0, utc_now_iso()),
+    )
+    return int(cursor.lastrowid)
+
+
+def _add_group_rule(db: Database, group_id: int, *, period: str, max_requests: int, active: bool = True) -> None:
+    db.execute(
+        """
+        INSERT INTO group_rate_limit_rules (group_id, period, max_requests, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (group_id, period, max_requests, 1 if active else 0, utc_now_iso()),
     )
 
 
@@ -126,3 +147,47 @@ def test_rate_limit_ignores_inactive_rules_and_applies_multiple_windows(rate_lim
     assert result.allowed is False
     assert result.retry_after == 86400
     assert result.message == "Rate limit exceeded: 1 per day"
+
+
+def test_group_rate_limit_counts_group_members_once_and_ignores_rejected(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    group_id = _create_group(rate_limit_db)
+    first_user = _create_user(rate_limit_db, group_id=group_id)
+    second_user = _create_user(rate_limit_db, group_id=group_id)
+    _add_group_rule(rate_limit_db, group_id, period="minute", max_requests=2)
+    recent = FIXED_NOW - timedelta(seconds=10)
+    _insert_log(rate_limit_db, first_user, request_id="first-request", status="success", created_at=recent)
+    _insert_log(rate_limit_db, second_user, request_id="rejected-request", status="rejected", created_at=recent)
+    _insert_log(rate_limit_db, first_user, request_id="retried-request", status="failed", created_at=recent)
+    rate_limit_db.execute(
+        """
+        INSERT INTO usage_logs (request_id, attempt_number, user_id, action, estimated_anlas_cost, status, log_level, created_at)
+        VALUES (?, 1, ?, 'generate', 0, 'success', 'INFO', ?)
+        """,
+        ("retried-request", first_user, recent.isoformat()),
+    )
+
+    result = RateLimiter(rate_limit_db).check(second_user)
+
+    assert result.allowed is False
+    assert result.scope == "group"
+    assert result.retry_after == 60
+    assert result.message == "Group rate limit exceeded: 2 per minute"
+
+
+def test_group_rate_limit_does_not_apply_without_active_group(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    disabled_group = _create_group(rate_limit_db, active=False)
+    disabled_group_user = _create_user(rate_limit_db, group_id=disabled_group)
+    no_group_user = _create_user(rate_limit_db)
+    _add_group_rule(rate_limit_db, disabled_group, period="minute", max_requests=1)
+    _insert_log(
+        rate_limit_db,
+        disabled_group_user,
+        request_id="disabled-group-request",
+        status="success",
+        created_at=FIXED_NOW - timedelta(seconds=10),
+    )
+
+    assert RateLimiter(rate_limit_db).check(disabled_group_user).allowed is True
+    assert RateLimiter(rate_limit_db).check(no_group_user).allowed is True

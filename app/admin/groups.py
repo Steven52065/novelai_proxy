@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from ..database import Database
+from ..database import Database, utc_now_iso
 from ..users import (
     UserGroupInput,
     UserGroupUpdateInput,
@@ -54,6 +54,12 @@ class SyncGroupMembersRequest(BaseModel):
     fields: list[Literal["tier", "free_small_only", "allowed_endpoints", "allowed_upstreams", "anlas_quota"]] = Field(
         default_factory=list
     )
+
+
+class GroupRateLimitRuleRequest(BaseModel):
+    period: str = Field(..., pattern="^(minute|hour|day|month)$")
+    max_requests: int = Field(..., ge=1)
+    is_active: bool = True
 
 
 @api_router.get("/user-groups", dependencies=[Depends(require_admin)])
@@ -139,6 +145,43 @@ async def sync_user_group_members(group_id: int, payload: SyncGroupMembersReques
     return {"ok": True, "updated_users": updated_users}
 
 
+@api_router.post("/user-groups/{group_id}/rate-limit-rules", dependencies=[Depends(require_admin)])
+async def add_group_rate_limit_rule(group_id: int, payload: GroupRateLimitRuleRequest, request: Request):
+    db: Database = request.app.state.db
+    get_group(db, group_id)
+    db.execute(
+        """
+        INSERT INTO group_rate_limit_rules (group_id, period, max_requests, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (group_id, payload.period, payload.max_requests, 1 if payload.is_active else 0, utc_now_iso()),
+    )
+    return {"ok": True}
+
+
+@api_router.patch("/group-rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
+async def update_group_rate_limit_rule(rule_id: int, payload: GroupRateLimitRuleRequest, request: Request):
+    db: Database = request.app.state.db
+    _ensure_group_rate_limit_rule_exists(db, rule_id)
+    db.execute(
+        """
+        UPDATE group_rate_limit_rules
+        SET period = ?, max_requests = ?, is_active = ?
+        WHERE id = ?
+        """,
+        (payload.period, payload.max_requests, 1 if payload.is_active else 0, rule_id),
+    )
+    return {"ok": True}
+
+
+@api_router.delete("/group-rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
+async def delete_group_rate_limit_rule(rule_id: int, request: Request):
+    db: Database = request.app.state.db
+    _ensure_group_rate_limit_rule_exists(db, rule_id)
+    db.execute("DELETE FROM group_rate_limit_rules WHERE id = ?", (rule_id,))
+    return {"ok": True}
+
+
 @web_router.get("/user-groups", response_class=HTMLResponse)
 async def user_groups_page(request: Request):
     if not has_admin_session(request):
@@ -194,6 +237,13 @@ async def user_group_edit_page(group_id: int, request: Request):
         return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
     group = _group_row_to_dict(get_group(db, group_id))
+    group_rules = [
+        row_to_dict(row)
+        for row in db.query_all(
+            "SELECT id, period, max_requests, is_active FROM group_rate_limit_rules WHERE group_id = ? ORDER BY id",
+            (group_id,),
+        )
+    ]
     members = [
         row_to_dict(row)
         for row in db.query_all(
@@ -216,6 +266,7 @@ async def user_group_edit_page(group_id: int, request: Request):
         {
             "active": "user_groups",
             "group": group,
+            "group_rules": group_rules,
             "members": members,
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
@@ -277,6 +328,46 @@ async def sync_user_group_members_form(
     return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
 
 
+@web_router.post("/user-groups/{group_id}/rate-limit-rules")
+async def add_group_rate_limit_rule_form(
+    group_id: int,
+    request: Request,
+    period: str = Form(...),
+    max_requests: int = Form(...),
+):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await add_group_rate_limit_rule(group_id, GroupRateLimitRuleRequest(period=period, max_requests=max_requests), request)
+    return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
+
+
+@web_router.post("/group-rate-limit-rules/{rule_id}")
+async def update_group_rate_limit_rule_form(
+    rule_id: int,
+    request: Request,
+    group_id: int = Form(...),
+    period: str = Form(...),
+    max_requests: int = Form(...),
+    is_active: str | None = Form(None),
+):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await update_group_rate_limit_rule(
+        rule_id,
+        GroupRateLimitRuleRequest(period=period, max_requests=max_requests, is_active=is_active == "on"),
+        request,
+    )
+    return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
+
+
+@web_router.post("/group-rate-limit-rules/{rule_id}/delete")
+async def delete_group_rate_limit_rule_form(rule_id: int, request: Request, group_id: int = Form(...)):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await delete_group_rate_limit_rule(rule_id, request)
+    return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
+
+
 def _group_row_to_dict(row):
     data = row_to_dict(row)
     data["default_allowed_endpoints_list"] = parse_allowed_endpoints(data.get("default_allowed_endpoints"))
@@ -321,3 +412,17 @@ def _notify_dashboard_change(request: Request) -> None:
     event_bus = getattr(request.app.state, "dashboard_events", None)
     if event_bus is not None:
         event_bus.notify_nowait()
+
+
+def _ensure_group_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
+    row = db.query_one(
+        """
+        SELECT r.id
+        FROM group_rate_limit_rules r
+        JOIN user_groups g ON g.id = r.group_id
+        WHERE r.id = ?
+        """,
+        (rule_id,),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail={"message": "Group rate limit rule not found"})

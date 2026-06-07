@@ -235,7 +235,7 @@ class ProxyRequestService:
             logger.info("proxy request rate limited request_id=%s user_id=%s", request_id, task.user.id)
             return ProxyTaskResult(
                 status_code=429,
-                content={"message": rate.message, "retry_after": rate.retry_after},
+                content={"message": rate.message, "retry_after": rate.retry_after, "limit_scope": rate.scope},
                 headers={"Retry-After": str(rate.retry_after)},
                 request_id=request_id,
             )

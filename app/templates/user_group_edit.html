@@ -153,6 +153,92 @@
 
     <section class="panel" style="margin-bottom: 0;">
       <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="gauge" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+        组共享限流
+      </h2>
+      <form method="post" action="/admin/user-groups/{{ group.id }}/rate-limit-rules" class="inline-form" style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: var(--border-radius-md); border:1px solid rgba(255,255,255,0.04); margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 12px; align-items: end;">
+        <label style="gap: 4px;">
+          周期
+          <select name="period" style="min-height: 38px;">
+            <option value="minute">minute</option>
+            <option value="hour">hour</option>
+            <option value="day">day</option>
+            <option value="month">month</option>
+          </select>
+        </label>
+        <label style="gap: 4px;">
+          组内请求上限
+          <input name="max_requests" type="number" min="1" required style="min-height: 38px;">
+        </label>
+        <button type="submit" style="min-height: 38px; padding: 0 16px;">
+          <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
+          添加
+        </button>
+      </form>
+
+      {% if group_rules %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>周期</th>
+              <th>上限</th>
+              <th>状态</th>
+              <th>保存</th>
+              <th>删除</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rule in group_rules %}
+            <tr>
+              <td>#{{ rule.id }}<input form="group-rate-limit-rule-{{ rule.id }}" type="hidden" name="group_id" value="{{ group.id }}"></td>
+              <td>
+                <select form="group-rate-limit-rule-{{ rule.id }}" name="period" style="min-height:32px; padding: 4px 8px; font-size:13px; background:rgba(0,0,0,0.3);">
+                  {% for period in ["minute", "hour", "day", "month"] %}
+                  <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td>
+                <input form="group-rate-limit-rule-{{ rule.id }}" name="max_requests" type="number" min="1" value="{{ rule.max_requests }}" style="min-height:32px; padding: 4px 8px; font-size:13px; width:80px; background:rgba(0,0,0,0.3);">
+              </td>
+              <td>
+                <label class="check" style="min-height:auto; font-size: 13px; font-weight:500;">
+                  <input form="group-rate-limit-rule-{{ rule.id }}" name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }} style="width:14px; height:14px;">
+                  激活
+                </label>
+              </td>
+              <td>
+                <button form="group-rate-limit-rule-{{ rule.id }}" type="submit" class="secondary" style="min-height: 32px; padding: 4px 10px; font-size: 12px;">
+                  <i data-lucide="save" style="width: 12px; height: 12px;"></i>
+                  保存
+                </button>
+              </td>
+              <td>
+                <form method="post" action="/admin/group-rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirm('确认要删除此组限流规则吗？');">
+                  <input type="hidden" name="group_id" value="{{ group.id }}">
+                  <button class="danger" type="submit" style="min-height: 32px; padding: 4px 10px; font-size: 12px;">
+                    <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i>
+                    删除
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% for rule in group_rules %}
+      <form id="group-rate-limit-rule-{{ rule.id }}" method="post" action="/admin/group-rate-limit-rules/{{ rule.id }}"></form>
+      {% endfor %}
+      {% else %}
+      <p class="muted" style="font-size: 13px;">暂未配置组共享限流。</p>
+      {% endif %}
+    </section>
+
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
         <i data-lucide="users" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
         成员
       </h2>

@@ -33,6 +33,7 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert first.status_code == 201
         assert second.status_code == 429
         assert second.headers["retry-after"] == "60"
+        assert second.json()["limit_scope"] == "user"
 
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         success_log = next(row for row in logs if row["status"] == "success")
@@ -41,6 +42,46 @@ def test_rate_limit_returns_429(tmp_path: Path, monkeypatch):
         assert len(success_log["output_files"]) == 1
         assert Path(success_log["output_files"][0]).read_bytes() == b"fake-image"
         assert success_log["image_urls"] == []
+
+def test_group_rate_limit_returns_429_with_group_scope(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        group_id = _create_group(client, default_anlas_total=100)
+        first_user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "group-a", "group_id": group_id},
+        ).json()
+        second_user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "group-b", "group_id": group_id},
+        ).json()
+        client.post(
+            f"/admin/api/user-groups/{group_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "minute", "max_requests": 1},
+        )
+
+        first = client.post(
+            "/ai/generate-image",
+            headers={"Authorization": f"Bearer {first_user['api_key']}"},
+            json=PAYLOAD,
+        )
+        second = client.post(
+            "/ai/generate-image",
+            headers={"Authorization": f"Bearer {second_user['api_key']}"},
+            json=PAYLOAD,
+        )
+
+        assert first.status_code == 201
+        assert second.status_code == 429
+        assert second.headers["retry-after"] == "60"
+        assert second.json()["limit_scope"] == "group"
+        assert second.json()["message"] == "Group rate limit exceeded: 1 per minute"
 
 def test_rate_limit_counts_retry_attempts_as_one_user_request(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
@@ -106,3 +147,21 @@ def test_429_retry_can_reuse_same_upstream_until_max_attempts(tmp_path: Path, mo
         failed_rows = [row for row in logs if row["status"] == "failed"]
         assert [row["attempt_number"] for row in sorted(failed_rows, key=lambda row: row["attempt_number"])] == [0, 1, 2]
         assert {row["upstream_id"] for row in failed_rows} == {"opus-a"}
+
+
+def _create_group(client: TestClient, **overrides) -> int:
+    payload = {
+        "name": "proxy-group",
+        "is_active": True,
+        "default_tier": "normal",
+        "default_free_small_only": False,
+        "default_allowed_endpoints": ["generate-image"],
+        "default_allowed_upstreams": [],
+        "default_anlas_total": 0,
+        "default_reset_period": "month",
+        "default_reset_day": 1,
+    }
+    payload.update(overrides)
+    response = client.post("/admin/api/user-groups", auth=("admin", "admin123"), json=payload)
+    assert response.status_code == 200
+    return response.json()["group_id"]
