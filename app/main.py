@@ -27,6 +27,8 @@ from .proxy.service import ProxyRequestService
 from .queue_manager import RoutingProxyQueue, UpstreamQueueTarget
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
+from .self_service.discord import DiscordOAuthClient
+from .self_service.routes import router as self_service_router
 from .upstream import UpstreamClient
 from .usage_logs import UsageLogRepository
 
@@ -81,6 +83,10 @@ async def lifespan(app: FastAPI):
     app.state.upstream = upstream
     app.state.upstream_clients = upstream_clients
     app.state.default_upstream_id = default_upstream_id
+    app.state.discord_oauth_client = DiscordOAuthClient(
+        client_id=config.self_service.discord.client_id,
+        client_secret=config.self_service.discord.client_secret,
+    )
     app.state.proxy_queue = proxy_queue
     app.state.proxy_service = ProxyRequestService(
         rate_limiter=app.state.rate_limiter,
@@ -116,6 +122,7 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 app.include_router(proxy_router)
 app.include_router(admin_router)
+app.include_router(self_service_router)
 
 
 @app.middleware("http")

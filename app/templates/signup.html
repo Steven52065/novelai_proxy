@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>自助注册 - NovelAI Proxy</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+  <main class="login-panel">
+    <div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 24px;">
+      <div style="width: 56px; height: 56px; border-radius: 99px; background: rgba(88, 101, 242, 0.15); border: 1px solid rgba(88, 101, 242, 0.3); display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+        <i data-lucide="message-circle" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+      </div>
+      <h1>自助注册</h1>
+      <p class="login-subtitle">使用 Discord 登录后领取本项目 API Key</p>
+    </div>
+
+    <a href="/auth/discord/start" style="display: block;">
+      <button type="button" style="width: 100%;">
+        <i data-lucide="log-in" style="width: 18px; height: 18px;"></i>
+        使用 Discord 登录
+      </button>
+    </a>
+  </main>
+
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>
