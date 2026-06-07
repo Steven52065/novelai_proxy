@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database, utc_now_iso
+from ..quota_manager import normalize_reset_day
 from ..users import (
     CreateUserInput,
     UpdateUserInput,
@@ -441,6 +442,8 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
             return getattr(payload, field_name)
         return defaults[field_name]
 
+    reset_period = str(value("reset_period"))
+    reset_day = _normalize_reset_day_or_400(reset_period, value("reset_day"))
     return CreateUserInput(
         name=payload.name,
         group_id=payload.group_id,
@@ -449,8 +452,8 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
         allowed_endpoints=list(value("allowed_endpoints")),
         allowed_upstreams=list(value("allowed_upstreams")),
         anlas_total=int(value("anlas_total")),
-        reset_period=str(value("reset_period")),
-        reset_day=value("reset_day"),
+        reset_period=reset_period,
+        reset_day=reset_day,
     )
 
 
@@ -476,6 +479,13 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
 
     allowed_endpoints = optional_value("allowed_endpoints")
     allowed_upstreams = optional_value("allowed_upstreams")
+    reset_period_value = optional_value("reset_period")
+    reset_period = str(reset_period_value) if reset_period_value is not None else None
+    reset_day = optional_value("reset_day")
+    if reset_period is not None and reset_day is not None:
+        reset_day = _normalize_reset_day_or_400(str(reset_period), reset_day)
+    elif reset_period is None and reset_day is not None:
+        reset_day = _normalize_reset_day_or_400(_get_user_reset_period(db, user_id), reset_day)
     return UpdateUserInput(
         name=payload.name if "name" in fields_set else None,
         group_id=payload.group_id,
@@ -486,8 +496,8 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         allowed_endpoints=list(allowed_endpoints) if allowed_endpoints is not None else None,
         allowed_upstreams=list(allowed_upstreams) if allowed_upstreams is not None else None,
         anlas_total=optional_value("anlas_total"),
-        reset_period=optional_value("reset_period"),
-        reset_day=optional_value("reset_day"),
+        reset_period=reset_period,
+        reset_day=reset_day,
     )
 
 
@@ -496,6 +506,20 @@ def _get_user_group_id(db: Database, user_id: int) -> int | None:
     if row is None or row["group_id"] is None:
         return None
     return int(row["group_id"])
+
+
+def _get_user_reset_period(db: Database, user_id: int) -> str:
+    row = db.query_one("SELECT reset_period FROM user_anlas_quota WHERE user_id = ?", (user_id,))
+    if row is None:
+        return "month"
+    return str(row["reset_period"])
+
+
+def _normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int:
+    try:
+        return normalize_reset_day(reset_period, reset_day)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
 
 
 def _groups_for_select(db: Database, active_only: bool) -> list[dict]:

@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database, utc_now_iso
+from ..quota_manager import normalize_reset_day
 from ..users import (
     UserGroupInput,
     UserGroupUpdateInput,
@@ -73,6 +74,7 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
     _validate_allowed_endpoints(payload.default_allowed_endpoints)
     _validate_allowed_upstreams(payload.default_allowed_upstreams, request)
+    default_reset_day = _normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
     group_id = create_group(
         db,
         UserGroupInput(
@@ -84,7 +86,7 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
             default_allowed_upstreams=payload.default_allowed_upstreams,
             default_anlas_total=payload.default_anlas_total,
             default_reset_period=payload.default_reset_period,
-            default_reset_day=payload.default_reset_day,
+            default_reset_day=default_reset_day,
         ),
     )
     _notify_dashboard_change(request)
@@ -104,6 +106,7 @@ async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, reque
         _validate_allowed_endpoints(payload.default_allowed_endpoints)
     if payload.default_allowed_upstreams is not None:
         _validate_allowed_upstreams(payload.default_allowed_upstreams, request)
+    default_reset_day = _normalize_update_reset_day_or_400(db, group_id, payload)
     changed = update_group(
         db,
         group_id,
@@ -116,7 +119,7 @@ async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, reque
             default_allowed_upstreams=payload.default_allowed_upstreams,
             default_anlas_total=payload.default_anlas_total,
             default_reset_period=payload.default_reset_period,
-            default_reset_day=payload.default_reset_day,
+            default_reset_day=default_reset_day,
         ),
     )
     if changed:
@@ -387,6 +390,26 @@ def _validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
             status_code=400,
             detail={"message": f"Unknown endpoint: {', '.join(unknown)}"},
         )
+
+
+def _normalize_update_reset_day_or_400(
+    db: Database,
+    group_id: int,
+    payload: UpdateUserGroupRequest,
+) -> int | None:
+    if payload.default_reset_period is not None:
+        return _normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
+    if payload.default_reset_day is None:
+        return None
+    group = get_group(db, group_id)
+    return _normalize_reset_day_or_400(str(group["default_reset_period"]), payload.default_reset_day)
+
+
+def _normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int:
+    try:
+        return normalize_reset_day(reset_period, reset_day)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
 
 
 def _upstream_choices(request: Request) -> list[str]:

@@ -377,6 +377,83 @@ def test_admin_update_user_group_and_apply_defaults(tmp_path: Path, monkeypatch)
         assert updated["anlas_total"] == 77
 
 
+def test_reset_day_validation_matches_reset_period(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        bad_week_user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "bad-week-user", "reset_period": "week", "reset_day": 8},
+        )
+        assert bad_week_user.status_code == 400
+        assert "reset_day must be between 1 and 7" in str(bad_week_user.json())
+
+        bad_month_user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "bad-month-user", "reset_period": "month", "reset_day": 0},
+        )
+        assert bad_month_user.status_code == 400
+        assert "reset_day must be between 1 and 28" in str(bad_month_user.json())
+
+        day_user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "day-user", "reset_period": "day", "reset_day": 28},
+        )
+        assert day_user.status_code == 200
+        user_id = day_user.json()["user_id"]
+        quota = client.app.state.db.query_one(
+            "SELECT reset_period, reset_day FROM user_anlas_quota WHERE user_id = ?",
+            (user_id,),
+        )
+        assert dict(quota) == {"reset_period": "day", "reset_day": 0}
+
+        bad_week_update = client.patch(
+            f"/admin/api/users/{user_id}",
+            auth=("admin", "admin123"),
+            json={"reset_period": "week", "reset_day": 8},
+        )
+        assert bad_week_update.status_code == 400
+        assert "reset_day must be between 1 and 7" in str(bad_week_update.json())
+
+        week_update = client.patch(
+            f"/admin/api/users/{user_id}",
+            auth=("admin", "admin123"),
+            json={"reset_period": "week"},
+        )
+        assert week_update.status_code == 200
+        quota = client.app.state.db.query_one(
+            "SELECT reset_period, reset_day FROM user_anlas_quota WHERE user_id = ?",
+            (user_id,),
+        )
+        assert quota["reset_period"] == "week"
+        assert 1 <= quota["reset_day"] <= 7
+
+        bad_week_group = client.post(
+            "/admin/api/user-groups",
+            auth=("admin", "admin123"),
+            json={
+                "name": "bad-week-group",
+                "default_reset_period": "week",
+                "default_reset_day": 8,
+            },
+        )
+        assert bad_week_group.status_code == 400
+        assert "reset_day must be between 1 and 7" in str(bad_week_group.json())
+
+        never_group_id = _create_group(
+            client,
+            name="never-group",
+            default_reset_period="never",
+            default_reset_day=28,
+        )
+        group = client.app.state.db.query_one("SELECT default_reset_period, default_reset_day FROM user_groups WHERE id = ?", (never_group_id,))
+        assert dict(group) == {"default_reset_period": "never", "default_reset_day": 0}
+
+
 def test_admin_user_group_web_pages_create_and_show_fixed_id(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

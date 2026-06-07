@@ -102,7 +102,7 @@ class QuotaManager:
         now: str | None = None,
     ) -> None:
         now = now or utc_now_iso()
-        reset_day = _normalize_reset_day(reset_period, reset_day, _parse_iso(now))
+        reset_day = normalize_reset_day(reset_period, reset_day, _parse_iso(now))
         conn.execute(
             """
             INSERT INTO user_anlas_quota
@@ -175,11 +175,18 @@ def _next_reset_at(last_reset_at: datetime, period: str, reset_day: int) -> date
     return datetime.max.replace(tzinfo=timezone.utc)
 
 
-def _normalize_reset_day(period: str, reset_day: int | None, now: datetime) -> int:
-    if reset_day is not None:
-        return reset_day
+def normalize_reset_day(period: str, reset_day: int | None, now: datetime | None = None) -> int:
+    now = now or datetime.now(timezone.utc)
     if period == "month":
-        return min(now.day, 28)
+        day = min(now.day, 28) if reset_day is None else int(reset_day)
+        if not 1 <= day <= 28:
+            raise ValueError("reset_day must be between 1 and 28 when reset_period is month")
+        return day
     if period == "week":
-        return now.weekday() + 1
-    return 0
+        day = now.weekday() + 1 if reset_day is None else int(reset_day)
+        if not 1 <= day <= 7:
+            raise ValueError("reset_day must be between 1 and 7 when reset_period is week")
+        return day
+    if period in {"day", "never"}:
+        return 0
+    raise ValueError(f"Unsupported reset_period: {period}")

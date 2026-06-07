@@ -37,6 +37,8 @@ def login_or_register_discord_user(
         if row is not None:
             if row["deleted_at"] is not None:
                 raise HTTPException(status_code=403, detail={"message": "Account was deleted; contact administrator"})
+            if not int(row["is_active"]):
+                raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
             _sync_existing_discord_link(conn, row, profile)
             return DiscordLoginResult(user_id=int(row["user_id"]), api_key=None)
 
@@ -100,7 +102,7 @@ def _get_discord_link(conn: Connection, discord_user_id: str):
     return conn.execute(
         """
         SELECT l.id AS link_id, l.user_id, l.discord_username, l.discord_global_name, l.discord_avatar,
-               u.name, u.deleted_at
+               u.name, u.is_active, u.deleted_at
         FROM discord_user_links l
         JOIN users u ON u.id = l.user_id
         WHERE l.discord_user_id = ?

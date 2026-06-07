@@ -236,6 +236,34 @@ def test_discord_linked_soft_deleted_user_is_rejected(tmp_path: Path, monkeypatc
         assert resp.json()["message"] == "Account was deleted; contact administrator"
 
 
+def test_disabled_discord_user_cannot_use_self_service_account(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        old_hash = client.app.state.db.query_one("SELECT api_key_hash FROM users WHERE id = ?", (user_id,))["api_key_hash"]
+        client.app.state.db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+
+        account = client.get("/account")
+        assert account.status_code == 403
+        assert account.json()["message"] == "Account is disabled"
+
+        reset = client.post("/account/reset-key")
+        assert reset.status_code == 403
+        assert reset.json()["message"] == "Account is disabled"
+        current_hash = client.app.state.db.query_one("SELECT api_key_hash FROM users WHERE id = ?", (user_id,))["api_key_hash"]
+        assert current_hash == old_hash
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient()
+        relogin = client.get(f"/auth/discord/callback?code=ok&state={state}")
+        assert relogin.status_code == 403
+        assert relogin.json()["message"] == "Account is disabled"
+
+
 def test_self_service_reset_key_invalidates_old_key_and_does_not_store_discord_tokens(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(tmp_path)
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))

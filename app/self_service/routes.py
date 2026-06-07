@@ -106,6 +106,8 @@ async def account_page(request: Request):
     )
     if user is None or user["deleted_at"] is not None:
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
+    if not int(user["is_active"]):
+        raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
     quota = request.app.state.quota_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
     new_api_key = _pop_api_key_flash(request, user_id)
@@ -129,6 +131,7 @@ async def account_reset_key(request: Request):
     user_id = _current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         return RedirectResponse("/signup", status_code=303)
+    _ensure_self_service_account_active(request.app.state.db, user_id)
     api_key = reset_api_key(request.app.state.db, user_id)
     response = RedirectResponse("/account", status_code=303)
     _set_api_key_flash(response, request, user_id, api_key)
@@ -201,6 +204,17 @@ def _current_self_service_user_id(request: Request, secret: str) -> int | None:
         return int(payload["user_id"])
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _ensure_self_service_account_active(db: Database, user_id: int) -> None:
+    user = db.query_one(
+        "SELECT is_active, deleted_at FROM users WHERE id = ?",
+        (user_id,),
+    )
+    if user is None or user["deleted_at"] is not None:
+        raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
+    if not int(user["is_active"]):
+        raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
 
 
 def _set_api_key_flash(response, request: Request, user_id: int, api_key: str) -> None:

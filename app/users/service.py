@@ -80,16 +80,19 @@ def insert_user_record(
 
 def create_user(db: Database, quota_manager: QuotaManager, data: CreateUserInput) -> CreatedUser:
     now = utc_now_iso()
-    with db.transaction() as conn:
-        created = insert_user_record(conn, data, now=now)
-        quota_manager.create_or_update_with_connection(
-            conn,
-            created.user_id,
-            data.anlas_total,
-            data.reset_period,
-            data.reset_day,
-            now=now,
-        )
+    try:
+        with db.transaction() as conn:
+            created = insert_user_record(conn, data, now=now)
+            quota_manager.create_or_update_with_connection(
+                conn,
+                created.user_id,
+                data.anlas_total,
+                data.reset_period,
+                data.reset_day,
+                now=now,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
     return created
 
 
@@ -130,8 +133,16 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
         )
         total = data.anlas_total if data.anlas_total is not None else int(quota["total"]) if quota else 0
         reset_period = data.reset_period if data.reset_period is not None else str(quota["reset_period"]) if quota else "month"
-        reset_day = data.reset_day if data.reset_day is not None else int(quota["reset_day"]) if quota else None
-        quota_manager.create_or_update(user_id, total, reset_period, reset_day)
+        if data.reset_day is not None:
+            reset_day = data.reset_day
+        elif data.reset_period is not None:
+            reset_day = None
+        else:
+            reset_day = int(quota["reset_day"]) if quota else None
+        try:
+            quota_manager.create_or_update(user_id, total, reset_period, reset_day)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
     return bool(fields or has_quota_update)
 
 
