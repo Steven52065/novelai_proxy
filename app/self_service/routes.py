@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import secrets
 import time
-from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..admin.common import templates
-from ..database import Database, utc_now_iso
-from ..users import CreateUserInput, create_user, get_enabled_group, group_defaults, reset_api_key
+from ..database import Database
+from ..users import reset_api_key
 from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
+from .accounts import DiscordProfile, login_or_register_discord_user
 from .discord import DiscordOAuthClient
 from .session import expiring_payload, sign_payload, verify_payload
 
@@ -22,14 +22,6 @@ API_KEY_FLASH_COOKIE = "novelai_proxy_self_service_key_flash"
 OAUTH_STATE_TTL_SECONDS = 5 * 60
 SESSION_TTL_SECONDS = 7 * 24 * 3600
 API_KEY_FLASH_TTL_SECONDS = 5 * 60
-
-
-@dataclass(frozen=True)
-class DiscordProfile:
-    user_id: str
-    username: str | None
-    global_name: str | None
-    avatar: str | None
 
 
 @router.get("/signup", response_class=HTMLResponse)
@@ -78,12 +70,17 @@ async def discord_callback(request: Request, code: str | None = None, state: str
         raise HTTPException(status_code=403, detail={"message": "Discord user is not in the required guild"})
 
     profile = _profile_from_payload(user_payload)
-    login = _login_or_register_discord_user(request, profile)
+    login = login_or_register_discord_user(
+        request.app.state.db,
+        request.app.state.quota_manager,
+        default_group_id=int(config.default_group_id),
+        profile=profile,
+    )
     response = RedirectResponse("/account", status_code=303)
     _set_session_cookie(response, config.session_secret, login.user_id)
     response.delete_cookie(OAUTH_STATE_COOKIE)
     if login.api_key is not None:
-        _set_api_key_flash(response, request, login.api_key)
+        _set_api_key_flash(response, request, login.user_id, login.api_key)
     return response
 
 
@@ -110,7 +107,8 @@ async def account_page(request: Request):
     if user is None or user["deleted_at"] is not None:
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
     quota = request.app.state.quota_manager.get_snapshot(user_id)
-    new_api_key = _pop_api_key_flash(request)
+    has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
+    new_api_key = _pop_api_key_flash(request, user_id)
     response = templates.TemplateResponse(
         request,
         "account.html",
@@ -120,7 +118,7 @@ async def account_page(request: Request):
             "new_api_key": new_api_key,
         },
     )
-    if new_api_key is not None:
+    if has_api_key_flash:
         response.delete_cookie(API_KEY_FLASH_COOKIE)
     return response
 
@@ -133,7 +131,7 @@ async def account_reset_key(request: Request):
         return RedirectResponse("/signup", status_code=303)
     api_key = reset_api_key(request.app.state.db, user_id)
     response = RedirectResponse("/account", status_code=303)
-    _set_api_key_flash(response, request, api_key)
+    _set_api_key_flash(response, request, user_id, api_key)
     return response
 
 
@@ -142,102 +140,8 @@ async def account_logout(request: Request):
     _require_discord_enabled(request)
     response = RedirectResponse("/signup", status_code=303)
     response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(API_KEY_FLASH_COOKIE)
     return response
-
-
-@dataclass(frozen=True)
-class DiscordLoginResult:
-    user_id: int
-    api_key: str | None
-
-
-def _login_or_register_discord_user(request: Request, profile: DiscordProfile) -> DiscordLoginResult:
-    db: Database = request.app.state.db
-    row = db.query_one(
-        """
-        SELECT l.id AS link_id, l.user_id, l.discord_username, l.discord_global_name, l.discord_avatar,
-               u.name, u.deleted_at
-        FROM discord_user_links l
-        JOIN users u ON u.id = l.user_id
-        WHERE l.discord_user_id = ?
-        """,
-        (profile.user_id,),
-    )
-    if row is not None:
-        if row["deleted_at"] is not None:
-            raise HTTPException(status_code=403, detail={"message": "Account was deleted; contact administrator"})
-        _sync_existing_discord_link(db, row, profile)
-        return DiscordLoginResult(user_id=int(row["user_id"]), api_key=None)
-
-    config = request.app.state.config.self_service.discord
-    group = get_enabled_group(db, int(config.default_group_id))
-    defaults = group_defaults(group)
-    created = create_user(
-        db,
-        request.app.state.quota_manager,
-        CreateUserInput(
-            name=discord_display_name(profile),
-            group_id=int(config.default_group_id),
-            tier=str(defaults["tier"]),
-            free_small_only=bool(defaults["free_small_only"]),
-            allowed_endpoints=list(defaults["allowed_endpoints"]),
-            allowed_upstreams=list(defaults["allowed_upstreams"]),
-            anlas_total=int(defaults["anlas_total"]),
-            reset_period=str(defaults["reset_period"]),
-            reset_day=int(defaults["reset_day"]),
-        ),
-    )
-    now = utc_now_iso()
-    db.execute(
-        """
-        INSERT INTO discord_user_links (
-            user_id, discord_user_id, discord_username, discord_global_name,
-            discord_avatar, created_at, last_login_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (created.user_id, profile.user_id, profile.username, profile.global_name, profile.avatar, now, now),
-    )
-    return DiscordLoginResult(user_id=created.user_id, api_key=created.api_key)
-
-
-def _sync_existing_discord_link(db: Database, row, profile: DiscordProfile) -> None:
-    old_names = discord_auto_names(
-        user_id=profile.user_id,
-        username=row["discord_username"],
-        global_name=row["discord_global_name"],
-    )
-    new_name = discord_display_name(profile)
-    if row["name"] in old_names and row["name"] != new_name:
-        db.execute("UPDATE users SET name = ? WHERE id = ?", (new_name, int(row["user_id"])))
-    db.execute(
-        """
-        UPDATE discord_user_links
-        SET discord_username = ?,
-            discord_global_name = ?,
-            discord_avatar = ?,
-            last_login_at = ?
-        WHERE id = ?
-        """,
-        (profile.username, profile.global_name, profile.avatar, utc_now_iso(), int(row["link_id"])),
-    )
-
-
-def discord_display_name(profile: DiscordProfile) -> str:
-    if profile.global_name:
-        return f"Discord: {profile.global_name}"
-    if profile.username:
-        return f"Discord: @{profile.username}"
-    return f"Discord 用户 {profile.user_id}"
-
-
-def discord_auto_names(*, user_id: str, username: str | None, global_name: str | None) -> set[str]:
-    names = {f"Discord 用户 {user_id}"}
-    if username:
-        names.add(f"Discord: @{username}")
-    if global_name:
-        names.add(f"Discord: {global_name}")
-    return names
 
 
 def _profile_from_payload(payload: dict) -> DiscordProfile:
@@ -299,10 +203,10 @@ def _current_self_service_user_id(request: Request, secret: str) -> int | None:
         return None
 
 
-def _set_api_key_flash(response, request: Request, api_key: str) -> None:
+def _set_api_key_flash(response, request: Request, user_id: int, api_key: str) -> None:
     token = secrets.token_urlsafe(24)
     _cleanup_api_key_flash_store(request)
-    _api_key_flash_store(request)[token] = (api_key, time.monotonic() + API_KEY_FLASH_TTL_SECONDS)
+    _api_key_flash_store(request)[token] = (user_id, api_key, time.monotonic() + API_KEY_FLASH_TTL_SECONDS)
     response.set_cookie(
         API_KEY_FLASH_COOKIE,
         token,
@@ -312,7 +216,7 @@ def _set_api_key_flash(response, request: Request, api_key: str) -> None:
     )
 
 
-def _pop_api_key_flash(request: Request) -> str | None:
+def _pop_api_key_flash(request: Request, user_id: int) -> str | None:
     token = request.cookies.get(API_KEY_FLASH_COOKIE)
     if not token:
         return None
@@ -320,13 +224,15 @@ def _pop_api_key_flash(request: Request) -> str | None:
     value = _api_key_flash_store(request).pop(token, None)
     if value is None:
         return None
-    api_key, expires_at = value
+    stored_user_id, api_key, expires_at = value
     if time.monotonic() > expires_at:
+        return None
+    if int(stored_user_id) != user_id:
         return None
     return api_key
 
 
-def _api_key_flash_store(request: Request) -> dict[str, tuple[str, float]]:
+def _api_key_flash_store(request: Request) -> dict[str, tuple[int, str, float]]:
     store = getattr(request.app.state, "self_service_api_key_flash_store", None)
     if store is None:
         store = {}
@@ -337,7 +243,7 @@ def _api_key_flash_store(request: Request) -> dict[str, tuple[str, float]]:
 def _cleanup_api_key_flash_store(request: Request) -> None:
     now = time.monotonic()
     store = _api_key_flash_store(request)
-    for token, (_, expires_at) in list(store.items()):
+    for token, (_, _, expires_at) in list(store.items()):
         if expires_at <= now:
             store.pop(token, None)
 

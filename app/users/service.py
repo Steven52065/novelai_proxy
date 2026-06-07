@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
+from sqlite3 import Connection
 
 from fastapi import HTTPException
 
@@ -46,32 +47,50 @@ class CreatedUser:
     api_key: str
 
 
+def insert_user_record(
+    conn: Connection,
+    data: CreateUserInput,
+    *,
+    api_key: str | None = None,
+    now: str | None = None,
+) -> CreatedUser:
+    api_key = api_key or generate_api_key()
+    now = now or utc_now_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO users (
+            api_key_hash, name, tier, is_active, free_small_only,
+            allowed_endpoints, allowed_upstreams, group_id, created_at
+        )
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+        """,
+        (
+            hash_api_key(api_key),
+            data.name,
+            data.tier,
+            1 if data.free_small_only else 0,
+            serialize_allowed_endpoints(data.allowed_endpoints),
+            serialize_allowed_upstreams(data.allowed_upstreams),
+            data.group_id,
+            now,
+        ),
+    )
+    return CreatedUser(user_id=int(cursor.lastrowid), api_key=api_key)
+
+
 def create_user(db: Database, quota_manager: QuotaManager, data: CreateUserInput) -> CreatedUser:
-    api_key = generate_api_key()
     now = utc_now_iso()
     with db.transaction() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO users (
-                api_key_hash, name, tier, is_active, free_small_only,
-                allowed_endpoints, allowed_upstreams, group_id, created_at
-            )
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
-            """,
-            (
-                hash_api_key(api_key),
-                data.name,
-                data.tier,
-                1 if data.free_small_only else 0,
-                serialize_allowed_endpoints(data.allowed_endpoints),
-                serialize_allowed_upstreams(data.allowed_upstreams),
-                data.group_id,
-                now,
-            ),
+        created = insert_user_record(conn, data, now=now)
+        quota_manager.create_or_update_with_connection(
+            conn,
+            created.user_id,
+            data.anlas_total,
+            data.reset_period,
+            data.reset_day,
+            now=now,
         )
-        user_id = int(cursor.lastrowid)
-    quota_manager.create_or_update(user_id, data.anlas_total, data.reset_period, data.reset_day)
-    return CreatedUser(user_id=user_id, api_key=api_key)
+    return created
 
 
 def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: UpdateUserInput) -> bool:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from sqlite3 import Connection
 
 from .database import Database, utc_now_iso
 
@@ -87,20 +88,33 @@ class QuotaManager:
 
     def create_or_update(self, user_id: int, total: int, reset_period: str = "month", reset_day: int | None = None) -> None:
         now = utc_now_iso()
-        reset_day = _normalize_reset_day(reset_period, reset_day, _parse_iso(now))
         with self.db.transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO user_anlas_quota
-                    (user_id, total, used, reserved, reset_period, reset_day, last_reset_at, created_at)
-                VALUES (?, ?, 0, 0, ?, ?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    total = excluded.total,
-                    reset_period = excluded.reset_period,
-                    reset_day = excluded.reset_day
-                """,
-                (user_id, total, reset_period, reset_day, now, now),
-            )
+            self.create_or_update_with_connection(conn, user_id, total, reset_period, reset_day, now=now)
+
+    def create_or_update_with_connection(
+        self,
+        conn: Connection,
+        user_id: int,
+        total: int,
+        reset_period: str = "month",
+        reset_day: int | None = None,
+        *,
+        now: str | None = None,
+    ) -> None:
+        now = now or utc_now_iso()
+        reset_day = _normalize_reset_day(reset_period, reset_day, _parse_iso(now))
+        conn.execute(
+            """
+            INSERT INTO user_anlas_quota
+                (user_id, total, used, reserved, reset_period, reset_day, last_reset_at, created_at)
+            VALUES (?, ?, 0, 0, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                total = excluded.total,
+                reset_period = excluded.reset_period,
+                reset_day = excluded.reset_day
+            """,
+            (user_id, total, reset_period, reset_day, now, now),
+        )
 
     def reset_usage(self, user_id: int) -> None:
         with self.db.transaction() as conn:

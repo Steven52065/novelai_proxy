@@ -4,9 +4,13 @@ import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
+import app.self_service.accounts as accounts
 from app.database import Database, utc_now_iso
+from app.quota_manager import QuotaManager
+from app.self_service.routes import API_KEY_FLASH_COOKIE
 from helpers import write_test_config
 
 
@@ -120,6 +124,38 @@ def test_discord_signup_creates_group_user_and_shows_api_key_once(tmp_path: Path
         assert sub.status_code == 200
 
 
+def test_discord_registration_rolls_back_user_and_quota_on_failure(tmp_path: Path, monkeypatch):
+    db = Database(str(tmp_path / "rollback.db"))
+    db.init_schema()
+    group_id = _create_default_group(db)
+    quota_manager = QuotaManager(db)
+    original_create_quota = quota_manager.create_or_update_with_connection
+
+    def create_quota_then_fail(conn, *args, **kwargs):
+        original_create_quota(conn, *args, **kwargs)
+        raise RuntimeError("forced registration failure")
+
+    monkeypatch.setattr(quota_manager, "create_or_update_with_connection", create_quota_then_fail)
+
+    with pytest.raises(RuntimeError, match="forced registration failure"):
+        accounts.login_or_register_discord_user(
+            db,
+            quota_manager,
+            default_group_id=group_id,
+            profile=accounts.DiscordProfile(
+                user_id="discord-rollback",
+                username="rollback",
+                global_name="Rollback",
+                avatar=None,
+            ),
+        )
+
+    assert _count_rows(db, "users") == 0
+    assert _count_rows(db, "user_anlas_quota") == 0
+    assert _count_rows(db, "discord_user_links") == 0
+    db.close()
+
+
 def test_discord_repeat_login_syncs_names_without_duplicate_or_overwriting_manual_name(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(tmp_path)
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
@@ -152,6 +188,34 @@ def test_discord_repeat_login_syncs_names_without_duplicate_or_overwriting_manua
         assert user["name"] == "Manual Name"
         link = client.app.state.db.query_one("SELECT discord_username, discord_global_name FROM discord_user_links")
         assert dict(link) == {"discord_username": "tester3", "discord_global_name": "Tester Three"}
+
+
+def test_self_service_api_key_flash_is_bound_to_current_user(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        first = _complete_discord_login(client, follow_redirects=False)
+        assert first.status_code == 303
+        first_flash_token = client.cookies.get(API_KEY_FLASH_COOKIE)
+        assert first_flash_token
+
+        second = _complete_discord_login(
+            client,
+            user={"id": "discord-2", "username": "second", "global_name": "Second", "avatar": "avatar-2"},
+            follow_redirects=False,
+        )
+        assert second.status_code == 303
+        client.cookies.set(API_KEY_FLASH_COOKIE, first_flash_token, domain="testserver.local", path="/")
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        assert "Discord: Second" in page.text
+        assert "nai_proxy_" not in page.text
+        assert client.cookies.get(API_KEY_FLASH_COOKIE) is None
+        assert _count_rows(client.app.state.db, "users") == 2
 
 
 def test_discord_linked_soft_deleted_user_is_rejected(tmp_path: Path, monkeypatch):
@@ -234,10 +298,10 @@ def _create_default_group(db: Database) -> int:
     return int(cursor.lastrowid)
 
 
-def _complete_discord_login(client: TestClient, user: dict | None = None):
+def _complete_discord_login(client: TestClient, user: dict | None = None, *, follow_redirects: bool = True):
     state = _start_state(client)
     client.app.state.discord_oauth_client = FakeDiscordClient(user=user)
-    return client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=True)
+    return client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=follow_redirects)
 
 
 def _start_state(client: TestClient) -> str:
