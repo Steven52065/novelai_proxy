@@ -4,9 +4,12 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.config import AppConfig
 from app.database import Database
+from app.database import utc_now_iso, validate_discord_self_service_config
 from helpers import write_test_config
 
 
@@ -175,6 +178,94 @@ def test_admin_database_page_and_vacuum(tmp_path: Path, monkeypatch):
         form_resp = client.post("/admin/database/vacuum", follow_redirects=False)
         assert form_resp.status_code == 303
         assert "/admin/database" in form_resp.headers["location"]
+
+
+def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_path: Path):
+    db_path = tmp_path / "old-users.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_key_hash TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(str(db_path))
+    db.init_schema()
+    tables = {
+        row["name"]
+        for row in db.query_all("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert {"user_groups", "group_rate_limit_rules", "discord_user_links"} <= tables
+
+    user_columns = {row["name"] for row in db.query_all("PRAGMA table_info(users)")}
+    assert "group_id" in user_columns
+    db.execute(
+        "INSERT INTO users(api_key_hash, name, created_at) VALUES (?, ?, ?)",
+        ("legacy-hash", "legacy-user", utc_now_iso()),
+    )
+    user = db.query_one("SELECT group_id FROM users WHERE api_key_hash = ?", ("legacy-hash",))
+    assert user["group_id"] is None
+
+    indexes = {
+        row["name"]
+        for row in db.query_all("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert "idx_users_group_id" in indexes
+    assert "idx_group_rate_limit_rules_group_id" in indexes
+    db.close()
+
+
+def test_discord_self_service_validation_requires_enabled_config_fields(tmp_path: Path):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    config = AppConfig.model_validate({"self_service": {"discord": {"enabled": True, "client_id": "client"}}})
+
+    with pytest.raises(ValueError, match="self_service.discord.client_secret"):
+        validate_discord_self_service_config(db, config)
+    with pytest.raises(ValueError, match="self_service.discord.default_group_id"):
+        validate_discord_self_service_config(db, config)
+
+    db.close()
+
+
+def test_discord_self_service_validation_requires_existing_active_default_group(tmp_path: Path):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": True,
+                    "client_id": "client",
+                    "client_secret": "secret",
+                    "required_guild_id": "guild",
+                    "default_group_id": 1,
+                    "session_secret": "session-secret",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="existing enabled user_groups.id"):
+        validate_discord_self_service_config(db, config)
+
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 0, ?)",
+        ("disabled", utc_now_iso()),
+    )
+    with pytest.raises(ValueError, match="enabled user group"):
+        validate_discord_self_service_config(db, config)
+
+    db.execute("UPDATE user_groups SET is_active = 1 WHERE id = 1")
+    validate_discord_self_service_config(db, config)
+    db.close()
 
 
 def test_usage_logs_unique_constraint_migration_allows_retry_attempts(tmp_path: Path):

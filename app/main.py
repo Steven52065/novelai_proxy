@@ -19,7 +19,7 @@ from .admin.routes import router as admin_router, set_admin_session_cookie, vali
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
-from .database import Database
+from .database import Database, validate_discord_self_service_config
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .proxy.routes import router as proxy_router
@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
     configure_logging(config.logging)
     db = Database(config.database.path)
     db.init_schema()
+    validate_discord_self_service_config(db, config)
     dashboard_events = DashboardEventBus()
     quota_manager = QuotaManager(db)
     usage_logs = UsageLogRepository(db, on_change=dashboard_events.notify_nowait)

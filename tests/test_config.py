@@ -17,3 +17,31 @@ def test_reserved_upstream_id_is_rejected():
                 },
             }
         )
+
+
+def test_self_service_config_defaults_to_disabled():
+    config = AppConfig()
+
+    assert config.self_service.discord.enabled is False
+    assert config.self_service.discord.client_id == ""
+    assert config.self_service.discord.default_group_id is None
+
+
+def test_discord_self_service_model_allows_missing_fields_when_disabled():
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": False,
+                    "client_id": "",
+                    "client_secret": "",
+                    "redirect_uri": "",
+                    "required_guild_id": "",
+                    "default_group_id": None,
+                    "session_secret": "",
+                }
+            }
+        }
+    )
+
+    assert config.self_service.discord.enabled is False

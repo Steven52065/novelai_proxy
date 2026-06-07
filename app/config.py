@@ -119,6 +119,20 @@ class ImageHostingConfig(BaseModel):
     catbox: CatboxConfig = Field(default_factory=CatboxConfig)
 
 
+class DiscordSelfServiceConfig(BaseModel):
+    enabled: bool = False
+    client_id: str = ""
+    client_secret: str = ""
+    redirect_uri: str = "http://127.0.0.1:8080/auth/discord/callback"
+    required_guild_id: str = ""
+    default_group_id: int | None = Field(default=None, ge=1)
+    session_secret: str = ""
+
+
+class SelfServiceConfig(BaseModel):
+    discord: DiscordSelfServiceConfig = Field(default_factory=DiscordSelfServiceConfig)
+
+
 class AppConfig(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -129,6 +143,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)
     image_hosting: ImageHostingConfig = Field(default_factory=ImageHostingConfig)
+    self_service: SelfServiceConfig = Field(default_factory=SelfServiceConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 

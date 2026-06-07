@@ -101,6 +101,24 @@ database:
   # 该文件以及对应的 .db-shm / .db-wal 已被忽略，不要提交。
   path: novelai_proxy.db
 
+# 自助账号能力配置。
+self_service:
+  discord:
+    # 默认关闭；开启前需要先在管理后台创建启用的用户组，并把该组固定 ID 填入 default_group_id。
+    enabled: false
+    # Discord Developer Portal 中的 OAuth2 Client ID。
+    client_id: ""
+    # Discord OAuth2 Client Secret。只填写在本地 config.yaml，不能提交。
+    client_secret: ""
+    # Discord OAuth2 Redirect URI，必须与 Developer Portal 中登记的地址完全一致。
+    redirect_uri: "http://127.0.0.1:8080/auth/discord/callback"
+    # 允许自助注册的 Discord 服务器 ID（Guild ID），不是频道 ID 或角色 ID。
+    required_guild_id: ""
+    # 本地 user_groups.id。启用 Discord 自助注册时必须指向一个存在且启用的用户组。
+    default_group_id:
+    # 自助登录 session 签名密钥。生产环境请使用高强度随机字符串，不能提交真实值。
+    session_secret: ""
+
 # 兼容旧配置的日志级别字段。
 # 如果没有配置下面的 logging.level，程序会使用该值初始化日志级别。
 # 建议新配置优先使用 logging.level。

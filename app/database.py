@@ -26,6 +26,21 @@ class Database:
         with self._lock:
             self.conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS user_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    default_tier TEXT NOT NULL DEFAULT 'normal',
+                    default_free_small_only INTEGER NOT NULL DEFAULT 1,
+                    default_allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
+                    default_allowed_upstreams TEXT,
+                    default_anlas_total INTEGER NOT NULL DEFAULT 0,
+                    default_reset_period TEXT NOT NULL DEFAULT 'month',
+                    default_reset_day INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     api_key_hash TEXT NOT NULL UNIQUE,
@@ -36,6 +51,7 @@ class Database:
                     free_small_only INTEGER NOT NULL DEFAULT 0,
                     allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
                     allowed_upstreams TEXT,
+                    group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL,
                     deleted_at TEXT,
                     created_at TEXT NOT NULL
                 );
@@ -47,6 +63,26 @@ class Database:
                     max_requests INTEGER NOT NULL,
                     is_active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS group_rate_limit_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+                    period TEXT NOT NULL,
+                    max_requests INTEGER NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS discord_user_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                    discord_user_id TEXT NOT NULL UNIQUE,
+                    discord_username TEXT,
+                    discord_global_name TEXT,
+                    discord_avatar TEXT,
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS user_anlas_quota (
@@ -150,7 +186,12 @@ class Database:
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("users", "allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'")
             self._add_column_if_missing("users", "allowed_upstreams", "TEXT")
+            self._add_column_if_missing("users", "group_id", "INTEGER REFERENCES user_groups(id) ON DELETE SET NULL")
             self._add_column_if_missing("users", "deleted_at", "TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id)")
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_group_rate_limit_rules_group_id ON group_rate_limit_rules(group_id)"
+            )
             self._clear_stored_user_api_keys()
             self._init_dashboard_hourly_triggers()
             self._backfill_dashboard_hourly_stats_if_empty()
@@ -647,3 +688,35 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_usage_request_id
                 ON usage_logs(request_id);
         """)
+
+
+def validate_discord_self_service_config(db: Database, config: Any) -> None:
+    discord = config.self_service.discord
+    if not discord.enabled:
+        return
+
+    missing_fields = [
+        field_name
+        for field_name in ("client_id", "client_secret", "redirect_uri", "required_guild_id", "session_secret")
+        if not str(getattr(discord, field_name, "") or "").strip()
+    ]
+    if discord.default_group_id is None:
+        missing_fields.append("default_group_id")
+    if missing_fields:
+        formatted = ", ".join(f"self_service.discord.{field_name}" for field_name in missing_fields)
+        raise ValueError(f"Discord self-service is enabled but missing required configuration: {formatted}")
+
+    row = db.query_one(
+        "SELECT id, is_active FROM user_groups WHERE id = ?",
+        (discord.default_group_id,),
+    )
+    if row is None:
+        raise ValueError(
+            "self_service.discord.default_group_id must reference an existing enabled user_groups.id "
+            f"(got {discord.default_group_id})"
+        )
+    if not int(row["is_active"]):
+        raise ValueError(
+            "self_service.discord.default_group_id must reference an enabled user group "
+            f"(got disabled group {discord.default_group_id})"
+        )
