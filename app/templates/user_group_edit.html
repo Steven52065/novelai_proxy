@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>
+    <i data-lucide="users-round" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    用户组 #{{ group.id }}
+  </h1>
+  <a href="/admin/user-groups" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
+    <i data-lucide="arrow-left" style="width: 16px; height: 16px;"></i>
+    返回用户组
+  </a>
+</div>
+
+<div class="layout-grid">
+  <div class="stack">
+    <section class="panel" style="margin-bottom: 0;">
+      <div class="section-head">
+        <div>
+          <h2 style="font-size: 18px;">
+            <i data-lucide="settings" style="width: 18px; height: 18px; stroke: #3b82f6;"></i>
+            默认配置
+          </h2>
+          <p class="muted" style="margin-top: 4px;">固定 ID：<code>#{{ group.id }}</code></p>
+        </div>
+        {% if group.is_active %}
+        <span class="badge badge-active">启用中</span>
+        {% else %}
+        <span class="badge badge-inactive">已禁用</span>
+        {% endif %}
+      </div>
+
+      <form id="group-settings-form" method="post" action="/admin/user-groups/{{ group.id }}" class="stack">
+        <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
+          <label>
+            组名称
+            <input name="name" value="{{ group.name }}" required>
+          </label>
+          <label>
+            默认等级
+            <select name="default_tier">
+              <option value="normal" {{ "selected" if group.default_tier == "normal" else "" }}>normal</option>
+              <option value="vip" {{ "selected" if group.default_tier == "vip" else "" }}>vip</option>
+            </select>
+          </label>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+          <label>
+            默认 Anlas 总额
+            <input name="default_anlas_total" type="number" min="0" value="{{ group.default_anlas_total }}">
+          </label>
+          <label>
+            重置周期
+            <select name="default_reset_period">
+              {% for period in ["month", "week", "day", "never"] %}
+              <option value="{{ period }}" {{ "selected" if group.default_reset_period == period else "" }}>{{ period }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            重置日期
+            <input name="default_reset_day" type="number" min="0" max="28" value="{{ group.default_reset_day }}">
+          </label>
+        </div>
+
+        <div style="display: flex; gap: 20px; padding: 6px 0;">
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="is_active" type="checkbox" {{ "checked" if group.is_active else "" }}>
+            启用用户组
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="default_free_small_only" type="checkbox" {{ "checked" if group.default_free_small_only else "" }}>
+            默认仅允许免费小图
+          </label>
+        </div>
+
+        <div>
+          <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+            {% for endpoint, label in endpoint_choices.items() %}
+            <label class="check" style="color: #cbd5e1; font-weight: 500;">
+              <input name="default_allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint in group.default_allowed_endpoints_list else "" }}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div>
+          <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许上游 Key</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+            {% for upstream_id in upstream_choices %}
+            <label class="check" style="color: #cbd5e1; font-weight: 500;">
+              <input name="default_allowed_upstreams" type="checkbox" value="{{ upstream_id }}" {{ "checked" if upstream_id in group.default_allowed_upstreams_list else "" }}>
+              {{ upstream_id }}
+            </label>
+            {% endfor %}
+          </div>
+          <p class="muted" style="font-size: 12px; margin-top: 6px;">不勾选表示默认允许全部已启用上游。</p>
+        </div>
+      </form>
+
+      <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
+        <button type="submit" form="group-settings-form" style="min-height: 42px; padding: 0 24px;">
+          <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+          保存默认配置
+        </button>
+        <form method="post" action="/admin/user-groups/{{ group.id }}/delete" onsubmit="return confirm('确认禁用此用户组吗？已有成员不会被移出。');">
+          <button class="danger" type="submit" style="min-height: 42px; padding: 0 16px;">
+            <i data-lucide="ban" style="width: 16px; height: 16px;"></i>
+            禁用用户组
+          </button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="refresh-cw" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+        同步到成员
+      </h2>
+      <form method="post" action="/admin/user-groups/{{ group.id }}/sync-members" class="stack">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="tier">
+            默认等级
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="free_small_only">
+            免费小图策略
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="allowed_endpoints">
+            允许接口
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="allowed_upstreams">
+            允许上游
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="anlas_quota">
+            额度总额和重置规则
+          </label>
+        </div>
+        <button type="submit">
+          <i data-lucide="check" style="width: 16px; height: 16px;"></i>
+          同步选中字段
+        </button>
+      </form>
+    </section>
+
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="users" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        成员
+      </h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>名称</th>
+              <th>等级</th>
+              <th>状态</th>
+              <th>额度</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for member in members %}
+            <tr>
+              <td>#{{ member.id }}</td>
+              <td><a href="/admin/users/{{ member.id }}">{{ member.name }}</a></td>
+              <td>{{ member.tier }}</td>
+              <td>
+                {% if member.is_active %}
+                <span class="badge badge-active">启用中</span>
+                {% else %}
+                <span class="badge badge-inactive">已禁用</span>
+                {% endif %}
+              </td>
+              <td class="mono">{{ member.anlas_used }} + {{ member.anlas_reserved }} / {{ member.anlas_total }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

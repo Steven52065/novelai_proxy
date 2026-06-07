@@ -153,6 +153,31 @@
           </label>
         </div>
 
+        <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
+          <label>
+            所属用户组
+            <select name="group_id">
+              <option value="" {{ "selected" if not user.group_id else "" }}>不指定用户组</option>
+              {% for group in groups %}
+              <option value="{{ group.id }}" {{ "selected" if user.group_id == group.id else "" }}>
+                #{{ group.id }} {{ group.name }}{{ "（已禁用）" if not group.is_active else "" }}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="check" style="color: #cbd5e1; font-weight: 500; align-self: center;">
+            <input name="apply_group_defaults" type="checkbox">
+            保存时套用组默认值
+          </label>
+        </div>
+
+        {% if user.group_id %}
+        <p class="muted" style="font-size: 12px; margin-top: -10px;">
+          当前用户组：#{{ user.group_id }} {{ user.group_name or "未命名用户组" }}{{ "（已禁用）" if not user.group_is_active else "" }}
+        </p>
+        {% endif %}
+
         <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
           <label>
             额度重置周期

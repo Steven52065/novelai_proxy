@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database
@@ -17,11 +18,12 @@ from ..users import (
     update_group,
 )
 from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
-from .auth import require_admin
-from .common import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS, row_to_dict
+from .auth import has_admin_session, require_admin
+from .common import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS, row_to_dict, templates
 
 
 api_router = APIRouter(prefix="/admin/api")
+web_router = APIRouter(prefix="/admin")
 
 
 class CreateUserGroupRequest(BaseModel):
@@ -135,6 +137,144 @@ async def sync_user_group_members(group_id: int, payload: SyncGroupMembersReques
     if updated_users:
         _notify_dashboard_change(request)
     return {"ok": True, "updated_users": updated_users}
+
+
+@web_router.get("/user-groups", response_class=HTMLResponse)
+async def user_groups_page(request: Request):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db: Database = request.app.state.db
+    return templates.TemplateResponse(
+        request,
+        "user_groups.html",
+        {
+            "active": "user_groups",
+            "groups": [_group_row_to_dict(row) for row in list_groups(db)],
+            "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
+            "upstream_choices": _upstream_choices(request),
+        },
+    )
+
+
+@web_router.post("/user-groups")
+async def create_user_group_form(
+    request: Request,
+    name: str = Form(...),
+    is_active: str | None = Form(None),
+    default_tier: str = Form("normal"),
+    default_free_small_only: str | None = Form(None),
+    default_allowed_endpoints: list[str] | None = Form(None),
+    default_allowed_upstreams: list[str] | None = Form(None),
+    default_anlas_total: int = Form(0),
+    default_reset_period: str = Form("month"),
+    default_reset_day: int = Form(1),
+):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await create_user_group(
+        CreateUserGroupRequest(
+            name=name,
+            is_active=is_active == "on",
+            default_tier=default_tier,
+            default_free_small_only=default_free_small_only == "on",
+            default_allowed_endpoints=default_allowed_endpoints or [],
+            default_allowed_upstreams=default_allowed_upstreams or [],
+            default_anlas_total=default_anlas_total,
+            default_reset_period=default_reset_period,
+            default_reset_day=default_reset_day,
+        ),
+        request,
+    )
+    return RedirectResponse("/admin/user-groups", status_code=303)
+
+
+@web_router.get("/user-groups/{group_id}", response_class=HTMLResponse)
+async def user_group_edit_page(group_id: int, request: Request):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    db: Database = request.app.state.db
+    group = _group_row_to_dict(get_group(db, group_id))
+    members = [
+        row_to_dict(row)
+        for row in db.query_all(
+            """
+            SELECT u.id, u.name, u.tier, u.is_active,
+                   COALESCE(q.total, 0) AS anlas_total,
+                   COALESCE(q.used, 0) AS anlas_used,
+                   COALESCE(q.reserved, 0) AS anlas_reserved
+            FROM users u
+            LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+            WHERE u.group_id = ? AND u.deleted_at IS NULL
+            ORDER BY u.id DESC
+            """,
+            (group_id,),
+        )
+    ]
+    return templates.TemplateResponse(
+        request,
+        "user_group_edit.html",
+        {
+            "active": "user_groups",
+            "group": group,
+            "members": members,
+            "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
+            "upstream_choices": _upstream_choices(request),
+        },
+    )
+
+
+@web_router.post("/user-groups/{group_id}")
+async def update_user_group_form(
+    group_id: int,
+    request: Request,
+    name: str = Form(...),
+    is_active: str | None = Form(None),
+    default_tier: str = Form("normal"),
+    default_free_small_only: str | None = Form(None),
+    default_allowed_endpoints: list[str] | None = Form(None),
+    default_allowed_upstreams: list[str] | None = Form(None),
+    default_anlas_total: int = Form(0),
+    default_reset_period: str = Form("month"),
+    default_reset_day: int = Form(1),
+):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await patch_user_group(
+        group_id,
+        UpdateUserGroupRequest(
+            name=name,
+            is_active=is_active == "on",
+            default_tier=default_tier,
+            default_free_small_only=default_free_small_only == "on",
+            default_allowed_endpoints=default_allowed_endpoints or [],
+            default_allowed_upstreams=default_allowed_upstreams or [],
+            default_anlas_total=default_anlas_total,
+            default_reset_period=default_reset_period,
+            default_reset_day=default_reset_day,
+        ),
+        request,
+    )
+    return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
+
+
+@web_router.post("/user-groups/{group_id}/delete")
+async def delete_user_group_form(group_id: int, request: Request):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await delete_user_group(group_id, request)
+    return RedirectResponse("/admin/user-groups", status_code=303)
+
+
+@web_router.post("/user-groups/{group_id}/sync-members")
+async def sync_user_group_members_form(
+    group_id: int,
+    request: Request,
+    fields: list[str] | None = Form(None),
+):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    await sync_user_group_members(group_id, SyncGroupMembersRequest(fields=fields or []), request)
+    return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
 
 
 def _group_row_to_dict(row):

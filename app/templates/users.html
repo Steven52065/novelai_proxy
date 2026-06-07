@@ -31,6 +31,23 @@
         备注名称
         <input name="name" placeholder="例如：张三、测试组" required>
       </label>
+
+      <label>
+        所属用户组
+        <select name="group_id">
+          <option value="">不指定用户组</option>
+          {% for group in groups %}
+          <option value="{{ group.id }}">#{{ group.id }} {{ group.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <div style="padding: 2px 0;">
+        <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <input name="use_group_defaults" type="checkbox">
+          创建时套用用户组默认配置
+        </label>
+      </div>
       
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
         <label>
@@ -137,6 +154,7 @@
         <tr>
           <th>ID</th>
           <th>备注名</th>
+          <th>用户组</th>
           <th>账号等级</th>
           <th>状态</th>
           <th>功能限制</th>
@@ -152,6 +170,19 @@
           <td style="font-weight: 600; color: #64748b;">#{{ user.id }}</td>
           <td>
             <div style="font-weight: 700; color: #fff;">{{ user.name }}</div>
+          </td>
+          <td>
+            {% if user.group_id %}
+            <a href="/admin/user-groups/{{ user.group_id }}" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 700;">
+              <i data-lucide="users-round" style="width: 13px; height: 13px;"></i>
+              #{{ user.group_id }} {{ user.group_name or "未命名用户组" }}
+            </a>
+            {% if not user.group_is_active %}
+            <span class="badge badge-inactive" style="margin-top: 6px;">已禁用</span>
+            {% endif %}
+            {% else %}
+            <span class="muted" style="font-size: 12px;">未分组</span>
+            {% endif %}
           </td>
           <td>
             {% if user.tier == 'vip' %}

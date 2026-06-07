@@ -45,10 +45,14 @@ def test_admin_web_pages_redirect_without_session_and_after_logout(tmp_path: Pat
         without_session = client.get("/admin/users", follow_redirects=False)
         assert without_session.status_code == 303
         assert without_session.headers["location"] == "/admin/login"
+        without_group_session = client.get("/admin/user-groups", follow_redirects=False)
+        assert without_group_session.status_code == 303
+        assert without_group_session.headers["location"] == "/admin/login"
 
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
         assert client.get("/admin/users").status_code == 200
+        assert client.get("/admin/user-groups").status_code == 200
 
         logout = client.post("/admin/logout", follow_redirects=False)
         assert logout.status_code == 303
@@ -56,6 +60,9 @@ def test_admin_web_pages_redirect_without_session_and_after_logout(tmp_path: Pat
         after_logout = client.get("/admin/users", follow_redirects=False)
         assert after_logout.status_code == 303
         assert after_logout.headers["location"] == "/admin/login"
+        after_group_logout = client.get("/admin/user-groups", follow_redirects=False)
+        assert after_group_logout.status_code == 303
+        assert after_group_logout.headers["location"] == "/admin/login"
 
 
 def test_admin_login_failure_does_not_set_session_cookie(tmp_path: Path, monkeypatch):

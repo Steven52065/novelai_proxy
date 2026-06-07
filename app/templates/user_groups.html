@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>
+    <i data-lucide="users-round" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    用户组
+  </h1>
+</div>
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2 style="font-size: 18px;">
+        <i data-lucide="plus" style="width: 18px; height: 18px; stroke: #10b981;"></i>
+        创建用户组
+      </h2>
+    </div>
+  </div>
+
+  <form method="post" action="/admin/user-groups" class="stack">
+    <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px;">
+      <label>
+        组名称
+        <input name="name" required placeholder="例如：Discord 默认组">
+      </label>
+      <label>
+        默认等级
+        <select name="default_tier">
+          <option value="normal">normal</option>
+          <option value="vip">vip</option>
+        </select>
+      </label>
+      <label>
+        默认 Anlas 总额
+        <input name="default_anlas_total" type="number" min="0" value="0">
+      </label>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+      <label>
+        重置周期
+        <select name="default_reset_period">
+          <option value="month">month</option>
+          <option value="week">week</option>
+          <option value="day">day</option>
+          <option value="never">never</option>
+        </select>
+      </label>
+      <label>
+        重置日期
+        <input name="default_reset_day" type="number" min="0" max="28" value="1">
+      </label>
+      <div style="display: grid; align-content: end; gap: 8px;">
+        <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <input name="is_active" type="checkbox" checked>
+          启用用户组
+        </label>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 20px; padding: 6px 0;">
+      <label class="check" style="color: #cbd5e1; font-weight: 500;">
+        <input name="default_free_small_only" type="checkbox" checked>
+        默认仅允许免费小图
+      </label>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+      <div>
+        <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+          {% for endpoint, label in endpoint_choices.items() %}
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="default_allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint == "generate-image" else "" }}>
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许上游 Key</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+          {% for upstream_id in upstream_choices %}
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="default_allowed_upstreams" type="checkbox" value="{{ upstream_id }}">
+            {{ upstream_id }}
+          </label>
+          {% endfor %}
+        </div>
+        <p class="muted" style="font-size: 12px; margin-top: 6px;">不勾选表示默认允许全部已启用上游。</p>
+      </div>
+    </div>
+
+    <div>
+      <button type="submit">
+        <i data-lucide="check" style="width: 16px; height: 16px;"></i>
+        创建用户组
+      </button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2 style="font-size: 18px;">
+        <i data-lucide="list" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        用户组列表
+      </h2>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>名称</th>
+          <th>状态</th>
+          <th>默认等级</th>
+          <th>默认权限</th>
+          <th>默认额度</th>
+          <th>成员</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in groups %}
+        <tr>
+          <td><code>#{{ group.id }}</code></td>
+          <td style="font-weight: 700; color: #fff;">{{ group.name }}</td>
+          <td>
+            {% if group.is_active %}
+            <span class="badge badge-active">启用中</span>
+            {% else %}
+            <span class="badge badge-inactive">已禁用</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if group.default_tier == 'vip' %}
+            <span class="badge badge-vip">VIP</span>
+            {% else %}
+            <span class="badge badge-normal">Normal</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if group.default_free_small_only %}
+            <span class="badge" style="background: rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); color:#f59e0b;">仅免费小图</span>
+            {% else %}
+            <span class="badge" style="background: rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:#34d399;">不限图规格</span>
+            {% endif %}
+            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+              {% for endpoint in group.default_allowed_endpoints_list %}
+              <span class="badge" style="background: rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.18); color:#93c5fd;">{{ endpoint_choices.get(endpoint, endpoint) }}</span>
+              {% endfor %}
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+              {% if group.default_allowed_upstreams_list %}
+                {% for upstream_id in group.default_allowed_upstreams_list %}
+                <span class="badge" style="background: rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.18); color:#86efac;">{{ upstream_id }}</span>
+                {% endfor %}
+              {% else %}
+                <span class="badge" style="background: rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.18); color:#cbd5e1;">全部上游</span>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            <span class="mono" style="color: #34d399; font-weight: 700;">{{ group.default_anlas_total }}</span>
+            <span class="muted" style="display: block; font-size: 12px;">{{ group.default_reset_period }} / {{ group.default_reset_day }}</span>
+          </td>
+          <td>{{ group.member_count }}</td>
+          <td>
+            <a href="/admin/user-groups/{{ group.id }}" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 600;">
+              <i data-lucide="edit" style="width: 14px; height: 14px;"></i>
+              编辑
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -16,6 +16,7 @@ from ..users import (
     ensure_user_exists,
     get_enabled_group,
     group_defaults,
+    list_groups,
     reset_api_key,
     update_user as update_user_record,
 )
@@ -72,7 +73,8 @@ async def list_users(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
+        SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
+               u.tier, u.is_active, u.free_small_only,
                u.allowed_endpoints, u.allowed_upstreams, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
@@ -80,6 +82,7 @@ async def list_users(request: Request):
                COALESCE(q.reserved, 0) AS anlas_reserved
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        LEFT JOIN user_groups g ON g.id = u.group_id
         WHERE u.deleted_at IS NULL
         ORDER BY u.id DESC
         """
@@ -191,7 +194,8 @@ async def users_page(request: Request):
     new_api_key = _pop_api_key_flash(request)
     rows = db.query_all(
         """
-        SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
+        SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
+               u.tier, u.is_active, u.free_small_only,
                u.allowed_endpoints, u.allowed_upstreams, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
@@ -201,6 +205,7 @@ async def users_page(request: Request):
                COALESCE(q.reset_day, 1) AS reset_day
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        LEFT JOIN user_groups g ON g.id = u.group_id
         WHERE u.deleted_at IS NULL
         ORDER BY u.id DESC
         """
@@ -211,6 +216,7 @@ async def users_page(request: Request):
         {
             "active": "users",
             "users": [user_row_to_dict(row) for row in rows],
+            "groups": _groups_for_select(db, active_only=True),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
             "new_api_key": new_api_key,
@@ -232,12 +238,18 @@ async def create_user_form(
     free_small_only: str | None = Form(None),
     allowed_endpoints: list[str] | None = Form(None),
     allowed_upstreams: list[str] | None = Form(None),
+    group_id: str | None = Form(None),
+    use_group_defaults: str | None = Form(None),
 ):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
-    result = await create_user(
-        CreateUserRequest(
+    parsed_group_id = _parse_optional_form_int(group_id)
+    if use_group_defaults == "on" and parsed_group_id is not None:
+        payload = CreateUserRequest(name=name, group_id=parsed_group_id)
+    else:
+        payload = CreateUserRequest(
             name=name,
+            group_id=parsed_group_id,
             tier=tier,
             anlas_total=anlas_total,
             reset_period=reset_period,
@@ -245,7 +257,9 @@ async def create_user_form(
             free_small_only=free_small_only == "on",
             allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
-        ),
+        )
+    result = await create_user(
+        payload,
         request,
     )
     response = RedirectResponse("/admin/users", status_code=303)
@@ -261,12 +275,14 @@ async def user_edit_page(user_id: int, request: Request):
     new_api_key = _pop_api_key_flash(request)
     user = db.query_one(
         """
-        SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
+        SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
+               u.tier, u.is_active, u.free_small_only,
                u.allowed_endpoints, u.allowed_upstreams, NULL AS api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        LEFT JOIN user_groups g ON g.id = u.group_id
         WHERE u.id = ? AND u.deleted_at IS NULL
         """,
         (user_id,),
@@ -284,6 +300,7 @@ async def user_edit_page(user_id: int, request: Request):
             "active": "users",
             "user": user_row_to_dict(user),
             "rules": [row_to_dict(row) for row in rules],
+            "groups": _groups_for_select(db, active_only=False),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
             "new_api_key": new_api_key,
@@ -307,22 +324,41 @@ async def update_user_form(
     free_small_only: str | None = Form(None),
     allowed_endpoints: list[str] | None = Form(None),
     allowed_upstreams: list[str] | None = Form(None),
+    group_id: str | None = Form(None),
+    apply_group_defaults: str | None = Form(None),
 ):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
+    parsed_group_id = _parse_optional_form_int(group_id)
+    current_group_id = _get_user_group_id(request.app.state.db, user_id)
+    payload_data = {
+        "name": name,
+        "is_active": is_active == "on",
+    }
+    if apply_group_defaults == "on":
+        payload_data.update(
+            {
+                "group_id": parsed_group_id,
+                "apply_group_defaults": True,
+            }
+        )
+    else:
+        if parsed_group_id != current_group_id:
+            payload_data["group_id"] = parsed_group_id
+        payload_data.update(
+            {
+                "tier": tier,
+                "free_small_only": free_small_only == "on",
+                "anlas_total": anlas_total,
+                "reset_period": reset_period,
+                "reset_day": reset_day,
+                "allowed_endpoints": allowed_endpoints or [],
+                "allowed_upstreams": allowed_upstreams or [],
+            }
+        )
     await update_user(
         user_id,
-        UpdateUserRequest(
-            name=name,
-            tier=tier,
-            is_active=is_active == "on",
-            free_small_only=free_small_only == "on",
-            anlas_total=anlas_total,
-            reset_period=reset_period,
-            reset_day=reset_day,
-            allowed_endpoints=allowed_endpoints or [],
-            allowed_upstreams=allowed_upstreams or [],
-        ),
+        UpdateUserRequest(**payload_data),
         request,
     )
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
@@ -460,6 +496,19 @@ def _get_user_group_id(db: Database, user_id: int) -> int | None:
     if row is None or row["group_id"] is None:
         return None
     return int(row["group_id"])
+
+
+def _groups_for_select(db: Database, active_only: bool) -> list[dict]:
+    groups = [row_to_dict(row) for row in list_groups(db)]
+    if active_only:
+        return [group for group in groups if int(group["is_active"])]
+    return groups
+
+
+def _parse_optional_form_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:

@@ -377,6 +377,81 @@ def test_admin_update_user_group_and_apply_defaults(tmp_path: Path, monkeypatch)
         assert updated["anlas_total"] == 77
 
 
+def test_admin_user_group_web_pages_create_and_show_fixed_id(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        create_resp = client.post(
+            "/admin/user-groups",
+            data={
+                "name": "web-group",
+                "is_active": "on",
+                "default_tier": "vip",
+                "default_free_small_only": "on",
+                "default_allowed_endpoints": "generate-image",
+                "default_anlas_total": "25",
+                "default_reset_period": "month",
+                "default_reset_day": "1",
+            },
+            follow_redirects=False,
+        )
+        assert create_resp.status_code == 303
+        assert create_resp.headers["location"] == "/admin/user-groups"
+
+        page = client.get("/admin/user-groups")
+        assert page.status_code == 200
+        assert "web-group" in page.text
+        assert "#1" in page.text
+
+        detail = client.get("/admin/user-groups/1")
+        assert detail.status_code == 200
+        assert "固定 ID" in detail.text
+        assert "#1" in detail.text
+
+
+def test_admin_user_edit_page_can_change_group(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="edit-target", default_tier="vip")
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "web-edit-user", "tier": "normal", "anlas_total": 10},
+        ).json()["user_id"]
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        detail = client.get(f"/admin/users/{user_id}")
+        assert detail.status_code == 200
+        assert "所属用户组" in detail.text
+
+        update_resp = client.post(
+            f"/admin/users/{user_id}",
+            data={
+                "name": "web-edit-user",
+                "group_id": str(group_id),
+                "tier": "normal",
+                "is_active": "on",
+                "anlas_total": "10",
+                "reset_period": "month",
+                "reset_day": "1",
+                "allowed_endpoints": "generate-image",
+            },
+            follow_redirects=False,
+        )
+        assert update_resp.status_code == 303
+        assert update_resp.headers["location"] == f"/admin/users/{user_id}"
+
+        user = client.app.state.db.query_one("SELECT group_id FROM users WHERE id = ?", (user_id,))
+        assert user["group_id"] == group_id
+
+
 def test_admin_missing_user_and_rule_operations_return_404(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
