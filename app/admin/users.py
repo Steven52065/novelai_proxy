@@ -8,15 +8,20 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database, utc_now_iso
-from ..quota_manager import QuotaManager
-from ..security import generate_api_key, hash_api_key
+from ..users import (
+    CreateUserInput,
+    UpdateUserInput,
+    create_user as create_user_record,
+    delete_user as delete_user_record,
+    ensure_user_exists,
+    reset_api_key,
+    update_user as update_user_record,
+)
 from .auth import has_admin_session, require_admin
 from .common import (
     ALLOWED_ENDPOINT_CHOICES,
     DEFAULT_ALLOWED_ENDPOINTS,
     row_to_dict,
-    serialize_allowed_endpoints,
-    serialize_allowed_upstreams,
     templates,
     user_row_to_dict,
 )
@@ -79,80 +84,51 @@ async def list_users(request: Request):
 @api_router.post("/users", dependencies=[Depends(require_admin)])
 async def create_user(payload: CreateUserRequest, request: Request):
     db: Database = request.app.state.db
-    quota_manager: QuotaManager = request.app.state.quota_manager
     _validate_allowed_endpoints(payload.allowed_endpoints)
     _validate_allowed_upstreams(payload.allowed_upstreams, request)
-    api_key = generate_api_key()
-    now = utc_now_iso()
-    with db.transaction() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO users (api_key_hash, name, tier, is_active, free_small_only, allowed_endpoints, allowed_upstreams, created_at)
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?)
-            """,
-            (
-                hash_api_key(api_key),
-                payload.name,
-                payload.tier,
-                1 if payload.free_small_only else 0,
-                serialize_allowed_endpoints(payload.allowed_endpoints),
-                serialize_allowed_upstreams(payload.allowed_upstreams),
-                now,
-            ),
-        )
-        user_id = int(cursor.lastrowid)
-    quota_manager.create_or_update(user_id, payload.anlas_total, payload.reset_period, payload.reset_day)
+    created = create_user_record(
+        db,
+        request.app.state.quota_manager,
+        CreateUserInput(
+            name=payload.name,
+            tier=payload.tier,
+            free_small_only=payload.free_small_only,
+            allowed_endpoints=payload.allowed_endpoints,
+            allowed_upstreams=payload.allowed_upstreams,
+            anlas_total=payload.anlas_total,
+            reset_period=payload.reset_period,
+            reset_day=payload.reset_day,
+        ),
+    )
     _notify_dashboard_change(request)
-    return {"user_id": user_id, "api_key": api_key}
+    return {"user_id": created.user_id, "api_key": created.api_key}
 
 
 @api_router.patch("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def update_user(user_id: int, payload: UpdateUserRequest, request: Request):
     db: Database = request.app.state.db
-    _ensure_user_exists(db, user_id)
+    ensure_user_exists(db, user_id)
     if payload.allowed_endpoints is not None:
         _validate_allowed_endpoints(payload.allowed_endpoints)
     if payload.allowed_upstreams is not None:
         _validate_allowed_upstreams(payload.allowed_upstreams, request)
-    fields = []
-    params = []
-    if payload.name is not None:
-        fields.append("name = ?")
-        params.append(payload.name)
-    if payload.tier is not None:
-        fields.append("tier = ?")
-        params.append(payload.tier)
-    if payload.is_active is not None:
-        fields.append("is_active = ?")
-        params.append(1 if payload.is_active else 0)
-    if payload.free_small_only is not None:
-        fields.append("free_small_only = ?")
-        params.append(1 if payload.free_small_only else 0)
-    if payload.allowed_endpoints is not None:
-        fields.append("allowed_endpoints = ?")
-        params.append(serialize_allowed_endpoints(payload.allowed_endpoints))
-    if payload.allowed_upstreams is not None:
-        fields.append("allowed_upstreams = ?")
-        params.append(serialize_allowed_upstreams(payload.allowed_upstreams))
-    if fields:
-        params.append(user_id)
-        db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
-
-    has_quota_update = (
-        payload.anlas_total is not None
-        or payload.reset_period is not None
-        or payload.reset_day is not None
+    changed = update_user_record(
+        db,
+        request.app.state.quota_manager,
+        user_id,
+        UpdateUserInput(
+            name=payload.name,
+            tier=payload.tier,
+            is_active=payload.is_active,
+            free_small_only=payload.free_small_only,
+            allowed_endpoints=payload.allowed_endpoints,
+            allowed_upstreams=payload.allowed_upstreams,
+            anlas_total=payload.anlas_total,
+            reset_period=payload.reset_period,
+            reset_day=payload.reset_day,
+        ),
     )
-    if has_quota_update:
-        quota = db.query_one(
-            "SELECT total, reset_period, reset_day FROM user_anlas_quota WHERE user_id = ?",
-            (user_id,),
-        )
-        total = payload.anlas_total if payload.anlas_total is not None else int(quota["total"]) if quota else 0
-        reset_period = payload.reset_period if payload.reset_period is not None else str(quota["reset_period"]) if quota else "month"
-        reset_day = payload.reset_day if payload.reset_day is not None else int(quota["reset_day"]) if quota else None
-        request.app.state.quota_manager.create_or_update(user_id, total, reset_period, reset_day)
-    if fields or has_quota_update:
+    if changed:
         _notify_dashboard_change(request)
     return {"ok": True}
 
@@ -160,26 +136,14 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
 @api_router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def delete_user(user_id: int, request: Request):
     db: Database = request.app.state.db
-    _ensure_user_exists(db, user_id)
-    deleted_hash = f"deleted:{user_id}:{secrets.token_urlsafe(24)}"
-    db.execute(
-        """
-        UPDATE users
-        SET is_active = 0,
-            deleted_at = ?,
-            api_key_hash = ?,
-            api_key = NULL
-        WHERE id = ? AND deleted_at IS NULL
-        """,
-        (utc_now_iso(), deleted_hash, user_id),
-    )
+    delete_user_record(db, user_id)
     _notify_dashboard_change(request)
     return {"ok": True}
 
 
 @api_router.post("/users/{user_id}/reset-quota", dependencies=[Depends(require_admin)])
 async def reset_user_quota(user_id: int, request: Request):
-    _ensure_user_exists(request.app.state.db, user_id)
+    ensure_user_exists(request.app.state.db, user_id)
     request.app.state.quota_manager.reset_usage(user_id)
     _notify_dashboard_change(request)
     return {"ok": True}
@@ -188,19 +152,14 @@ async def reset_user_quota(user_id: int, request: Request):
 @api_router.post("/users/{user_id}/reset-key", dependencies=[Depends(require_admin)])
 async def reset_user_key(user_id: int, request: Request):
     db: Database = request.app.state.db
-    _ensure_user_exists(db, user_id)
-    api_key = generate_api_key()
-    db.execute(
-        "UPDATE users SET api_key_hash = ?, api_key = NULL WHERE id = ?",
-        (hash_api_key(api_key), user_id),
-    )
+    api_key = reset_api_key(db, user_id)
     return {"user_id": user_id, "api_key": api_key}
 
 
 @api_router.post("/users/{user_id}/rate-limit-rules", dependencies=[Depends(require_admin)])
 async def add_rate_limit_rule(user_id: int, payload: RateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
-    _ensure_user_exists(db, user_id)
+    ensure_user_exists(db, user_id)
     now = utc_now_iso()
     db.execute(
         """
@@ -442,15 +401,6 @@ async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: i
         return RedirectResponse("/admin/login", status_code=303)
     await delete_rate_limit_rule(rule_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
-
-
-def _ensure_user_exists(db: Database, user_id: int) -> None:
-    row = db.query_one(
-        "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL",
-        (user_id,),
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail={"message": "User not found"})
 
 
 def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
