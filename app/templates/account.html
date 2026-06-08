@@ -128,11 +128,19 @@
         <div><span>锁定</span><strong>{{ quota.reserved }}</strong></div>
         <div><span>可用</span><strong>{{ quota.available }}</strong></div>
       </div>
+      {% if quota_reset.period == 'month' %}
+      {% set quota_reset_label = "每月第 " ~ quota_reset.day ~ " 天" %}
+      {% elif quota_reset.period == 'week' %}
+      {% set quota_reset_label = "每周第 " ~ quota_reset.day ~ " 天" %}
+      {% elif quota_reset.period == 'day' %}
+      {% set quota_reset_label = "每天重置" %}
+      {% elif quota_reset.period == 'never' %}
+      {% set quota_reset_label = "不自动重置" %}
+      {% else %}
+      {% set quota_reset_label = quota_reset.period %}
+      {% endif %}
       <p class="muted" style="font-size: 13px; margin-top: 14px;">
-        Anlas额度重置规则：{{ quota_reset.period }}
-        {% if quota_reset.period != 'never' %}
-        / 第 {{ quota_reset.day }} 天
-        {% endif %}
+        Anlas额度重置规则：{{ quota_reset_label }}
       </p>
     </section>
     {% endif %}

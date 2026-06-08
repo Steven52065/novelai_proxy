@@ -217,7 +217,26 @@ def test_account_shows_positive_anlas_quota_snapshot(tmp_path: Path, monkeypatch
         text = _normalized_text(page.text)
         assert "Anlas额度" in text
         assert "总额 42 已用 5 锁定 3 可用 34" in text
-        assert "Anlas额度重置规则：week / 第 2 天" in text
+        assert "Anlas额度重置规则：每周第 2 天" in text
+
+
+def test_account_shows_daily_anlas_reset_without_zero_day(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(
+        tmp_path,
+        default_reset_period="day",
+        default_reset_day=0,
+    )
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+
+        page = client.get("/account")
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "Anlas额度重置规则：每天重置" in text
+        assert "第 0 天" not in text
 
 
 def test_discord_registration_rolls_back_user_and_quota_on_failure(tmp_path: Path, monkeypatch):
