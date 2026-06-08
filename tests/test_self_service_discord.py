@@ -152,11 +152,11 @@ def test_discord_signup_creates_group_user_and_shows_api_key_once(tmp_path: Path
 
         assert page.status_code == 200
         api_key = _extract_api_key(page.text)
-        assert "Discord: Tester" in page.text
+        assert "Dc: Tester" in page.text
         assert client.get("/account").text.find("nai_proxy_") == -1
 
         user = client.app.state.db.query_one("SELECT id, name, group_id, api_key FROM users")
-        assert user["name"] == "Discord: Tester"
+        assert user["name"] == "Dc: Tester"
         assert user["group_id"] == group_id
         assert user["api_key"] is None
         quota = client.app.state.db.query_one("SELECT total, reset_period, reset_day FROM user_anlas_quota WHERE user_id = ?", (user["id"],))
@@ -279,6 +279,7 @@ def test_discord_repeat_login_syncs_names_without_duplicate_or_overwriting_manua
     with TestClient(app) as client:
         _complete_discord_login(client)
         user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        client.app.state.db.execute("UPDATE users SET name = 'Discord: Tester' WHERE id = ?", (user_id,))
 
         _complete_discord_login(
             client,
@@ -286,7 +287,7 @@ def test_discord_repeat_login_syncs_names_without_duplicate_or_overwriting_manua
         )
         assert _count_rows(client.app.state.db, "users") == 1
         user = client.app.state.db.query_one("SELECT name FROM users WHERE id = ?", (user_id,))
-        assert user["name"] == "Discord: Tester Two"
+        assert user["name"] == "Dc: Tester Two"
         link = client.app.state.db.query_one("SELECT discord_username, discord_global_name, discord_avatar FROM discord_user_links")
         assert dict(link) == {
             "discord_username": "tester2",
@@ -327,7 +328,7 @@ def test_self_service_api_key_flash_is_bound_to_current_user(tmp_path: Path, mon
         page = client.get("/account")
 
         assert page.status_code == 200
-        assert "Discord: Second" in page.text
+        assert "Dc: Second" in page.text
         assert "nai_proxy_" not in page.text
         assert client.cookies.get(API_KEY_FLASH_COOKIE) is None
         assert _count_rows(client.app.state.db, "users") == 2

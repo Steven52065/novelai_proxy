@@ -83,17 +83,19 @@ def login_or_register_discord_user(
 
 def discord_display_name(profile: DiscordProfile) -> str:
     if profile.global_name:
-        return f"Discord: {profile.global_name}"
+        return f"Dc: {profile.global_name}"
     if profile.username:
-        return f"Discord: @{profile.username}"
+        return f"Dc: @{profile.username}"
     return f"Discord 用户 {profile.user_id}"
 
 
 def discord_auto_names(*, user_id: str, username: str | None, global_name: str | None) -> set[str]:
     names = {f"Discord 用户 {user_id}"}
     if username:
+        names.add(f"Dc: @{username}")
         names.add(f"Discord: @{username}")
     if global_name:
+        names.add(f"Dc: {global_name}")
         names.add(f"Discord: {global_name}")
     return names
 
