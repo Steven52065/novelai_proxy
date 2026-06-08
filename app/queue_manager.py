@@ -1060,7 +1060,16 @@ class RoutingProxyQueue:
                 upstream_id,
                 next_attempt_number,
             )
-            self._requeue_429_retry(item, next_attempt_number=next_attempt_number, retry_error=retry_error)
+            try:
+                self._requeue_429_retry(item, next_attempt_number=next_attempt_number, retry_error=retry_error)
+            except Exception as retry_exc:
+                logger.exception(
+                    "proxy request 429 retry requeue failed request_id=%s next_attempt_number=%s",
+                    item.request_id,
+                    next_attempt_number,
+                )
+                if not item.future.done():
+                    item.future.set_exception(retry_exc)
             return
 
         if item.future.done():

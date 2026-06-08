@@ -398,6 +398,76 @@ def test_retry_attempt_insert_failure_releases_reserved_accounting():
     asyncio.run(run_test())
 
 
+def test_vip_retry_attempt_insert_failure_finishes_client_future():
+    class FailingRetryUsageLogs(_NoopUsageLogs):
+        def insert_retry_attempt(self, *args, **kwargs):
+            raise RuntimeError("vip retry log insert failed")
+
+    class RecordingDailyLimit:
+        def __init__(self):
+            self.released = []
+
+        def release(self, reservation):
+            self.released.append(reservation)
+
+    async def run_test():
+        release_first = threading.Event()
+        upstream = One429ThenSuccessfulUpstream(release_first, fail_label="vip-retry-log-fails")
+        quota = _RecordingQuota()
+        daily = RecordingDailyLimit()
+        reservation = FreeSmallDailyReservation(
+            user_id=42,
+            window_start="2026-06-08T00:00:00+08:00",
+            count=1,
+            scope="user",
+            limit=1,
+            reset_at="2026-06-09T00:00:00+08:00",
+        )
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
+            quota_manager=quota,
+            usage_logs=FailingRetryUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        try:
+            task = asyncio.create_task(
+                queue.submit(
+                    request_id="vip-retry-log-fails",
+                    user_id=42,
+                    tier="vip",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=7,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "vip-retry-log-fails"}),
+                    process_zip_response=False,
+                    free_small_daily_limit_manager=daily,
+                    free_small_daily_reservation=reservation,
+                )
+            )
+            await _wait_until_async(lambda: upstream.started_labels == ["vip-retry-log-fails"])
+            release_first.set()
+
+            try:
+                await asyncio.wait_for(task, timeout=2)
+            except RuntimeError as exc:
+                assert str(exc) == "vip retry log insert failed"
+            else:
+                raise AssertionError("expected vip retry log insert failure")
+
+            assert quota.released == [(42, 7)]
+            assert daily.released == [reservation]
+            assert upstream.started_labels == ["vip-retry-log-fails"]
+        finally:
+            release_first.set()
+            await queue.stop()
+
+    asyncio.run(run_test())
+
+
 def test_cancelled_before_dispatch_marks_failed_log_and_releases_quota():
     async def run_test():
         quota = _RecordingQuota()
