@@ -133,7 +133,7 @@ class ProxyRequestService:
         )
 
         try:
-            binary_payload = await self.proxy_queue.submit(
+            queue_future = self.proxy_queue.enqueue(
                 request_id=request_id,
                 user_id=task.user.id,
                 tier=task.user.tier,
@@ -143,6 +143,8 @@ class ProxyRequestService:
                 handler=task.handler,
                 process_zip_response=task.process_zip_response,
                 allowed_upstreams=task.user.allowed_upstreams,
+                free_small_daily_limit_manager=self.free_small_daily_limit_manager,
+                free_small_daily_reservation=free_small_daily_reservation,
             )
         except QueueClosed:
             self._release_free_small_daily_reservation(free_small_daily_reservation)
@@ -174,9 +176,23 @@ class ProxyRequestService:
                 content={"message": "Queue full, please retry later"},
                 request_id=request_id,
             )
+
+        try:
+            binary_payload = await queue_future
+        except QueueFull:
+            self.usage_logs.mark_rejected(
+                request_id,
+                error_code="queue_full",
+                error_message="Queue full, please retry later",
+                log_level="ERROR",
+            )
+            logger.error("proxy queue full request_id=%s user_id=%s", request_id, task.user.id)
+            return ProxyTaskResult(
+                status_code=503,
+                content={"message": "Queue full, please retry later"},
+                request_id=request_id,
+            )
         except NoAvailableUpstream as exc:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
-            self.quota_manager.release(task.user.id, task.estimated_cost)
             self.usage_logs.mark_rejected(
                 request_id,
                 error_code="no_available_upstream",
@@ -190,7 +206,6 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except UserUnavailable as exc:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
             logger.info("proxy request rejected because user is unavailable request_id=%s user_id=%s", request_id, task.user.id)
             return ProxyTaskResult(
                 status_code=403,
@@ -198,7 +213,6 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except APIError as exc:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
             status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
             logger.error("upstream API error request_id=%s code=%s message=%s", request_id, exc.code, exc.message)
             return ProxyTaskResult(
@@ -207,7 +221,6 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except UpstreamExecutionTimeout:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
             logger.error("upstream execution timed out request_id=%s", request_id)
             return ProxyTaskResult(
                 status_code=504,
@@ -215,14 +228,12 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except asyncio.CancelledError:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
+            queue_future.cancel()
             raise
         except Exception as exc:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
             logger.exception("proxy request failed request_id=%s", request_id)
             return ProxyTaskResult(status_code=502, content={"message": MESSAGE_PROXY_REQUEST_FAILED}, request_id=request_id)
 
-        self._confirm_free_small_daily_reservation(free_small_daily_reservation)
         return ProxyTaskResult(
             status_code=201,
             content=binary_payload,
@@ -383,14 +394,6 @@ class ProxyRequestService:
                 reservation.limit,
             )
         return reservation
-
-    def _confirm_free_small_daily_reservation(self, reservation: FreeSmallDailyReservation | None) -> None:
-        if reservation is None or self.free_small_daily_limit_manager is None:
-            return
-        try:
-            self.free_small_daily_limit_manager.confirm(reservation)
-        except Exception:
-            logger.exception("failed to confirm free small daily reservation user_id=%s", reservation.user_id)
 
     def _release_free_small_daily_reservation(self, reservation: FreeSmallDailyReservation | None) -> None:
         if reservation is None or self.free_small_daily_limit_manager is None:

@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Literal, Protocol
 from novelai_python._exceptions import APIError
 
 from .config import LoggingConfig
+from .free_small_daily_limit import FreeSmallDailyLimitManager, FreeSmallDailyReservation
 from .logging_utils import archive_zip_images, logger
 from .quota_manager import QuotaManager
 from .usage_logs import UsageLogRepository
@@ -42,6 +43,8 @@ class QueueItem:
     cancel_future: asyncio.Future | None = field(default=None, compare=False)
     is_retry_success: bool = field(default=False, compare=False)
     attempt_number: int = field(default=0, compare=False)
+    free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = field(default=None, compare=False)
+    free_small_daily_reservation: FreeSmallDailyReservation | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,8 @@ class DispatchQueueItem:
     has_retried_429: bool = field(default=False, compare=False)
     attempt_number: int = field(default=0, compare=False)
     last_429_error: APIError | None = field(default=None, compare=False)
+    free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = field(default=None, compare=False)
+    free_small_daily_reservation: FreeSmallDailyReservation | None = field(default=None, compare=False)
 
 
 class ProxyQueue:
@@ -179,6 +184,8 @@ class ProxyQueue:
         attempt_number: int = 0,
         cancel_future: asyncio.Future | None = None,
         allow_overflow: bool = False,
+        free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
+        free_small_daily_reservation: FreeSmallDailyReservation | None = None,
     ) -> asyncio.Future:
         if self.queue.full() and not allow_overflow:
             raise QueueFull
@@ -214,6 +221,8 @@ class ProxyQueue:
             cancel_future=cancel_future,
             is_retry_success=is_retry_success,
             attempt_number=attempt_number,
+            free_small_daily_limit_manager=free_small_daily_limit_manager,
+            free_small_daily_reservation=free_small_daily_reservation,
         )
         try:
             if self.queue.full() and allow_overflow:
@@ -241,6 +250,8 @@ class ProxyQueue:
         process_zip_response: bool = True,
         priority_override: int | None = None,
         manage_quota: bool = True,
+        free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
+        free_small_daily_reservation: FreeSmallDailyReservation | None = None,
     ) -> bytes:
         future = self.enqueue(
             request_id=request_id,
@@ -253,6 +264,8 @@ class ProxyQueue:
             process_zip_response=process_zip_response,
             priority_override=priority_override,
             manage_quota=manage_quota,
+            free_small_daily_limit_manager=free_small_daily_limit_manager,
+            free_small_daily_reservation=free_small_daily_reservation,
         )
         return await future
 
@@ -266,8 +279,7 @@ class ProxyQueue:
             upstream_ms: int | None = None
             try:
                 if item.cancel_future is not None and item.cancel_future.done():
-                    if item.manage_quota:
-                        self.quota_manager.release(item.user_id, item.estimated_cost)
+                    _release_accounting(self.quota_manager, item)
                     self.usage_logs.mark_failed(
                         item.request_id,
                         queued_ms=queued_ms,
@@ -285,7 +297,7 @@ class ProxyQueue:
                     )
                     continue
                 if item.manage_quota and not _user_is_available(self.quota_manager, item.user_id):
-                    self.quota_manager.release(item.user_id, item.estimated_cost)
+                    _release_accounting(self.quota_manager, item)
                     self.usage_logs.mark_rejected(
                         item.request_id,
                         error_code="user_unavailable",
@@ -311,6 +323,24 @@ class ProxyQueue:
                     item.attempt_number,
                 )
                 await self._wait_for_upstream_interval(item.request_id)
+                if item.cancel_future is not None and item.cancel_future.done():
+                    _release_accounting(self.quota_manager, item)
+                    self.usage_logs.mark_failed(
+                        item.request_id,
+                        queued_ms=queued_ms,
+                        error_code="client_cancelled",
+                        error_message="Client cancelled before upstream execution",
+                        attempt_number=item.attempt_number,
+                    )
+                    if not item.future.done():
+                        item.future.cancel()
+                    logger.info(
+                        "proxy request skipped after interval because caller cancelled request_id=%s upstream_id=%s attempt_number=%s",
+                        item.request_id,
+                        item.upstream_id,
+                        item.attempt_number,
+                    )
+                    continue
                 upstream_started_at = time.monotonic()
                 try:
                     payload = await self._execute_handler_with_timeout(item)
@@ -359,8 +389,7 @@ class ProxyQueue:
                     self._apply_error_extra_delay_next = True
 
                 # 普通错误处理：释放额度、记录日志、设置异常
-                if item.manage_quota:
-                    self.quota_manager.release(item.user_id, item.estimated_cost)
+                _release_accounting(self.quota_manager, item)
                 code, message = self._error_details(exc)
                 self.usage_logs.mark_failed(
                     item.request_id,
@@ -390,8 +419,7 @@ class ProxyQueue:
                     except Exception:
                         logger.exception("failed to archive generated images request_id=%s", item.request_id)
                         saved_files = []
-                if item.manage_quota:
-                    self.quota_manager.confirm(item.user_id, item.estimated_cost)
+                _confirm_accounting(self.quota_manager, item)
                 self.usage_logs.mark_success(
                     item.request_id,
                     queued_ms=queued_ms,
@@ -608,6 +636,48 @@ def _user_is_available(quota_manager: QuotaManager, user_id: int) -> bool:
     return row is not None and bool(row["is_active"]) and row["deleted_at"] is None
 
 
+def _release_accounting(quota_manager: QuotaManager, item: Any) -> None:
+    if item.manage_quota:
+        quota_manager.release(item.user_id, item.estimated_cost)
+    _release_free_small_daily_reservation(
+        item.free_small_daily_limit_manager,
+        item.free_small_daily_reservation,
+    )
+
+
+def _confirm_accounting(quota_manager: QuotaManager, item: Any) -> None:
+    if item.manage_quota:
+        quota_manager.confirm(item.user_id, item.estimated_cost)
+    _confirm_free_small_daily_reservation(
+        item.free_small_daily_limit_manager,
+        item.free_small_daily_reservation,
+    )
+
+
+def _release_free_small_daily_reservation(
+    manager: FreeSmallDailyLimitManager | None,
+    reservation: FreeSmallDailyReservation | None,
+) -> None:
+    if manager is None or reservation is None:
+        return
+    try:
+        manager.release(reservation)
+    except Exception:
+        logger.exception("failed to release free small daily reservation user_id=%s", reservation.user_id)
+
+
+def _confirm_free_small_daily_reservation(
+    manager: FreeSmallDailyLimitManager | None,
+    reservation: FreeSmallDailyReservation | None,
+) -> None:
+    if manager is None or reservation is None:
+        return
+    try:
+        manager.confirm(reservation)
+    except Exception:
+        logger.exception("failed to confirm free small daily reservation user_id=%s", reservation.user_id)
+
+
 class RoutingProxyQueue:
     VIP_PRIORITY = 0
     NORMAL_PRIORITY = 10
@@ -767,7 +837,7 @@ class RoutingProxyQueue:
         """获取所有上游的总排队长度（不包括正在执行的请求）"""
         return sum(queue.qsize() for queue in self._queues.values())
 
-    async def submit(
+    def enqueue(
         self,
         *,
         request_id: str,
@@ -781,7 +851,9 @@ class RoutingProxyQueue:
         priority_override: int | None = None,
         manage_quota: bool = True,
         allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
-    ) -> bytes:
+        free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
+        free_small_daily_reservation: FreeSmallDailyReservation | None = None,
+    ) -> asyncio.Future:
         if not self._accepting:
             raise QueueClosed
         loop = asyncio.get_running_loop()
@@ -804,6 +876,8 @@ class RoutingProxyQueue:
                     allowed_upstreams=allowed_upstreams,
                     handler=handler,
                     future=future,
+                    free_small_daily_limit_manager=free_small_daily_limit_manager,
+                    free_small_daily_reservation=free_small_daily_reservation,
                 )
             )
         except asyncio.QueueFull as exc:
@@ -811,6 +885,40 @@ class RoutingProxyQueue:
         self._active_futures.add(future)
         future.add_done_callback(self._active_futures.discard)
         self._notify_change()
+        return future
+
+    async def submit(
+        self,
+        *,
+        request_id: str,
+        user_id: int,
+        tier: str,
+        action: str,
+        logging_config: LoggingConfig,
+        estimated_cost: int,
+        handler: Callable[[Any], Awaitable[bytes]],
+        process_zip_response: bool = True,
+        priority_override: int | None = None,
+        manage_quota: bool = True,
+        allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
+        free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
+        free_small_daily_reservation: FreeSmallDailyReservation | None = None,
+    ) -> bytes:
+        future = self.enqueue(
+            request_id=request_id,
+            user_id=user_id,
+            tier=tier,
+            action=action,
+            logging_config=logging_config,
+            estimated_cost=estimated_cost,
+            handler=handler,
+            process_zip_response=process_zip_response,
+            priority_override=priority_override,
+            manage_quota=manage_quota,
+            allowed_upstreams=allowed_upstreams,
+            free_small_daily_limit_manager=free_small_daily_limit_manager,
+            free_small_daily_reservation=free_small_daily_reservation,
+        )
         try:
             return await future
         except asyncio.CancelledError:
@@ -829,8 +937,7 @@ class RoutingProxyQueue:
             self._notify_change()
             try:
                 if item.future.done():
-                    if item.manage_quota:
-                        self._quota_manager.release(item.user_id, item.estimated_cost)
+                    _release_accounting(self._quota_manager, item)
                     self._mark_cancelled_before_dispatch(item)
                     logger.info(
                         "proxy request skipped by dispatcher because caller cancelled request_id=%s attempt_number=%s",
@@ -890,6 +997,8 @@ class RoutingProxyQueue:
                     attempt_number=item.attempt_number,
                     cancel_future=item.future,
                     allow_overflow=item.tier == "vip",
+                    free_small_daily_limit_manager=item.free_small_daily_limit_manager,
+                    free_small_daily_reservation=item.free_small_daily_reservation,
                 )
             except QueueFull as exc:
                 errors.append(exc)
@@ -927,8 +1036,7 @@ class RoutingProxyQueue:
         exc = completed.exception()
         if isinstance(exc, Retry429Error):
             if item.future.done():
-                if item.manage_quota:
-                    self._quota_manager.release(item.user_id, item.estimated_cost)
+                _release_accounting(self._quota_manager, item)
                 logger.warning(
                     "proxy request 429 retry cancelled request_id=%s upstream_id=%s attempt_number=%s",
                     item.request_id,
@@ -999,13 +1107,14 @@ class RoutingProxyQueue:
         last_429_error: APIError | None,
     ) -> None:
         if last_429_error is not None:
-            if item.manage_quota:
-                self._quota_manager.release(item.user_id, item.estimated_cost)
+            _release_accounting(self._quota_manager, item)
             if not item.future.done():
                 item.future.set_exception(last_429_error)
             return
         if errors:
+            _release_accounting(self._quota_manager, item)
             raise QueueFull from errors[-1]
+        _release_accounting(self._quota_manager, item)
         raise NoAvailableUpstream("No enabled upstream is available for this user")
 
     def _mark_cancelled_before_dispatch(self, item: DispatchQueueItem) -> None:
@@ -1018,8 +1127,7 @@ class RoutingProxyQueue:
         )
 
     def _finish_user_unavailable(self, item: DispatchQueueItem) -> None:
-        if item.manage_quota:
-            self._quota_manager.release(item.user_id, item.estimated_cost)
+        _release_accounting(self._quota_manager, item)
         self._usage_logs.mark_rejected(
             item.request_id,
             error_code="user_unavailable",
