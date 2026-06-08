@@ -46,7 +46,7 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
           <label>
-            默认 Anlas 总额
+            默认Anlas额度总额
             <input name="default_anlas_total" type="number" min="0" value="{{ group.default_anlas_total }}">
           </label>
           <label>
@@ -152,7 +152,7 @@
           </label>
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="anlas_quota">
-            额度总额和重置规则
+            Anlas额度总额和重置规则
           </label>
         </div>
         <button type="submit">
@@ -261,7 +261,7 @@
               <th>名称</th>
               <th>等级</th>
               <th>状态</th>
-              <th>额度</th>
+              <th>Anlas额度</th>
             </tr>
           </thead>
           <tbody>
@@ -277,7 +277,13 @@
                 <span class="badge badge-inactive">已禁用</span>
                 {% endif %}
               </td>
-              <td class="mono">{{ member.anlas_used }} + {{ member.anlas_reserved }} / {{ member.anlas_total }}</td>
+              <td class="mono">
+                {% if (member.anlas_total or 0) > 0 %}
+                {{ member.anlas_used }} + {{ member.anlas_reserved }} / {{ member.anlas_total }}
+                {% else %}
+                <span class="muted" style="font-size: 12px;">未配置Anlas额度</span>
+                {% endif %}
+              </td>
             </tr>
             {% endfor %}
           </tbody>

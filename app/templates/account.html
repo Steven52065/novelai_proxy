@@ -101,10 +101,26 @@
       </section>
     </div>
 
+    {% if free_small_daily.enabled %}
+    <section class="panel" style="margin-top: 28px;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="calendar-days" style="width: 18px; height: 18px; stroke: #38bdf8;"></i>
+        免费小图单日数量
+      </h2>
+      <div class="metrics" style="margin-bottom: 0;">
+        <div><span>已用</span><strong>{{ free_small_daily.used }}</strong></div>
+        <div><span>锁定</span><strong>{{ free_small_daily.reserved }}</strong></div>
+        <div><span>上限</span><strong>{{ free_small_daily.limit }}</strong></div>
+        <div><span>可用</span><strong>{{ free_small_daily.available }}</strong></div>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if quota.total > 0 %}
     <section class="panel" style="margin-top: 28px;">
       <h2 style="font-size: 18px; margin-bottom: 16px;">
         <i data-lucide="donut-chart" style="width: 18px; height: 18px; stroke: #10b981;"></i>
-        额度
+        Anlas额度
       </h2>
       <div class="metrics" style="margin-bottom: 0;">
         <div><span>总额</span><strong>{{ quota.total }}</strong></div>
@@ -112,7 +128,14 @@
         <div><span>锁定</span><strong>{{ quota.reserved }}</strong></div>
         <div><span>可用</span><strong>{{ quota.available }}</strong></div>
       </div>
+      <p class="muted" style="font-size: 13px; margin-top: 14px;">
+        Anlas额度重置规则：{{ quota_reset.period }}
+        {% if quota_reset.period != 'never' %}
+        / 第 {{ quota_reset.day }} 天
+        {% endif %}
+      </p>
     </section>
+    {% endif %}
 
     <section class="panel">
       <h2 style="font-size: 18px; margin-bottom: 16px;">

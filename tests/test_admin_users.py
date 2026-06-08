@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -151,6 +152,64 @@ def test_admin_web_key_flash_does_not_put_key_in_url_or_logs(tmp_path: Path, mon
 
     log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
     assert "nai_proxy_" not in log_text
+
+
+def test_admin_user_pages_show_daily_usage_and_hide_zero_anlas_usage(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="daily-group",
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=5,
+            default_anlas_total=0,
+        )
+        zero_anlas_user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "daily-zero-anlas", "group_id": group_id},
+        ).json()["user_id"]
+        paid_user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "paid-anlas", "tier": "normal", "anlas_total": 12},
+        ).json()["user_id"]
+        client.app.state.db.execute(
+            "UPDATE user_anlas_quota SET used = 3, reserved = 2 WHERE user_id = ?",
+            (paid_user_id,),
+        )
+
+        daily_manager = client.app.state.free_small_daily_limit_manager
+        used_reservation = daily_manager.reserve(zero_anlas_user_id, 2)
+        daily_manager.confirm(used_reservation)
+        daily_manager.reserve(zero_anlas_user_id, 1)
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        users_page = client.get("/admin/users")
+        assert users_page.status_code == 200
+        users_text = _normalized_text(users_page.text)
+        assert "免费小图单日数量" in users_text
+        assert "2 + 1 / 5" in users_text
+        assert "可用 2" in users_text
+        assert "未配置Anlas额度" in users_text
+        assert "0 + 0 / 0" not in users_text
+        assert "3 + 2 / 12" in users_text
+
+        zero_detail = client.get(f"/admin/users/{zero_anlas_user_id}")
+        assert zero_detail.status_code == 200
+        zero_detail_text = _normalized_text(zero_detail.text)
+        assert "免费小图单日数量" in zero_detail_text
+        assert "已用 2 锁定 1 上限 5 可用 2" in zero_detail_text
+        assert "Anlas额度使用状态" not in zero_detail_text
+        assert "Anlas额度总额上限" in zero_detail_text
+
+        paid_detail = client.get(f"/admin/users/{paid_user_id}")
+        assert paid_detail.status_code == 200
+        assert "Anlas额度使用状态" in _normalized_text(paid_detail.text)
 
 
 def test_admin_rejects_unknown_allowed_upstream(tmp_path: Path, monkeypatch):
@@ -758,6 +817,11 @@ def _wait_until(predicate, timeout_seconds: float = 5.0) -> None:
 def _is_user_queued(client: TestClient, user_id: int) -> bool:
     queue = client.get("/admin/api/queue", auth=("admin", "admin123")).json()
     return any(item["user_id"] == user_id for item in queue["queued"])
+
+
+def _normalized_text(text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text)
 
 
 def _create_group(client: TestClient, **overrides) -> int:

@@ -172,6 +172,54 @@ def test_discord_signup_creates_group_user_and_shows_api_key_once(tmp_path: Path
         assert sub.status_code == 200
 
 
+def test_account_shows_group_daily_usage_and_hides_zero_anlas_quota(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(
+        tmp_path,
+        default_anlas_total=0,
+        free_small_daily_limit_enabled=True,
+        free_small_daily_limit=4,
+    )
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        daily_manager = client.app.state.free_small_daily_limit_manager
+        used_reservation = daily_manager.reserve(user_id, 1)
+        daily_manager.confirm(used_reservation)
+        daily_manager.reserve(user_id, 1)
+
+        page = client.get("/account")
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "免费小图单日数量" in text
+        assert "已用 1 锁定 1 上限 4 可用 2" in text
+        assert "Anlas额度" not in text
+
+
+def test_account_shows_positive_anlas_quota_snapshot(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        client.app.state.db.execute(
+            "UPDATE user_anlas_quota SET used = 5, reserved = 3 WHERE user_id = ?",
+            (user_id,),
+        )
+
+        page = client.get("/account")
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "Anlas额度" in text
+        assert "总额 42 已用 5 锁定 3 可用 34" in text
+        assert "Anlas额度重置规则：week / 第 2 天" in text
+
+
 def test_discord_registration_rolls_back_user_and_quota_on_failure(tmp_path: Path, monkeypatch):
     db = Database(str(tmp_path / "rollback.db"))
     db.init_schema()
@@ -336,11 +384,26 @@ def test_self_service_reset_key_invalidates_old_key_and_does_not_store_discord_t
         assert "secret-refresh-token" not in str([tuple(row) for row in link_rows])
 
 
-def _write_self_service_config(tmp_path: Path) -> tuple[Path, int]:
+def _write_self_service_config(
+    tmp_path: Path,
+    *,
+    default_anlas_total: int = 42,
+    default_reset_period: str = "week",
+    default_reset_day: int = 2,
+    free_small_daily_limit_enabled: bool = False,
+    free_small_daily_limit: int = 0,
+) -> tuple[Path, int]:
     config_path = write_test_config(tmp_path)
     db = Database(str(tmp_path / "test.db"))
     db.init_schema()
-    group_id = _create_default_group(db)
+    group_id = _create_default_group(
+        db,
+        default_anlas_total=default_anlas_total,
+        default_reset_period=default_reset_period,
+        default_reset_day=default_reset_day,
+        free_small_daily_limit_enabled=free_small_daily_limit_enabled,
+        free_small_daily_limit=free_small_daily_limit,
+    )
     db.close()
     with config_path.open("a", encoding="utf-8") as f:
         f.write(
@@ -359,17 +422,33 @@ self_service:
     return config_path, group_id
 
 
-def _create_default_group(db: Database) -> int:
+def _create_default_group(
+    db: Database,
+    *,
+    default_anlas_total: int = 42,
+    default_reset_period: str = "week",
+    default_reset_day: int = 2,
+    free_small_daily_limit_enabled: bool = False,
+    free_small_daily_limit: int = 0,
+) -> int:
     cursor = db.execute(
         """
         INSERT INTO user_groups (
             name, is_active, default_tier, default_free_small_only,
+            free_small_daily_limit_enabled, free_small_daily_limit,
             default_allowed_endpoints, default_anlas_total,
             default_reset_period, default_reset_day, created_at
         )
-        VALUES ('discord-default', 1, 'vip', 0, 'generate-image', 42, 'week', 2, ?)
+        VALUES ('discord-default', 1, 'vip', 0, ?, ?, 'generate-image', ?, ?, ?, ?)
         """,
-        (utc_now_iso(),),
+        (
+            1 if free_small_daily_limit_enabled else 0,
+            free_small_daily_limit,
+            default_anlas_total,
+            default_reset_period,
+            default_reset_day,
+            utc_now_iso(),
+        ),
     )
     return int(cursor.lastrowid)
 
@@ -391,6 +470,11 @@ def _extract_api_key(text: str) -> str:
     match = re.search(r"nai_proxy_[A-Za-z0-9_-]+", text)
     assert match is not None
     return match.group(0)
+
+
+def _normalized_text(text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text)
 
 
 def _count_rows(db: Database, table: str) -> int:

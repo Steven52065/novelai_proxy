@@ -217,12 +217,14 @@ async def users_page(request: Request):
         ORDER BY u.id DESC
         """
     )
+    users = [user_row_to_dict(row) for row in rows]
+    _attach_free_small_daily_snapshots(request, users)
     response = templates.TemplateResponse(
         request,
         "users.html",
         {
             "active": "users",
-            "users": [user_row_to_dict(row) for row in rows],
+            "users": users,
             "groups": _groups_for_select(db, active_only=True),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
@@ -308,12 +310,14 @@ async def user_edit_page(user_id: int, request: Request):
         "SELECT id, period, max_requests, is_active FROM rate_limit_rules WHERE user_id = ? ORDER BY id",
         (user_id,),
     )
+    user_data = user_row_to_dict(user)
+    user_data["free_small_daily"] = request.app.state.free_small_daily_limit_manager.get_snapshot(user_id)
     response = templates.TemplateResponse(
         request,
         "user_edit.html",
         {
             "active": "users",
-            "user": user_row_to_dict(user),
+            "user": user_data,
             "rules": [row_to_dict(row) for row in rules],
             "groups": _groups_for_select(db, active_only=False),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
@@ -594,6 +598,12 @@ def _parse_optional_form_int(value: str | None) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _attach_free_small_daily_snapshots(request: Request, users: list[dict]) -> None:
+    manager = request.app.state.free_small_daily_limit_manager
+    for user in users:
+        user["free_small_daily"] = manager.get_snapshot(int(user["id"]))
 
 
 def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:

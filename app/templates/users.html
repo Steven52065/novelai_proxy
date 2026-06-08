@@ -59,14 +59,14 @@
         </label>
         
         <label>
-          Anlas 总额度
+          Anlas额度总额
           <input name="anlas_total" type="number" min="0" value="0">
         </label>
       </div>
 
       <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
         <label>
-          额度重置周期
+          Anlas额度重置周期
           <select name="reset_period">
             <option value="month">month (按月)</option>
             <option value="week">week (按周)</option>
@@ -84,7 +84,7 @@
       <div style="padding: 6px 0;">
         <label class="check" style="color: #cbd5e1; font-weight: 500;">
           <input name="free_small_only" type="checkbox">
-          仅允许生成免费小图 (不消耗额度)
+          仅允许生成免费小图 (不消耗Anlas额度)
         </label>
       </div>
 
@@ -155,7 +155,7 @@
         <i data-lucide="list" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
         用户列表
       </h2>
-      <p class="muted" style="margin-top: 4px;">查看当前系统中注册的全部代理用户及其额度和状态</p>
+      <p class="muted" style="margin-top: 4px;">查看当前系统中注册的全部代理用户及其Anlas额度和状态</p>
     </div>
   </div>
 
@@ -170,8 +170,8 @@
           <th>状态</th>
           <th>功能限制</th>
           <th>API 密钥凭证</th>
-          <th>Anlas 额度 (已用 + 锁定 / 总额)</th>
-          <th>额度重置规则</th>
+          <th>Anlas额度 (已用 + 锁定 / 总额)</th>
+          <th>Anlas额度重置规则</th>
           <th>操作选项</th>
         </tr>
       </thead>
@@ -215,8 +215,14 @@
             {% else %}
             <span class="badge" style="background: rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:#34d399;">不限图规格</span>
             {% endif %}
-            {% if user.free_small_daily_limit_enabled %}
-            <span class="badge" style="background: rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.25); color:#7dd3fc; margin-left: 4px;">每日 {{ user.free_small_daily_limit }} 张</span>
+            {% set daily = user.free_small_daily %}
+            {% if daily.enabled %}
+            <span class="badge" style="background: rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.25); color:#7dd3fc; margin-left: 4px;">每日 {{ daily.limit }} 张</span>
+            <div class="muted" style="font-size: 12px; margin-top: 6px;">
+              免费小图单日数量：
+              <span class="mono" style="color:#e2e8f0;">{{ daily.used }} + {{ daily.reserved }} / {{ daily.limit }}</span>
+              <span style="display:block; margin-top: 2px;">可用 {{ daily.available }}</span>
+            </div>
             {% endif %}
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
               {% for label in user.allowed_endpoint_labels %}
@@ -246,19 +252,27 @@
             {% endif %}
           </td>
           <td class="mono" style="font-weight: 500;">
+            {% if (user.anlas_total or 0) > 0 %}
             <span style="color: #fca5a5;">{{ user.anlas_used }}</span> 
             <span style="color: #94a3b8; font-size: 12px;">+</span> 
             <span style="color: #fde047;">{{ user.anlas_reserved }}</span> 
             <span style="color: rgba(255,255,255,0.2);">/</span> 
             <span style="color: #34d399; font-weight: 700;">{{ user.anlas_total }}</span>
+            {% else %}
+            <span class="muted" style="font-size: 12px;">未配置Anlas额度</span>
+            {% endif %}
           </td>
           <td style="font-size: 13px;">
+            {% if (user.anlas_total or 0) > 0 %}
             <div style="font-weight: 600; color: #e2e8f0; display: inline-flex; align-items: center; gap: 4px;">
               <i data-lucide="refresh-cw" style="width: 12px; height: 12px; color: #a5b4fc;"></i>
               {{ user.reset_period }}
             </div>
             {% if user.reset_period != 'never' %}
             <span class="muted" style="font-size: 12px; display: block; margin-top: 2px;">每月第 {{ user.reset_day }} 天</span>
+            {% endif %}
+            {% else %}
+            <span class="muted" style="font-size: 12px;">未配置</span>
             {% endif %}
           </td>
           <td>

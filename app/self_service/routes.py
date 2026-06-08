@@ -125,10 +125,13 @@ async def account_page(request: Request):
         SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
                u.allowed_endpoints, u.allowed_upstreams, u.deleted_at,
                g.name AS group_name, g.is_active AS group_is_active,
-               l.discord_username, l.discord_global_name, l.discord_avatar
+               l.discord_username, l.discord_global_name, l.discord_avatar,
+               COALESCE(q.reset_period, 'month') AS quota_reset_period,
+               COALESCE(q.reset_day, 1) AS quota_reset_day
         FROM users u
         LEFT JOIN user_groups g ON g.id = u.group_id
         LEFT JOIN discord_user_links l ON l.user_id = u.id
+        LEFT JOIN user_anlas_quota q ON q.user_id = u.id
         WHERE u.id = ?
         """,
         (user_id,),
@@ -138,6 +141,7 @@ async def account_page(request: Request):
     if not int(user["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
     quota = request.app.state.quota_manager.get_snapshot(user_id)
+    free_small_daily = request.app.state.free_small_daily_limit_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
     new_api_key = _pop_api_key_flash(request, user_id)
     response = templates.TemplateResponse(
@@ -146,6 +150,11 @@ async def account_page(request: Request):
         {
             "user": _account_user_to_dict(user),
             "quota": quota,
+            "quota_reset": {
+                "period": user["quota_reset_period"],
+                "day": user["quota_reset_day"],
+            },
+            "free_small_daily": free_small_daily,
             "new_api_key": new_api_key,
         },
     )

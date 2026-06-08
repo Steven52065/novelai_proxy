@@ -75,11 +75,28 @@
       </div>
     </section>
 
+    {% set daily = user.free_small_daily %}
+    {% if daily.enabled %}
+    <section class="panel" style="margin-bottom: 0;">
+      <h2 style="font-size: 18px; margin-bottom: 16px;">
+        <i data-lucide="calendar-days" style="width: 18px; height: 18px; stroke: #38bdf8;"></i>
+        免费小图单日数量
+      </h2>
+      <div class="metrics" style="margin-bottom: 0;">
+        <div><span>已用</span><strong>{{ daily.used }}</strong></div>
+        <div><span>锁定</span><strong>{{ daily.reserved }}</strong></div>
+        <div><span>上限</span><strong>{{ daily.limit }}</strong></div>
+        <div><span>可用</span><strong>{{ daily.available }}</strong></div>
+      </div>
+    </section>
+    {% endif %}
+
     <!-- Quota Visual Card -->
+    {% if (user.anlas_total or 0) > 0 %}
     <section class="panel" style="margin-bottom: 0;">
       <h2 style="font-size: 18px; margin-bottom: 16px;">
         <i data-lucide="donut-chart" style="width: 18px; height: 18px; stroke: #10b981;"></i>
-        额度使用状态
+        Anlas额度使用状态
       </h2>
       
       <!-- Calculate Used Percentage -->
@@ -121,14 +138,15 @@
             {% endif %}
           </span>
         </div>
-        <form method="post" action="/admin/users/{{ user.id }}/reset-quota" onsubmit="return confirm('确认手动重置此用户的 Anlas 消耗统计吗？这将清空已用和锁定额度！');">
+        <form method="post" action="/admin/users/{{ user.id }}/reset-quota" onsubmit="return confirm('确认手动重置此用户的 Anlas 消耗统计吗？这将清空已用和锁定Anlas额度！');">
           <button class="secondary" type="submit" style="min-height: 38px; padding: 0 16px;">
             <i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i>
-            重置已用额度
+            重置已用Anlas额度
           </button>
         </form>
       </div>
     </section>
+    {% endif %}
 
     <!-- Base Profile Settings -->
     <section class="panel" style="margin-bottom: 0;">
@@ -180,7 +198,7 @@
 
         <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
           <label>
-            额度重置周期
+            Anlas额度重置周期
             <select name="reset_period">
               {% for period in ["month", "week", "day", "never"] %}
               <option value="{{ period }}" {{ "selected" if user.reset_period == period else "" }}>{{ period }}</option>
@@ -195,7 +213,7 @@
         </div>
 
         <label>
-          Anlas 总额度上限
+          Anlas额度总额上限
           <input name="anlas_total" type="number" min="0" value="{{ user.anlas_total or 0 }}">
         </label>
 
