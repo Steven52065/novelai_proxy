@@ -88,6 +88,17 @@
         </label>
       </div>
 
+      <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
+        <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <input name="free_small_daily_limit_enabled" type="checkbox">
+          启用免费小图单日数量限制
+        </label>
+        <label>
+          单日免费小图上限
+          <input name="free_small_daily_limit" type="number" min="0" value="0">
+        </label>
+      </div>
+
       <div style="padding: 6px 0;">
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许访问的接口</div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
@@ -203,6 +214,9 @@
             <span class="badge" style="background: rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); color:#f59e0b;">仅免费小图</span>
             {% else %}
             <span class="badge" style="background: rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:#34d399;">不限图规格</span>
+            {% endif %}
+            {% if user.free_small_daily_limit_enabled %}
+            <span class="badge" style="background: rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.25); color:#7dd3fc; margin-left: 4px;">每日 {{ user.free_small_daily_limit }} 张</span>
             {% endif %}
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
               {% for label in user.allowed_endpoint_labels %}

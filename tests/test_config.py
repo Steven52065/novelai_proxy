@@ -25,6 +25,18 @@ def test_self_service_config_defaults_to_disabled():
     assert config.self_service.discord.enabled is False
     assert config.self_service.discord.client_id == ""
     assert config.self_service.discord.default_group_id is None
+    assert config.free_small_daily_limit.reset_hour_utc8 == 0
+
+
+def test_free_small_daily_limit_reset_hour_validation():
+    assert AppConfig.model_validate({"free_small_daily_limit": {"reset_hour_utc8": 0}}).free_small_daily_limit.reset_hour_utc8 == 0
+    assert AppConfig.model_validate({"free_small_daily_limit": {"reset_hour_utc8": 23}}).free_small_daily_limit.reset_hour_utc8 == 23
+
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"free_small_daily_limit": {"reset_hour_utc8": 24}})
+
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"free_small_daily_limit": {"reset_hour_utc8": -1}})
 
 
 def test_discord_self_service_model_allows_missing_fields_when_disabled():

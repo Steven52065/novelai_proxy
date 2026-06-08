@@ -32,6 +32,8 @@ class CreateUserGroupRequest(BaseModel):
     is_active: bool = True
     default_tier: str = Field(default="normal", pattern="^(normal|vip)$")
     default_free_small_only: bool = True
+    free_small_daily_limit_enabled: bool = False
+    free_small_daily_limit: int = Field(default=0, ge=0)
     default_allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     default_allowed_upstreams: list[str] = Field(default_factory=list)
     default_anlas_total: int = Field(default=0, ge=0)
@@ -44,6 +46,8 @@ class UpdateUserGroupRequest(BaseModel):
     is_active: bool | None = None
     default_tier: str | None = Field(default=None, pattern="^(normal|vip)$")
     default_free_small_only: bool | None = None
+    free_small_daily_limit_enabled: bool | None = None
+    free_small_daily_limit: int | None = Field(default=None, ge=0)
     default_allowed_endpoints: list[str] | None = None
     default_allowed_upstreams: list[str] | None = None
     default_anlas_total: int | None = Field(default=None, ge=0)
@@ -72,6 +76,7 @@ async def list_user_groups(request: Request):
 @api_router.post("/user-groups", dependencies=[Depends(require_admin)])
 async def create_user_group(payload: CreateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
+    _validate_free_small_daily_limit(payload.free_small_daily_limit_enabled, payload.free_small_daily_limit)
     _validate_allowed_endpoints(payload.default_allowed_endpoints)
     _validate_allowed_upstreams(payload.default_allowed_upstreams, request)
     default_reset_day = _normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
@@ -82,6 +87,8 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
             is_active=payload.is_active,
             default_tier=payload.default_tier,
             default_free_small_only=payload.default_free_small_only,
+            free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
+            free_small_daily_limit=payload.free_small_daily_limit,
             default_allowed_endpoints=payload.default_allowed_endpoints,
             default_allowed_upstreams=payload.default_allowed_upstreams,
             default_anlas_total=payload.default_anlas_total,
@@ -102,6 +109,7 @@ async def get_user_group(group_id: int, request: Request):
 @api_router.patch("/user-groups/{group_id}", dependencies=[Depends(require_admin)])
 async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
+    _validate_update_free_small_daily_limit(db, group_id, payload)
     if payload.default_allowed_endpoints is not None:
         _validate_allowed_endpoints(payload.default_allowed_endpoints)
     if payload.default_allowed_upstreams is not None:
@@ -115,6 +123,8 @@ async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, reque
             is_active=payload.is_active,
             default_tier=payload.default_tier,
             default_free_small_only=payload.default_free_small_only,
+            free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
+            free_small_daily_limit=payload.free_small_daily_limit,
             default_allowed_endpoints=payload.default_allowed_endpoints,
             default_allowed_upstreams=payload.default_allowed_upstreams,
             default_anlas_total=payload.default_anlas_total,
@@ -209,6 +219,8 @@ async def create_user_group_form(
     is_active: str | None = Form(None),
     default_tier: str = Form("normal"),
     default_free_small_only: str | None = Form(None),
+    free_small_daily_limit_enabled: str | None = Form(None),
+    free_small_daily_limit: int = Form(0),
     default_allowed_endpoints: list[str] | None = Form(None),
     default_allowed_upstreams: list[str] | None = Form(None),
     default_anlas_total: int = Form(0),
@@ -223,6 +235,8 @@ async def create_user_group_form(
             is_active=is_active == "on",
             default_tier=default_tier,
             default_free_small_only=default_free_small_only == "on",
+            free_small_daily_limit_enabled=free_small_daily_limit_enabled == "on",
+            free_small_daily_limit=free_small_daily_limit,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
             default_anlas_total=default_anlas_total,
@@ -285,6 +299,8 @@ async def update_user_group_form(
     is_active: str | None = Form(None),
     default_tier: str = Form("normal"),
     default_free_small_only: str | None = Form(None),
+    free_small_daily_limit_enabled: str | None = Form(None),
+    free_small_daily_limit: int = Form(0),
     default_allowed_endpoints: list[str] | None = Form(None),
     default_allowed_upstreams: list[str] | None = Form(None),
     default_anlas_total: int = Form(0),
@@ -300,6 +316,8 @@ async def update_user_group_form(
             is_active=is_active == "on",
             default_tier=default_tier,
             default_free_small_only=default_free_small_only == "on",
+            free_small_daily_limit_enabled=free_small_daily_limit_enabled == "on",
+            free_small_daily_limit=free_small_daily_limit,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
             default_anlas_total=default_anlas_total,
@@ -410,6 +428,36 @@ def _normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int
         return normalize_reset_day(reset_period, reset_day)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+
+
+def _validate_update_free_small_daily_limit(
+    db: Database,
+    group_id: int,
+    payload: UpdateUserGroupRequest,
+) -> None:
+    fields_set = payload.model_fields_set
+    if "free_small_daily_limit_enabled" not in fields_set and "free_small_daily_limit" not in fields_set:
+        return
+    group = get_group(db, group_id)
+    enabled = (
+        bool(payload.free_small_daily_limit_enabled)
+        if "free_small_daily_limit_enabled" in fields_set
+        else bool(group["free_small_daily_limit_enabled"])
+    )
+    limit = (
+        int(payload.free_small_daily_limit)
+        if "free_small_daily_limit" in fields_set and payload.free_small_daily_limit is not None
+        else int(group["free_small_daily_limit"] or 0)
+    )
+    _validate_free_small_daily_limit(enabled, limit)
+
+
+def _validate_free_small_daily_limit(enabled: bool, limit: int) -> None:
+    if enabled and int(limit) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "free_small_daily_limit must be >= 1 when enabled"},
+        )
 
 
 def _upstream_choices(request: Request) -> list[str]:

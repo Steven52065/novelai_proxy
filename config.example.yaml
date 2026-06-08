@@ -101,6 +101,11 @@ database:
   # 该文件以及对应的 .db-shm / .db-wal 已被忽略，不要提交。
   path: novelai_proxy.db
 
+# 免费小图每日数量限制配置。
+free_small_daily_limit:
+  # 每日重置小时，按固定 UTC+8 时区计算。0 表示每天 00:00 重置。
+  reset_hour_utc8: 0
+
 # 自助账号能力配置。
 self_service:
   discord:

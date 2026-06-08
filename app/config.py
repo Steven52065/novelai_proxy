@@ -119,6 +119,10 @@ class ImageHostingConfig(BaseModel):
     catbox: CatboxConfig = Field(default_factory=CatboxConfig)
 
 
+class FreeSmallDailyLimitConfig(BaseModel):
+    reset_hour_utc8: int = Field(default=0, ge=0, le=23)
+
+
 class DiscordSelfServiceConfig(BaseModel):
     enabled: bool = False
     client_id: str = ""
@@ -143,6 +147,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)
     image_hosting: ImageHostingConfig = Field(default_factory=ImageHostingConfig)
+    free_small_daily_limit: FreeSmallDailyLimitConfig = Field(default_factory=FreeSmallDailyLimitConfig)
     self_service: SelfServiceConfig = Field(default_factory=SelfServiceConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

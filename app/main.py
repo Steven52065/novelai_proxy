@@ -20,6 +20,7 @@ from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
 from .database import Database, validate_discord_self_service_config
+from .free_small_daily_limit import FreeSmallDailyLimitManager
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .proxy.routes import router as proxy_router
@@ -42,6 +43,10 @@ async def lifespan(app: FastAPI):
     validate_discord_self_service_config(db, config)
     dashboard_events = DashboardEventBus()
     quota_manager = QuotaManager(db)
+    free_small_daily_limit_manager = FreeSmallDailyLimitManager(
+        db,
+        reset_hour_utc8=config.free_small_daily_limit.reset_hour_utc8,
+    )
     usage_logs = UsageLogRepository(db, on_change=dashboard_events.notify_nowait)
     upstream_clients = _build_upstream_clients(config)
     default_upstream_id = next(iter(upstream_clients))
@@ -78,6 +83,7 @@ async def lifespan(app: FastAPI):
     app.state.dashboard_events = dashboard_events
     app.state.db = db
     app.state.quota_manager = quota_manager
+    app.state.free_small_daily_limit_manager = free_small_daily_limit_manager
     app.state.usage_logs = usage_logs
     app.state.rate_limiter = RateLimiter(db)
     app.state.upstream = upstream
@@ -91,6 +97,7 @@ async def lifespan(app: FastAPI):
     app.state.proxy_service = ProxyRequestService(
         rate_limiter=app.state.rate_limiter,
         quota_manager=quota_manager,
+        free_small_daily_limit_manager=free_small_daily_limit_manager,
         proxy_queue=proxy_queue,
         usage_logs=usage_logs,
         logging_config=config.logging,

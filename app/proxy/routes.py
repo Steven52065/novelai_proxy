@@ -71,6 +71,7 @@ async def generate_image(
         request_payload=request_payload,
         estimated_cost=estimated_cost,
         free_small_only_allowed=cost_is_certainly_free,
+        free_small_daily_count=cost_inputs.n_samples if cost_is_certainly_free else 0,
         handler=lambda upstream: upstream.generate_image_payload_zip(request_payload),
     )
 
@@ -179,6 +180,7 @@ async def _submit_zip_task(
     estimated_cost: int,
     handler: Callable[[Any], Awaitable[bytes]],
     free_small_only_allowed: bool = False,
+    free_small_daily_count: int = 0,
 ):
     result = await _proxy_service(request).submit_zip(
         ProxyTaskRequest(
@@ -189,6 +191,7 @@ async def _submit_zip_task(
             estimated_cost=estimated_cost,
             handler=handler,
             free_small_only_allowed=free_small_only_allowed,
+            free_small_daily_count=free_small_daily_count,
             process_zip_response=True,
         )
     )
@@ -273,6 +276,7 @@ async def subscription(
     user: UserContext = Depends(get_current_user),
 ):
     quota = request.app.state.quota_manager.get_snapshot(user.id)
+    free_small_daily = request.app.state.free_small_daily_limit_manager.get_snapshot(user.id)
     return {
         "tier": 3 if user.tier == "vip" else 1,
         "active": True,
@@ -299,6 +303,16 @@ async def subscription(
             "used": quota.used,
             "reserved": quota.reserved,
             "available": quota.available,
+        },
+        "proxyFreeSmallDailyLimit": {
+            "enabled": free_small_daily.enabled,
+            "scope": free_small_daily.scope,
+            "limit": free_small_daily.limit,
+            "used": free_small_daily.used,
+            "reserved": free_small_daily.reserved,
+            "available": free_small_daily.available,
+            "windowStart": free_small_daily.window_start,
+            "resetAt": free_small_daily.reset_at,
         },
     }
 

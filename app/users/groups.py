@@ -26,6 +26,8 @@ class UserGroupInput:
     is_active: bool = True
     default_tier: str = "normal"
     default_free_small_only: bool = True
+    free_small_daily_limit_enabled: bool = False
+    free_small_daily_limit: int = 0
     default_allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     default_allowed_upstreams: list[str] = field(default_factory=list)
     default_anlas_total: int = 0
@@ -39,6 +41,8 @@ class UserGroupUpdateInput:
     is_active: bool | None = None
     default_tier: str | None = None
     default_free_small_only: bool | None = None
+    free_small_daily_limit_enabled: bool | None = None
+    free_small_daily_limit: int | None = None
     default_allowed_endpoints: list[str] | None = None
     default_allowed_upstreams: list[str] | None = None
     default_anlas_total: int | None = None
@@ -52,16 +56,19 @@ def create_group(db: Database, data: UserGroupInput) -> int:
         """
         INSERT INTO user_groups (
             name, is_active, default_tier, default_free_small_only,
+            free_small_daily_limit_enabled, free_small_daily_limit,
             default_allowed_endpoints, default_allowed_upstreams, default_anlas_total,
             default_reset_period, default_reset_day, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data.name,
             1 if data.is_active else 0,
             data.default_tier,
             1 if data.default_free_small_only else 0,
+            1 if data.free_small_daily_limit_enabled else 0,
+            data.free_small_daily_limit,
             serialize_allowed_endpoints(data.default_allowed_endpoints),
             serialize_allowed_upstreams(data.default_allowed_upstreams),
             data.default_anlas_total,
@@ -90,6 +97,12 @@ def update_group(db: Database, group_id: int, data: UserGroupUpdateInput) -> boo
     if data.default_free_small_only is not None:
         fields.append("default_free_small_only = ?")
         params.append(1 if data.default_free_small_only else 0)
+    if data.free_small_daily_limit_enabled is not None:
+        fields.append("free_small_daily_limit_enabled = ?")
+        params.append(1 if data.free_small_daily_limit_enabled else 0)
+    if data.free_small_daily_limit is not None:
+        fields.append("free_small_daily_limit = ?")
+        params.append(data.free_small_daily_limit)
     if data.default_allowed_endpoints is not None:
         fields.append("default_allowed_endpoints = ?")
         params.append(serialize_allowed_endpoints(data.default_allowed_endpoints))

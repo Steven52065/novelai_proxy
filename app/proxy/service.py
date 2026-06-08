@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -9,6 +10,11 @@ from novelai_python._exceptions import APIError
 
 from ..auth import UserContext
 from ..config import LoggingConfig
+from ..free_small_daily_limit import (
+    FreeSmallDailyLimitExceeded,
+    FreeSmallDailyLimitManager,
+    FreeSmallDailyReservation,
+)
 from ..logging_utils import json_dumps, logger
 from ..queue_manager import (
     NoAvailableUpstream,
@@ -37,6 +43,7 @@ class ProxyTaskRequest:
     estimated_cost: int
     handler: Callable[[Any], Awaitable[bytes]]
     free_small_only_allowed: bool = False
+    free_small_daily_count: int = 0
     process_zip_response: bool = True
 
 
@@ -53,18 +60,26 @@ class ProxyTaskResult:
         return isinstance(self.content, bytes)
 
 
+@dataclass(frozen=True)
+class PreQueueCheck:
+    rejected: ProxyTaskResult | None = None
+    free_small_daily_reservation: FreeSmallDailyReservation | None = None
+
+
 class ProxyRequestService:
     def __init__(
         self,
         *,
         rate_limiter: RateLimiter,
         quota_manager: QuotaManager,
+        free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
         proxy_queue: RoutingProxyQueue,
         usage_logs: UsageLogRepository,
         logging_config: LoggingConfig,
     ):
         self.rate_limiter = rate_limiter
         self.quota_manager = quota_manager
+        self.free_small_daily_limit_manager = free_small_daily_limit_manager
         self.proxy_queue = proxy_queue
         self.usage_logs = usage_logs
         self.logging_config = logging_config
@@ -92,17 +107,23 @@ class ProxyRequestService:
             json_dumps(task.request_payload),
         )
 
-        rejected = self._reject_before_queue(request_id, task)
-        if rejected is not None:
-            return rejected
+        pre_queue = self._check_before_queue(request_id, task)
+        if pre_queue.rejected is not None:
+            return pre_queue.rejected
+        free_small_daily_reservation = pre_queue.free_small_daily_reservation
 
-        self._insert_queued(
-            request_id,
-            task,
-            error_code=None,
-            error_message=None,
-            log_level="INFO",
-        )
+        try:
+            self._insert_queued(
+                request_id,
+                task,
+                error_code=None,
+                error_message=None,
+                log_level="INFO",
+            )
+        except Exception:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
+            self.quota_manager.release(task.user.id, task.estimated_cost)
+            raise
         logger.info(
             "proxy request queued request_id=%s user_id=%s action=%s estimated_cost=%s",
             request_id,
@@ -124,6 +145,7 @@ class ProxyRequestService:
                 allowed_upstreams=task.user.allowed_upstreams,
             )
         except QueueClosed:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             self.quota_manager.release(task.user.id, task.estimated_cost)
             self.usage_logs.mark_rejected(
                 request_id,
@@ -138,6 +160,7 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except QueueFull:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             self.quota_manager.release(task.user.id, task.estimated_cost)
             self.usage_logs.mark_rejected(
                 request_id,
@@ -152,6 +175,7 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except NoAvailableUpstream as exc:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             self.quota_manager.release(task.user.id, task.estimated_cost)
             self.usage_logs.mark_rejected(
                 request_id,
@@ -166,6 +190,7 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except UserUnavailable as exc:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             logger.info("proxy request rejected because user is unavailable request_id=%s user_id=%s", request_id, task.user.id)
             return ProxyTaskResult(
                 status_code=403,
@@ -173,6 +198,7 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except APIError as exc:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
             logger.error("upstream API error request_id=%s code=%s message=%s", request_id, exc.code, exc.message)
             return ProxyTaskResult(
@@ -181,16 +207,22 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except UpstreamExecutionTimeout:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             logger.error("upstream execution timed out request_id=%s", request_id)
             return ProxyTaskResult(
                 status_code=504,
                 content={"message": MESSAGE_UPSTREAM_REQUEST_TIMED_OUT},
                 request_id=request_id,
             )
+        except asyncio.CancelledError:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
+            raise
         except Exception as exc:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             logger.exception("proxy request failed request_id=%s", request_id)
             return ProxyTaskResult(status_code=502, content={"message": MESSAGE_PROXY_REQUEST_FAILED}, request_id=request_id)
 
+        self._confirm_free_small_daily_reservation(free_small_daily_reservation)
         return ProxyTaskResult(
             status_code=201,
             content=binary_payload,
@@ -199,7 +231,7 @@ class ProxyRequestService:
             request_id=request_id,
         )
 
-    def _reject_before_queue(self, request_id: str, task: ProxyTaskRequest) -> ProxyTaskResult | None:
+    def _check_before_queue(self, request_id: str, task: ProxyTaskRequest) -> PreQueueCheck:
         # These checks happen before queue submission so rejected requests never reserve upstream capacity.
         if task.user.free_small_only and not task.free_small_only_allowed:
             self._insert_rejected(
@@ -216,10 +248,12 @@ class ProxyRequestService:
                 task.action,
                 task.estimated_cost,
             )
-            return ProxyTaskResult(
-                status_code=403,
-                content={"message": "User is limited to definitely free small image generations"},
-                request_id=request_id,
+            return PreQueueCheck(
+                rejected=ProxyTaskResult(
+                    status_code=403,
+                    content={"message": "User is limited to definitely free small image generations"},
+                    request_id=request_id,
+                )
             )
 
         rate = self.rate_limiter.check(task.user.id)
@@ -233,14 +267,55 @@ class ProxyRequestService:
                 log_level="INFO",
             )
             logger.info("proxy request rate limited request_id=%s user_id=%s", request_id, task.user.id)
-            return ProxyTaskResult(
-                status_code=429,
-                content={"message": rate.message, "retry_after": rate.retry_after, "limit_scope": rate.scope},
-                headers={"Retry-After": str(rate.retry_after)},
-                request_id=request_id,
+            return PreQueueCheck(
+                rejected=ProxyTaskResult(
+                    status_code=429,
+                    content={"message": rate.message, "retry_after": rate.retry_after, "limit_scope": rate.scope},
+                    headers={"Retry-After": str(rate.retry_after)},
+                    request_id=request_id,
+                )
+            )
+
+        try:
+            free_small_daily_reservation = self._reserve_free_small_daily_limit(request_id, task)
+        except FreeSmallDailyLimitExceeded as exc:
+            self._insert_rejected(
+                request_id,
+                task,
+                estimated_cost=0,
+                error_code="free_small_daily_limit_exceeded",
+                error_message=str(exc),
+                log_level="INFO",
+            )
+            snapshot = exc.snapshot
+            logger.info(
+                "proxy request rejected by free small daily limit request_id=%s user_id=%s scope=%s limit=%s requested=%s",
+                request_id,
+                task.user.id,
+                snapshot.scope,
+                snapshot.limit,
+                exc.requested,
+            )
+            return PreQueueCheck(
+                rejected=ProxyTaskResult(
+                    status_code=429,
+                    content={
+                        "message": str(exc),
+                        "retry_after": exc.retry_after,
+                        "limit_scope": snapshot.scope,
+                        "limit": snapshot.limit,
+                        "used": snapshot.used,
+                        "reserved": snapshot.reserved,
+                        "requested": exc.requested,
+                        "remaining": exc.remaining,
+                    },
+                    headers={"Retry-After": str(exc.retry_after)},
+                    request_id=request_id,
+                )
             )
 
         if task.estimated_cost < 0:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             self._insert_rejected(
                 request_id,
                 task,
@@ -249,15 +324,18 @@ class ProxyRequestService:
                 log_level="ERROR",
             )
             logger.error("proxy request has unsupported cost request_id=%s estimated_cost=%s", request_id, task.estimated_cost)
-            return ProxyTaskResult(
-                status_code=400,
-                content={"message": "Request exceeds supported cost bounds"},
-                request_id=request_id,
+            return PreQueueCheck(
+                rejected=ProxyTaskResult(
+                    status_code=400,
+                    content={"message": "Request exceeds supported cost bounds"},
+                    request_id=request_id,
+                )
             )
 
         try:
             self.quota_manager.reserve(task.user.id, task.estimated_cost)
         except InsufficientQuota as exc:
+            self._release_free_small_daily_reservation(free_small_daily_reservation)
             self._insert_rejected(
                 request_id,
                 task,
@@ -272,13 +350,55 @@ class ProxyRequestService:
                 exc.need,
                 exc.have,
             )
-            return ProxyTaskResult(
-                status_code=402,
-                content={"message": str(exc), "need": exc.need, "have": exc.have},
-                request_id=request_id,
+            return PreQueueCheck(
+                rejected=ProxyTaskResult(
+                    status_code=402,
+                    content={"message": str(exc), "need": exc.need, "have": exc.have},
+                    request_id=request_id,
+                )
             )
 
-        return None
+        return PreQueueCheck(free_small_daily_reservation=free_small_daily_reservation)
+
+    def _reserve_free_small_daily_limit(
+        self,
+        request_id: str,
+        task: ProxyTaskRequest,
+    ) -> FreeSmallDailyReservation | None:
+        if self.free_small_daily_limit_manager is None:
+            return None
+        if not task.free_small_only_allowed:
+            return None
+        count = int(task.free_small_daily_count or 0)
+        if count <= 0:
+            return None
+        reservation = self.free_small_daily_limit_manager.reserve(task.user.id, count)
+        if reservation is not None:
+            logger.info(
+                "free small daily limit reserved request_id=%s user_id=%s count=%s scope=%s limit=%s",
+                request_id,
+                task.user.id,
+                count,
+                reservation.scope,
+                reservation.limit,
+            )
+        return reservation
+
+    def _confirm_free_small_daily_reservation(self, reservation: FreeSmallDailyReservation | None) -> None:
+        if reservation is None or self.free_small_daily_limit_manager is None:
+            return
+        try:
+            self.free_small_daily_limit_manager.confirm(reservation)
+        except Exception:
+            logger.exception("failed to confirm free small daily reservation user_id=%s", reservation.user_id)
+
+    def _release_free_small_daily_reservation(self, reservation: FreeSmallDailyReservation | None) -> None:
+        if reservation is None or self.free_small_daily_limit_manager is None:
+            return
+        try:
+            self.free_small_daily_limit_manager.release(reservation)
+        except Exception:
+            logger.exception("failed to release free small daily reservation user_id=%s", reservation.user_id)
 
     def _insert_queued(
         self,

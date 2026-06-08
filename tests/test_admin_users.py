@@ -19,7 +19,14 @@ def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
         create_resp = client.post(
             "/admin/api/users",
             auth=("admin", "admin123"),
-            json={"name": "limited", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+            json={
+                "name": "limited",
+                "tier": "normal",
+                "anlas_total": 100,
+                "free_small_only": True,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 3,
+            },
         )
         assert create_resp.status_code == 200
         user_id = create_resp.json()["user_id"]
@@ -27,20 +34,51 @@ def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
         users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
         created = next(row for row in users if row["id"] == user_id)
         assert created["free_small_only"] == 1
+        assert created["free_small_daily_limit_enabled"] == 1
+        assert created["free_small_daily_limit"] == 3
         assert created["allowed_endpoints"] == "generate-image"
         assert created["allowed_endpoints_list"] == ["generate-image"]
 
         update_resp = client.patch(
             f"/admin/api/users/{user_id}",
             auth=("admin", "admin123"),
-            json={"free_small_only": False, "allowed_endpoints": ["generate-image", "upscale"]},
+            json={
+                "free_small_only": False,
+                "free_small_daily_limit_enabled": False,
+                "free_small_daily_limit": 0,
+                "allowed_endpoints": ["generate-image", "upscale"],
+            },
         )
         assert update_resp.status_code == 200
         users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
         updated = next(row for row in users if row["id"] == user_id)
         assert updated["free_small_only"] == 0
+        assert updated["free_small_daily_limit_enabled"] == 0
+        assert updated["free_small_daily_limit"] == 0
         assert updated["allowed_endpoints"] == "generate-image,upscale"
         assert updated["allowed_endpoints_list"] == ["generate-image", "upscale"]
+
+
+def test_admin_rejects_enabled_free_small_daily_limit_without_positive_limit(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "bad-daily-user", "free_small_daily_limit_enabled": True, "free_small_daily_limit": 0},
+        )
+        assert create_resp.status_code == 400
+        assert create_resp.json()["message"] == "free_small_daily_limit must be >= 1 when enabled"
+
+        group_resp = client.post(
+            "/admin/api/user-groups",
+            auth=("admin", "admin123"),
+            json={"name": "bad-daily-group", "free_small_daily_limit_enabled": True, "free_small_daily_limit": 0},
+        )
+        assert group_resp.status_code == 400
+        assert group_resp.json()["message"] == "free_small_daily_limit must be >= 1 when enabled"
 
 def test_admin_returns_key_once_without_persisting_plaintext(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -182,6 +220,8 @@ def test_admin_user_group_api_and_create_user_copies_defaults(tmp_path: Path, mo
             name="vip-defaults",
             default_tier="vip",
             default_free_small_only=False,
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=5,
             default_allowed_endpoints=["generate-image", "upscale"],
             default_anlas_total=123,
             default_reset_period="week",
@@ -191,6 +231,8 @@ def test_admin_user_group_api_and_create_user_copies_defaults(tmp_path: Path, mo
         groups = client.get("/admin/api/user-groups", auth=("admin", "admin123")).json()["groups"]
         created_group = next(row for row in groups if row["id"] == group_id)
         assert created_group["member_count"] == 0
+        assert created_group["free_small_daily_limit_enabled"] == 1
+        assert created_group["free_small_daily_limit"] == 5
         assert created_group["default_allowed_endpoints_list"] == ["generate-image", "upscale"]
 
         create_resp = client.post(

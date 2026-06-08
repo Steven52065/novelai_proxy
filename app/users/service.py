@@ -18,6 +18,8 @@ class CreateUserInput:
     name: str
     tier: str = "normal"
     free_small_only: bool = False
+    free_small_daily_limit_enabled: bool = False
+    free_small_daily_limit: int = 0
     allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     allowed_upstreams: list[str] = field(default_factory=list)
     group_id: int | None = None
@@ -32,6 +34,8 @@ class UpdateUserInput:
     tier: str | None = None
     is_active: bool | None = None
     free_small_only: bool | None = None
+    free_small_daily_limit_enabled: bool | None = None
+    free_small_daily_limit: int | None = None
     allowed_endpoints: list[str] | None = None
     allowed_upstreams: list[str] | None = None
     group_id: int | None = None
@@ -60,15 +64,18 @@ def insert_user_record(
         """
         INSERT INTO users (
             api_key_hash, name, tier, is_active, free_small_only,
+            free_small_daily_limit_enabled, free_small_daily_limit,
             allowed_endpoints, allowed_upstreams, group_id, created_at
         )
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             hash_api_key(api_key),
             data.name,
             data.tier,
             1 if data.free_small_only else 0,
+            1 if data.free_small_daily_limit_enabled else 0,
+            data.free_small_daily_limit,
             serialize_allowed_endpoints(data.allowed_endpoints),
             serialize_allowed_upstreams(data.allowed_upstreams),
             data.group_id,
@@ -112,6 +119,12 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
     if data.free_small_only is not None:
         fields.append("free_small_only = ?")
         params.append(1 if data.free_small_only else 0)
+    if data.free_small_daily_limit_enabled is not None:
+        fields.append("free_small_daily_limit_enabled = ?")
+        params.append(1 if data.free_small_daily_limit_enabled else 0)
+    if data.free_small_daily_limit is not None:
+        fields.append("free_small_daily_limit = ?")
+        params.append(data.free_small_daily_limit)
     if data.allowed_endpoints is not None:
         fields.append("allowed_endpoints = ?")
         params.append(serialize_allowed_endpoints(data.allowed_endpoints))

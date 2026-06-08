@@ -32,6 +32,8 @@ class Database:
                     is_active INTEGER NOT NULL DEFAULT 1,
                     default_tier TEXT NOT NULL DEFAULT 'normal',
                     default_free_small_only INTEGER NOT NULL DEFAULT 1,
+                    free_small_daily_limit_enabled INTEGER NOT NULL DEFAULT 0,
+                    free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
                     default_allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
                     default_allowed_upstreams TEXT,
                     default_anlas_total INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +51,8 @@ class Database:
                     tier TEXT NOT NULL DEFAULT 'normal',
                     is_active INTEGER NOT NULL DEFAULT 1,
                     free_small_only INTEGER NOT NULL DEFAULT 0,
+                    free_small_daily_limit_enabled INTEGER NOT NULL DEFAULT 0,
+                    free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
                     allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
                     allowed_upstreams TEXT,
                     group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL,
@@ -83,6 +87,16 @@ class Database:
                     discord_avatar TEXT,
                     created_at TEXT NOT NULL,
                     last_login_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS free_small_daily_usage (
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    window_start TEXT NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0,
+                    reserved INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, window_start)
                 );
 
                 CREATE TABLE IF NOT EXISTS user_anlas_quota (
@@ -184,10 +198,14 @@ class Database:
             self._migrate_usage_logs_unique_constraint()
             self._add_column_if_missing("users", "api_key", "TEXT")
             self._add_column_if_missing("users", "free_small_only", "INTEGER NOT NULL DEFAULT 0")
+            self._add_column_if_missing("users", "free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0")
+            self._add_column_if_missing("users", "free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("users", "allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'")
             self._add_column_if_missing("users", "allowed_upstreams", "TEXT")
             self._add_column_if_missing("users", "group_id", "INTEGER REFERENCES user_groups(id) ON DELETE SET NULL")
             self._add_column_if_missing("users", "deleted_at", "TEXT")
+            self._add_column_if_missing("user_groups", "free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0")
+            self._add_column_if_missing("user_groups", "free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id)")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_group_rate_limit_rules_group_id ON group_rate_limit_rules(group_id)"
