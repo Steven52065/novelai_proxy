@@ -190,15 +190,6 @@ class ProxyQueue:
         if self.queue.full() and not allow_overflow:
             raise QueueFull
 
-        # 如果是重试（attempt_number > 0），先插入新的数据库记录。
-        # 这里没有 await，插入完成前 worker 不会开始处理刚入队的 item。
-        if attempt_number > 0:
-            self.usage_logs.insert_retry_attempt(
-                request_id=request_id,
-                attempt_number=attempt_number,
-                upstream_id=self.upstream_id,
-            )
-
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
@@ -224,6 +215,19 @@ class ProxyQueue:
             free_small_daily_limit_manager=free_small_daily_limit_manager,
             free_small_daily_reservation=free_small_daily_reservation,
         )
+        # 如果是重试（attempt_number > 0），先插入新的数据库记录。
+        # 这里没有 await，插入完成前 worker 不会开始处理刚入队的 item。
+        if attempt_number > 0:
+            try:
+                self.usage_logs.insert_retry_attempt(
+                    request_id=request_id,
+                    attempt_number=attempt_number,
+                    upstream_id=self.upstream_id,
+                )
+            except Exception:
+                _release_accounting(self.quota_manager, item)
+                raise
+
         try:
             if self.queue.full() and allow_overflow:
                 self.queue._put(item)
