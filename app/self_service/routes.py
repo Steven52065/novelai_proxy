@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import logging
+import re
 import secrets
 import time
+import traceback
+from typing import Any, NoReturn
+from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..admin.common import templates
 from ..database import Database
+from ..logging_utils import json_dumps, logger
 from ..users import reset_api_key
 from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
 from .accounts import DiscordProfile, login_or_register_discord_user
@@ -22,6 +29,9 @@ API_KEY_FLASH_COOKIE = "novelai_proxy_self_service_key_flash"
 OAUTH_STATE_TTL_SECONDS = 5 * 60
 SESSION_TTL_SECONDS = 7 * 24 * 3600
 API_KEY_FLASH_TTL_SECONDS = 5 * 60
+SENSITIVE_OAUTH_FIELDS = {"access_token", "refresh_token", "client_secret", "token", "authorization"}
+SENSITIVE_QUERY_FIELDS = {"code", "state", "access_token", "refresh_token", "client_secret", "token"}
+REDACTED = "[redacted]"
 
 
 @router.get("/signup", response_class=HTMLResponse)
@@ -58,13 +68,32 @@ async def discord_callback(request: Request, code: str | None = None, state: str
     oauth = _discord_client(request)
     try:
         token_payload = await oauth.exchange_code(code=code, redirect_uri=config.redirect_uri)
-        access_token = str(token_payload.get("access_token") or "")
-        if not access_token:
-            raise ValueError("missing access_token")
+    except Exception as exc:
+        _raise_discord_oauth_failure("exchange_code", exc)
+
+    if not isinstance(token_payload, dict):
+        _raise_discord_oauth_failure(
+            "parse_token_response",
+            TypeError("Discord token response is not a JSON object"),
+            extra={"token_response_type": type(token_payload).__name__},
+        )
+    access_token = str(token_payload.get("access_token") or "")
+    if not access_token:
+        _raise_discord_oauth_failure(
+            "parse_token_response",
+            ValueError("missing access_token"),
+            extra={"token_response_keys": sorted(str(key) for key in token_payload.keys())},
+        )
+
+    try:
         user_payload = await oauth.fetch_user(access_token=access_token)
+    except Exception as exc:
+        _raise_discord_oauth_failure("fetch_user", exc)
+
+    try:
         guilds_payload = await oauth.fetch_guilds(access_token=access_token)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail={"message": "Discord OAuth request failed"}) from exc
+        _raise_discord_oauth_failure("fetch_guilds", exc)
 
     if str(config.required_guild_id) not in {str(guild.get("id")) for guild in guilds_payload}:
         raise HTTPException(status_code=403, detail={"message": "Discord user is not in the required guild"})
@@ -184,6 +213,84 @@ def _require_discord_enabled(request: Request):
 
 def _discord_client(request: Request) -> DiscordOAuthClient:
     return request.app.state.discord_oauth_client
+
+
+def _raise_discord_oauth_failure(phase: str, exc: Exception, *, extra: dict[str, Any] | None = None) -> NoReturn:
+    _log_discord_oauth_failure(phase, exc, extra=extra)
+    raise HTTPException(status_code=502, detail={"message": "Discord OAuth request failed"}) from exc
+
+
+def _log_discord_oauth_failure(phase: str, exc: Exception, *, extra: dict[str, Any] | None = None) -> None:
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+
+    context: dict[str, Any] = {
+        "phase": phase,
+        "error_type": type(exc).__name__,
+        "error": _redact_sensitive_text(str(exc)),
+    }
+    if extra:
+        context.update(_redact_oauth_payload(extra))
+
+    request = getattr(exc, "request", None)
+    response = getattr(exc, "response", None)
+    if isinstance(exc, httpx.RequestError):
+        request = exc.request
+    if isinstance(exc, httpx.HTTPStatusError):
+        request = exc.request
+        response = exc.response
+
+    if request is not None:
+        context["request_method"] = getattr(request, "method", None)
+        context["request_url"] = _safe_oauth_url(str(getattr(request, "url", "")))
+    if response is not None:
+        context["status_code"] = getattr(response, "status_code", None)
+        context["reason_phrase"] = getattr(response, "reason_phrase", None)
+        context["response_body"] = _safe_response_body(response)
+
+    context["traceback"] = _redact_sensitive_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    logger.debug("discord oauth failure details=%s", json_dumps(context))
+
+
+def _safe_response_body(response) -> Any:
+    try:
+        payload = response.json()
+    except ValueError:
+        text = getattr(response, "text", "")
+        return _redact_sensitive_text(str(text)[:2000])
+    return _redact_oauth_payload(payload)
+
+
+def _redact_oauth_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: REDACTED if str(key).lower() in SENSITIVE_OAUTH_FIELDS else _redact_oauth_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_oauth_payload(item) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    return value
+
+
+def _safe_oauth_url(url: str) -> str:
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def _redact_sensitive_text(value: str) -> str:
+    if not value:
+        return value
+    query_names = "|".join(re.escape(name) for name in sorted(SENSITIVE_QUERY_FIELDS))
+    field_names = "|".join(re.escape(name) for name in sorted(SENSITIVE_OAUTH_FIELDS))
+    redacted = re.sub(rf"(?i)([?&](?:{query_names})=)[^&\s'\"<>]+", rf"\1{REDACTED}", value)
+    redacted = re.sub(rf"(?i)\b((?:{query_names})=)[^&\s'\"<>]+", rf"\1{REDACTED}", redacted)
+    redacted = re.sub(rf"(?i)([\"'](?:{field_names})[\"']\s*:\s*[\"'])(.*?)([\"'])", rf"\1{REDACTED}\3", redacted)
+    redacted = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+", rf"\1{REDACTED}", redacted)
+    return redacted
 
 
 def _set_session_cookie(response, secret: str, user_id: int) -> None:

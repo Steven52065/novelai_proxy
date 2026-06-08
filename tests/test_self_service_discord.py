@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,6 +38,29 @@ class FakeDiscordClient:
         if self.fail_at == "guilds":
             raise RuntimeError("guilds failed")
         return self.guilds
+
+
+class HTTPStatusErrorDiscordClient(FakeDiscordClient):
+    async def exchange_code(self, *, code: str, redirect_uri: str) -> dict:
+        request = httpx.Request(
+            "POST",
+            "https://discord.com/api/oauth2/token?code=secret-code&state=secret-state",
+        )
+        response = httpx.Response(
+            400,
+            json={
+                "error": "invalid_grant",
+                "error_description": "bad authorization code",
+                "access_token": "secret-access-token",
+                "refresh_token": "secret-refresh-token",
+            },
+            request=request,
+        )
+        raise httpx.HTTPStatusError(
+            "Client error '400 Bad Request' for url 'https://discord.com/api/oauth2/token?code=secret-code'",
+            request=request,
+            response=response,
+        )
 
 
 def test_discord_self_service_disabled_signup_returns_clear_status(tmp_path: Path, monkeypatch):
@@ -77,6 +101,30 @@ def test_discord_oauth_failures_do_not_create_user(tmp_path: Path, monkeypatch):
 
         assert resp.status_code == 502
         assert _count_rows(client.app.state.db, "users") == 0
+
+
+def test_discord_oauth_failure_debug_log_includes_phase_and_redacts_secrets(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = HTTPStatusErrorDiscordClient()
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 502
+
+    messages = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
+    assert "discord oauth failure details=" in messages
+    assert '"phase": "exchange_code"' in messages
+    assert '"status_code": 400' in messages
+    assert "invalid_grant" in messages
+    assert "bad authorization code" in messages
+    assert "secret-access-token" not in messages
+    assert "secret-refresh-token" not in messages
+    assert "secret-code" not in messages
+    assert "secret-state" not in messages
 
 
 def test_discord_user_outside_required_guild_is_rejected(tmp_path: Path, monkeypatch):
