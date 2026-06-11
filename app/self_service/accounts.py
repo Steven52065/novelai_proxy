@@ -52,6 +52,8 @@ def login_or_register_discord_user(
                 group_id=default_group_id,
                 tier=str(defaults["tier"]),
                 free_small_only=bool(defaults["free_small_only"]),
+                free_small_daily_limit_enabled=bool(defaults["free_small_daily_limit_enabled"]),
+                free_small_daily_limit=int(defaults["free_small_daily_limit"]),
                 allowed_endpoints=list(defaults["allowed_endpoints"]),
                 allowed_upstreams=list(defaults["allowed_upstreams"]),
                 anlas_total=int(defaults["anlas_total"]),

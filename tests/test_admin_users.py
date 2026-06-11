@@ -307,6 +307,8 @@ def test_admin_user_group_api_and_create_user_copies_defaults(tmp_path: Path, mo
         assert user["group_id"] == group_id
         assert user["tier"] == "vip"
         assert user["free_small_only"] == 0
+        assert user["free_small_daily_limit_enabled"] == 1
+        assert user["free_small_daily_limit"] == 5
         assert user["allowed_endpoints_list"] == ["generate-image", "upscale"]
         assert user["anlas_total"] == 123
         quota = client.app.state.db.query_one(
@@ -336,7 +338,147 @@ def test_admin_user_group_api_and_create_user_copies_defaults(tmp_path: Path, mo
         assert explicit_user["anlas_total"] == 5
 
 
-def test_user_group_update_does_not_auto_change_members_and_sync_is_selective(tmp_path: Path, monkeypatch):
+def test_user_group_update_propagates_to_following_members_by_default(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="propagate-defaults",
+            default_tier="normal",
+            default_allowed_endpoints=["generate-image"],
+            default_anlas_total=10,
+        )
+        follower_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "follower", "group_id": group_id},
+        ).json()["user_id"]
+        modified_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "modified",
+                "group_id": group_id,
+                "anlas_total": 5,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 7,
+            },
+        ).json()["user_id"]
+        client.app.state.db.execute(
+            "UPDATE user_anlas_quota SET used = 3, reserved = 2 WHERE user_id = ?",
+            (follower_id,),
+        )
+
+        patch_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "default_tier": "vip",
+                "default_allowed_endpoints": ["generate-image", "upscale"],
+                "default_anlas_total": 50,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 3,
+            },
+        )
+        assert patch_resp.status_code == 200
+        summary = patch_resp.json()["propagation"]
+        assert summary["propagate_scope"] == "unmodified"
+        assert summary["member_count"] == 2
+        assert summary["updated_users"] == 2
+        field_updates = {item["field"]: item["updated"] for item in summary["fields"]}
+        assert field_updates == {
+            "tier": 2,
+            "free_small_daily_limit": 1,
+            "allowed_endpoints": 2,
+            "anlas_quota": 1,
+        }
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        follower = next(row for row in users if row["id"] == follower_id)
+        assert follower["tier"] == "vip"
+        assert follower["allowed_endpoints_list"] == ["generate-image", "upscale"]
+        assert follower["anlas_total"] == 50
+        assert follower["free_small_daily_limit_enabled"] == 1
+        assert follower["free_small_daily_limit"] == 3
+        quota = client.app.state.db.query_one(
+            "SELECT total, used, reserved FROM user_anlas_quota WHERE user_id = ?",
+            (follower_id,),
+        )
+        assert dict(quota) == {"total": 50, "used": 3, "reserved": 2}
+
+        modified = next(row for row in users if row["id"] == modified_id)
+        assert modified["tier"] == "vip"
+        assert modified["anlas_total"] == 5
+        assert modified["free_small_daily_limit_enabled"] == 1
+        assert modified["free_small_daily_limit"] == 7
+        assert modified["allowed_endpoints_list"] == ["generate-image", "upscale"]
+
+
+def test_user_group_update_propagate_scopes_none_all_and_preview(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="scope-group", default_anlas_total=10)
+        follower_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "scope-follower", "group_id": group_id},
+        ).json()["user_id"]
+        modified_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "scope-modified", "group_id": group_id, "anlas_total": 5},
+        ).json()["user_id"]
+
+        preview = client.post(
+            f"/admin/api/user-groups/{group_id}/propagation-preview",
+            auth=("admin", "admin123"),
+            json={"default_anlas_total": 50},
+        )
+        assert preview.status_code == 200
+        preview_data = preview.json()
+        assert preview_data["member_count"] == 2
+        assert len(preview_data["fields"]) == 1
+        assert preview_data["fields"][0]["field"] == "anlas_quota"
+        assert preview_data["fields"][0]["unmodified_count"] == 1
+
+        no_change_preview = client.post(
+            f"/admin/api/user-groups/{group_id}/propagation-preview",
+            auth=("admin", "admin123"),
+            json={"default_anlas_total": 10},
+        )
+        assert no_change_preview.status_code == 200
+        assert no_change_preview.json()["fields"] == []
+
+        none_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"default_anlas_total": 50, "propagate": "none"},
+        )
+        assert none_resp.status_code == 200
+        assert none_resp.json()["propagation"]["updated_users"] == 0
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        assert next(row for row in users if row["id"] == follower_id)["anlas_total"] == 10
+        assert next(row for row in users if row["id"] == modified_id)["anlas_total"] == 5
+        group = client.get(f"/admin/api/user-groups/{group_id}", auth=("admin", "admin123")).json()["group"]
+        assert group["default_anlas_total"] == 50
+
+        all_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"default_anlas_total": 80, "propagate": "all"},
+        )
+        assert all_resp.status_code == 200
+        assert all_resp.json()["propagation"]["updated_users"] == 2
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        assert next(row for row in users if row["id"] == follower_id)["anlas_total"] == 80
+        assert next(row for row in users if row["id"] == modified_id)["anlas_total"] == 80
+
+
+def test_user_group_sync_members_is_selective(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 
@@ -365,6 +507,9 @@ def test_user_group_update_does_not_auto_change_members_and_sync_is_selective(tm
                 "default_tier": "vip",
                 "default_allowed_endpoints": ["generate-image", "upscale"],
                 "default_anlas_total": 50,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 4,
+                "propagate": "none",
             },
         )
         assert patch_resp.status_code == 200
@@ -374,6 +519,7 @@ def test_user_group_update_does_not_auto_change_members_and_sync_is_selective(tm
         assert unchanged["tier"] == "normal"
         assert unchanged["allowed_endpoints_list"] == ["generate-image"]
         assert unchanged["anlas_total"] == 10
+        assert unchanged["free_small_daily_limit_enabled"] == 0
 
         sync_tier = client.post(
             f"/admin/api/user-groups/{group_id}/sync-members",
@@ -392,7 +538,7 @@ def test_user_group_update_does_not_auto_change_members_and_sync_is_selective(tm
         sync_quota = client.post(
             f"/admin/api/user-groups/{group_id}/sync-members",
             auth=("admin", "admin123"),
-            json={"fields": ["allowed_endpoints", "anlas_quota"]},
+            json={"fields": ["allowed_endpoints", "anlas_quota", "free_small_daily_limit"]},
         )
         assert sync_quota.status_code == 200
 
@@ -400,6 +546,8 @@ def test_user_group_update_does_not_auto_change_members_and_sync_is_selective(tm
         synced = next(row for row in users if row["id"] == user_id)
         assert synced["allowed_endpoints_list"] == ["generate-image", "upscale"]
         assert synced["anlas_total"] == 50
+        assert synced["free_small_daily_limit_enabled"] == 1
+        assert synced["free_small_daily_limit"] == 4
         quota = client.app.state.db.query_one(
             "SELECT total, used, reserved FROM user_anlas_quota WHERE user_id = ?",
             (user_id,),
@@ -589,6 +737,64 @@ def test_admin_user_group_web_pages_create_and_show_fixed_id(tmp_path: Path, mon
         assert detail.status_code == 200
         assert "固定 ID" in detail.text
         assert "#1" in detail.text
+
+
+def test_admin_user_group_web_form_save_propagates_with_scope(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="web-propagate", default_anlas_total=10)
+        follower_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "web-follower", "group_id": group_id},
+        ).json()["user_id"]
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        page = client.get(f"/admin/user-groups/{group_id}")
+        assert page.status_code == 200
+        assert "propagate-modal" in page.text
+        assert "propagation-preview" in page.text
+
+        preview = client.post(
+            f"/admin/api/user-groups/{group_id}/propagation-preview",
+            json={"default_tier": "vip"},
+        )
+        assert preview.status_code == 200
+        preview_data = preview.json()
+        assert preview_data["member_count"] == 1
+        assert [field["field"] for field in preview_data["fields"]] == ["tier"]
+
+        update_resp = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                "name": "web-propagate",
+                "is_active": "on",
+                "default_tier": "vip",
+                "default_free_small_only": "on",
+                "default_allowed_endpoints": "generate-image",
+                "default_anlas_total": "10",
+                "default_reset_period": "month",
+                "default_reset_day": "1",
+                "free_small_daily_limit": "0",
+                "propagate_scope": "unmodified",
+            },
+            follow_redirects=False,
+        )
+        assert update_resp.status_code == 303
+        location = update_resp.headers["location"]
+        assert location.startswith(f"/admin/user-groups/{group_id}?saved=1")
+        assert "propagated=1" in location
+
+        result_page = client.get(location)
+        assert result_page.status_code == 200
+        assert "已保存组默认配置" in result_page.text
+
+        user = client.app.state.db.query_one("SELECT tier FROM users WHERE id = ?", (follower_id,))
+        assert user["tier"] == "vip"
 
 
 def test_admin_user_edit_page_can_change_group(tmp_path: Path, monkeypatch):

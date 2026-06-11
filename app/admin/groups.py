@@ -15,11 +15,12 @@ from ..users import (
     delete_or_disable_group,
     get_group,
     list_groups,
+    preview_group_propagation,
     sync_group_members,
-    update_group,
+    update_group_with_propagation,
 )
 from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
-from .auth import has_admin_session, require_admin
+from .auth import has_admin_session, require_admin, require_admin_or_session
 from .common import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS, row_to_dict, templates
 
 
@@ -53,12 +54,20 @@ class UpdateUserGroupRequest(BaseModel):
     default_anlas_total: int | None = Field(default=None, ge=0)
     default_reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     default_reset_day: int | None = Field(default=None, ge=0, le=28)
+    propagate: Literal["unmodified", "all", "none"] = "unmodified"
 
 
 class SyncGroupMembersRequest(BaseModel):
-    fields: list[Literal["tier", "free_small_only", "allowed_endpoints", "allowed_upstreams", "anlas_quota"]] = Field(
-        default_factory=list
-    )
+    fields: list[
+        Literal[
+            "tier",
+            "free_small_only",
+            "free_small_daily_limit",
+            "allowed_endpoints",
+            "allowed_upstreams",
+            "anlas_quota",
+        ]
+    ] = Field(default_factory=list)
 
 
 class GroupRateLimitRuleRequest(BaseModel):
@@ -109,32 +118,51 @@ async def get_user_group(group_id: int, request: Request):
 @api_router.patch("/user-groups/{group_id}", dependencies=[Depends(require_admin)])
 async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
+    update_input = _build_group_update_input(db, group_id, payload, request)
+    summary = update_group_with_propagation(
+        db,
+        request.app.state.quota_manager,
+        group_id,
+        update_input,
+        propagate_scope=payload.propagate,
+    )
+    if summary["group_changed"] or summary["updated_users"]:
+        _notify_dashboard_change(request)
+    return {"ok": True, "propagation": summary}
+
+
+@api_router.post("/user-groups/{group_id}/propagation-preview", dependencies=[Depends(require_admin_or_session)])
+async def preview_user_group_propagation(group_id: int, payload: UpdateUserGroupRequest, request: Request):
+    db: Database = request.app.state.db
+    update_input = _build_group_update_input(db, group_id, payload, request)
+    return preview_group_propagation(db, group_id, update_input)
+
+
+def _build_group_update_input(
+    db: Database,
+    group_id: int,
+    payload: UpdateUserGroupRequest,
+    request: Request,
+) -> UserGroupUpdateInput:
     _validate_update_free_small_daily_limit(db, group_id, payload)
     if payload.default_allowed_endpoints is not None:
         _validate_allowed_endpoints(payload.default_allowed_endpoints)
     if payload.default_allowed_upstreams is not None:
         _validate_allowed_upstreams(payload.default_allowed_upstreams, request)
     default_reset_day = _normalize_update_reset_day_or_400(db, group_id, payload)
-    changed = update_group(
-        db,
-        group_id,
-        UserGroupUpdateInput(
-            name=payload.name,
-            is_active=payload.is_active,
-            default_tier=payload.default_tier,
-            default_free_small_only=payload.default_free_small_only,
-            free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
-            free_small_daily_limit=payload.free_small_daily_limit,
-            default_allowed_endpoints=payload.default_allowed_endpoints,
-            default_allowed_upstreams=payload.default_allowed_upstreams,
-            default_anlas_total=payload.default_anlas_total,
-            default_reset_period=payload.default_reset_period,
-            default_reset_day=default_reset_day,
-        ),
+    return UserGroupUpdateInput(
+        name=payload.name,
+        is_active=payload.is_active,
+        default_tier=payload.default_tier,
+        default_free_small_only=payload.default_free_small_only,
+        free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
+        free_small_daily_limit=payload.free_small_daily_limit,
+        default_allowed_endpoints=payload.default_allowed_endpoints,
+        default_allowed_upstreams=payload.default_allowed_upstreams,
+        default_anlas_total=payload.default_anlas_total,
+        default_reset_period=payload.default_reset_period,
+        default_reset_day=default_reset_day,
     )
-    if changed:
-        _notify_dashboard_change(request)
-    return {"ok": True}
 
 
 @api_router.delete("/user-groups/{group_id}", dependencies=[Depends(require_admin)])
@@ -287,6 +315,9 @@ async def user_group_edit_page(group_id: int, request: Request):
             "members": members,
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": _upstream_choices(request),
+            "saved": request.query_params.get("saved") == "1",
+            "propagated": _parse_optional_int(request.query_params.get("propagated")),
+            "propagate_scope": request.query_params.get("propagate_scope"),
         },
     )
 
@@ -306,10 +337,13 @@ async def update_user_group_form(
     default_anlas_total: int = Form(0),
     default_reset_period: str = Form("month"),
     default_reset_day: int = Form(1),
+    propagate_scope: str = Form("unmodified"),
 ):
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
-    await patch_user_group(
+    if propagate_scope not in {"unmodified", "all", "none"}:
+        propagate_scope = "unmodified"
+    result = await patch_user_group(
         group_id,
         UpdateUserGroupRequest(
             name=name,
@@ -323,10 +357,15 @@ async def update_user_group_form(
             default_anlas_total=default_anlas_total,
             default_reset_period=default_reset_period,
             default_reset_day=default_reset_day,
+            propagate=propagate_scope,
         ),
         request,
     )
-    return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
+    summary = result["propagation"]
+    redirect_url = f"/admin/user-groups/{group_id}?saved=1"
+    if propagate_scope != "none":
+        redirect_url += f"&propagated={summary['updated_users']}&propagate_scope={propagate_scope}"
+    return RedirectResponse(redirect_url, status_code=303)
 
 
 @web_router.post("/user-groups/{group_id}/delete")
@@ -394,6 +433,15 @@ def _group_row_to_dict(row):
     data["default_allowed_endpoints_list"] = parse_allowed_endpoints(data.get("default_allowed_endpoints"))
     data["default_allowed_upstreams_list"] = parse_allowed_upstreams(data.get("default_allowed_upstreams"))
     return data
+
+
+def _parse_optional_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:

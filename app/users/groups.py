@@ -17,7 +17,29 @@ from .service import (
     serialize_allowed_upstreams,
 )
 
-SYNCABLE_MEMBER_FIELDS = {"tier", "free_small_only", "allowed_endpoints", "allowed_upstreams", "anlas_quota"}
+SYNCABLE_MEMBER_FIELDS = {
+    "tier",
+    "free_small_only",
+    "free_small_daily_limit",
+    "allowed_endpoints",
+    "allowed_upstreams",
+    "anlas_quota",
+}
+
+PROPAGATE_SCOPE_UNMODIFIED = "unmodified"
+PROPAGATE_SCOPE_ALL = "all"
+PROPAGATE_SCOPE_NONE = "none"
+PROPAGATE_SCOPES = {PROPAGATE_SCOPE_UNMODIFIED, PROPAGATE_SCOPE_ALL, PROPAGATE_SCOPE_NONE}
+
+# 会随组配置覆盖到成员的逻辑字段及展示名，顺序即弹窗展示顺序。
+MEMBER_FIELD_LABELS = {
+    "tier": "等级",
+    "free_small_only": "仅免费小图",
+    "free_small_daily_limit": "免费小图单日限制",
+    "allowed_endpoints": "允许接口",
+    "allowed_upstreams": "允许上游 Key",
+    "anlas_quota": "Anlas额度与重置规则",
+}
 
 
 @dataclass(frozen=True)
@@ -180,6 +202,8 @@ def group_defaults(row: sqlite3.Row) -> dict[str, object]:
     return {
         "tier": str(row["default_tier"]),
         "free_small_only": bool(row["default_free_small_only"]),
+        "free_small_daily_limit_enabled": bool(row["free_small_daily_limit_enabled"]),
+        "free_small_daily_limit": int(row["free_small_daily_limit"] or 0),
         "allowed_endpoints": parse_allowed_endpoints(row["default_allowed_endpoints"]),
         "allowed_upstreams": parse_allowed_upstreams(row["default_allowed_upstreams"]),
         "anlas_total": int(row["default_anlas_total"]),
@@ -193,6 +217,8 @@ def apply_group_defaults(row: sqlite3.Row) -> UpdateUserInput:
     return UpdateUserInput(
         tier=str(defaults["tier"]),
         free_small_only=bool(defaults["free_small_only"]),
+        free_small_daily_limit_enabled=bool(defaults["free_small_daily_limit_enabled"]),
+        free_small_daily_limit=int(defaults["free_small_daily_limit"]),
         allowed_endpoints=list(defaults["allowed_endpoints"]),
         allowed_upstreams=list(defaults["allowed_upstreams"]),
         anlas_total=int(defaults["anlas_total"]),
@@ -229,6 +255,11 @@ def sync_group_members(
     if "free_small_only" in selected:
         user_fields.append("free_small_only = ?")
         params.append(1 if defaults["free_small_only"] else 0)
+    if "free_small_daily_limit" in selected:
+        user_fields.append("free_small_daily_limit_enabled = ?")
+        params.append(1 if defaults["free_small_daily_limit_enabled"] else 0)
+        user_fields.append("free_small_daily_limit = ?")
+        params.append(int(defaults["free_small_daily_limit"]))
     if "allowed_endpoints" in selected:
         user_fields.append("allowed_endpoints = ?")
         params.append(serialize_allowed_endpoints(list(defaults["allowed_endpoints"])))
@@ -251,3 +282,206 @@ def sync_group_members(
                 int(defaults["reset_day"]),
             )
     return len(members)
+
+
+def preview_group_propagation(db: Database, group_id: int, data: UserGroupUpdateInput) -> dict[str, object]:
+    group = get_group(db, group_id)
+    old_values = _group_member_values(group)
+    new_values = _merged_group_member_values(group, data)
+    members = _load_group_members_with_values(db, group_id)
+    fields: list[dict[str, object]] = []
+    for field in MEMBER_FIELD_LABELS:
+        if new_values[field] == old_values[field]:
+            continue
+        unmodified = sum(1 for _, values in members if values[field] == old_values[field])
+        fields.append(
+            {
+                "field": field,
+                "label": MEMBER_FIELD_LABELS[field],
+                "old": _display_member_value(field, old_values[field]),
+                "new": _display_member_value(field, new_values[field]),
+                "unmodified_count": unmodified,
+            }
+        )
+    return {"member_count": len(members), "fields": fields}
+
+
+def update_group_with_propagation(
+    db: Database,
+    quota_manager: QuotaManager,
+    group_id: int,
+    data: UserGroupUpdateInput,
+    *,
+    propagate_scope: str = PROPAGATE_SCOPE_UNMODIFIED,
+) -> dict[str, object]:
+    if propagate_scope not in PROPAGATE_SCOPES:
+        raise HTTPException(status_code=400, detail={"message": f"Unknown propagate scope: {propagate_scope}"})
+    group = get_group(db, group_id)
+    old_values = _group_member_values(group)
+    new_values = _merged_group_member_values(group, data)
+    members = _load_group_members_with_values(db, group_id)
+    group_changed = update_group(db, group_id, data)
+
+    changed_fields = [field for field in MEMBER_FIELD_LABELS if new_values[field] != old_values[field]]
+    summary: dict[str, object] = {
+        "group_changed": group_changed,
+        "propagate_scope": propagate_scope,
+        "member_count": len(members),
+        "updated_users": 0,
+        "fields": [],
+    }
+    if propagate_scope == PROPAGATE_SCOPE_NONE or not changed_fields or not members:
+        return summary
+
+    field_counts = {field: 0 for field in changed_fields}
+    user_updates: dict[int, dict[str, object]] = {}
+    quota_updates: list[int] = []
+    for user_id, values in members:
+        for field in changed_fields:
+            if propagate_scope == PROPAGATE_SCOPE_UNMODIFIED and values[field] != old_values[field]:
+                continue
+            if values[field] == new_values[field]:
+                # 已与新组配置一致的成员无需修改，也不计入覆盖人数。
+                continue
+            if field == "anlas_quota":
+                quota_updates.append(user_id)
+            else:
+                user_updates.setdefault(user_id, {}).update(_user_columns_for_field(field, new_values[field]))
+            field_counts[field] += 1
+
+    if user_updates:
+        with db.transaction() as conn:
+            for user_id, columns in user_updates.items():
+                assignments = ", ".join(f"{column} = ?" for column in columns)
+                conn.execute(
+                    f"UPDATE users SET {assignments} WHERE id = ? AND deleted_at IS NULL",
+                    (*columns.values(), user_id),
+                )
+    new_total, new_period, new_day = new_values["anlas_quota"]
+    for user_id in quota_updates:
+        quota_manager.create_or_update(user_id, int(new_total), str(new_period), int(new_day))
+
+    summary["updated_users"] = len(set(user_updates) | set(quota_updates))
+    summary["fields"] = [
+        {"field": field, "label": MEMBER_FIELD_LABELS[field], "updated": field_counts[field]}
+        for field in changed_fields
+    ]
+    return summary
+
+
+def _group_member_values(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "tier": str(row["default_tier"]),
+        "free_small_only": 1 if row["default_free_small_only"] else 0,
+        "free_small_daily_limit": (
+            1 if row["free_small_daily_limit_enabled"] else 0,
+            int(row["free_small_daily_limit"] or 0),
+        ),
+        "allowed_endpoints": serialize_allowed_endpoints(parse_allowed_endpoints(row["default_allowed_endpoints"])),
+        "allowed_upstreams": serialize_allowed_upstreams(parse_allowed_upstreams(row["default_allowed_upstreams"])),
+        "anlas_quota": (
+            int(row["default_anlas_total"] or 0),
+            str(row["default_reset_period"]),
+            int(row["default_reset_day"] or 0),
+        ),
+    }
+
+
+def _merged_group_member_values(row: sqlite3.Row, data: UserGroupUpdateInput) -> dict[str, object]:
+    current = _group_member_values(row)
+    daily_enabled, daily_limit = current["free_small_daily_limit"]
+    if data.free_small_daily_limit_enabled is not None:
+        daily_enabled = 1 if data.free_small_daily_limit_enabled else 0
+    if data.free_small_daily_limit is not None:
+        daily_limit = int(data.free_small_daily_limit)
+    anlas_total, reset_period, reset_day = current["anlas_quota"]
+    if data.default_anlas_total is not None:
+        anlas_total = int(data.default_anlas_total)
+    if data.default_reset_period is not None:
+        reset_period = str(data.default_reset_period)
+    if data.default_reset_day is not None:
+        reset_day = int(data.default_reset_day)
+    return {
+        "tier": str(data.default_tier) if data.default_tier is not None else current["tier"],
+        "free_small_only": (
+            (1 if data.default_free_small_only else 0)
+            if data.default_free_small_only is not None
+            else current["free_small_only"]
+        ),
+        "free_small_daily_limit": (daily_enabled, daily_limit),
+        "allowed_endpoints": (
+            serialize_allowed_endpoints(list(data.default_allowed_endpoints))
+            if data.default_allowed_endpoints is not None
+            else current["allowed_endpoints"]
+        ),
+        "allowed_upstreams": (
+            serialize_allowed_upstreams(list(data.default_allowed_upstreams))
+            if data.default_allowed_upstreams is not None
+            else current["allowed_upstreams"]
+        ),
+        "anlas_quota": (anlas_total, reset_period, reset_day),
+    }
+
+
+def _load_group_members_with_values(db: Database, group_id: int) -> list[tuple[int, dict[str, object]]]:
+    rows = db.query_all(
+        """
+        SELECT u.id, u.tier, u.free_small_only,
+               u.free_small_daily_limit_enabled, u.free_small_daily_limit,
+               u.allowed_endpoints, u.allowed_upstreams,
+               q.total AS anlas_total, q.reset_period AS reset_period, q.reset_day AS reset_day
+        FROM users u
+        LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        WHERE u.group_id = ? AND u.deleted_at IS NULL
+        ORDER BY u.id
+        """,
+        (group_id,),
+    )
+    return [(int(row["id"]), _user_member_values(row)) for row in rows]
+
+
+def _user_member_values(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "tier": str(row["tier"]),
+        "free_small_only": 1 if row["free_small_only"] else 0,
+        "free_small_daily_limit": (
+            1 if row["free_small_daily_limit_enabled"] else 0,
+            int(row["free_small_daily_limit"] or 0),
+        ),
+        "allowed_endpoints": serialize_allowed_endpoints(parse_allowed_endpoints(row["allowed_endpoints"])),
+        "allowed_upstreams": serialize_allowed_upstreams(parse_allowed_upstreams(row["allowed_upstreams"])),
+        "anlas_quota": (
+            int(row["anlas_total"] or 0),
+            str(row["reset_period"] or "month"),
+            int(row["reset_day"] if row["reset_day"] is not None else 0),
+        ),
+    }
+
+
+def _user_columns_for_field(field: str, value: object) -> dict[str, object]:
+    if field == "tier":
+        return {"tier": str(value)}
+    if field == "free_small_only":
+        return {"free_small_only": 1 if value else 0}
+    if field == "free_small_daily_limit":
+        enabled, limit = value
+        return {"free_small_daily_limit_enabled": 1 if enabled else 0, "free_small_daily_limit": int(limit)}
+    if field == "allowed_endpoints":
+        return {"allowed_endpoints": str(value)}
+    if field == "allowed_upstreams":
+        return {"allowed_upstreams": value if value is None else str(value)}
+    raise ValueError(f"Unsupported member field: {field}")
+
+
+def _display_member_value(field: str, value: object) -> str:
+    if field == "free_small_only":
+        return "开启" if value else "关闭"
+    if field == "free_small_daily_limit":
+        enabled, limit = value
+        return f"启用（每日 {limit} 张）" if enabled else "关闭"
+    if field == "allowed_upstreams":
+        return str(value) if value else "全部上游"
+    if field == "anlas_quota":
+        total, period, day = value
+        return f"总额 {total} · 周期 {period} · 重置日 {day}"
+    return str(value)

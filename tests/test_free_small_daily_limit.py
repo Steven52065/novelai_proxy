@@ -32,26 +32,65 @@ def test_free_small_daily_limit_reserves_confirms_and_counts_samples(tmp_path: P
     assert exceeded.value.requested == 2
 
 
-def test_group_limit_is_per_user_and_stricter_limit_wins(tmp_path: Path):
+def test_runtime_limit_uses_only_user_level_config(tmp_path: Path):
     db = _daily_limit_db(tmp_path)
     group_id = _create_group(db, enabled=True, limit=1)
-    first_user = _create_user(db, enabled=True, limit=2, group_id=group_id)
-    second_user = _create_user(db, group_id=group_id)
+    configured_user = _create_user(db, enabled=True, limit=2, group_id=group_id)
+    unconfigured_user = _create_user(db, group_id=group_id)
     manager = FreeSmallDailyLimitManager(db)
     now = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
 
-    first_reservation = manager.reserve(first_user, 1, now=now)
-    second_reservation = manager.reserve(second_user, 1, now=now)
-    assert first_reservation.scope == "group"
-    assert second_reservation.scope == "group"
-
+    # 组配置不再在运行时合并：用户自身限制为 2，可以连续使用 2 张。
+    first_reservation = manager.reserve(configured_user, 1, now=now)
+    assert first_reservation.scope == "user"
+    assert first_reservation.limit == 2
     manager.confirm(first_reservation)
+    second_reservation = manager.reserve(configured_user, 1, now=now)
     manager.confirm(second_reservation)
-    assert manager.get_snapshot(first_user, now=now).used == 1
-    assert manager.get_snapshot(second_user, now=now).used == 1
-
     with pytest.raises(FreeSmallDailyLimitExceeded):
-        manager.reserve(first_user, 1, now=now)
+        manager.reserve(configured_user, 1, now=now)
+
+    # 用户级未启用限制时，组配置也不会限制该用户。
+    assert manager.reserve(unconfigured_user, 1, now=now) is None
+    assert manager.get_snapshot(unconfigured_user, now=now).enabled is False
+
+
+def test_init_schema_migrates_group_daily_limit_into_members(tmp_path: Path):
+    db_path = str(tmp_path / "migrate.db")
+    db = Database(db_path)
+    db.init_schema()
+    active_group = _create_group(db, enabled=True, limit=5)
+    inactive_group = _create_group(db, enabled=True, limit=9)
+    db.execute("UPDATE user_groups SET is_active = 0 WHERE id = ?", (inactive_group,))
+    follower = _create_user(db, group_id=active_group)
+    custom_user = _create_user(db, enabled=True, limit=2, group_id=active_group)
+    inactive_member = _create_user(db, group_id=inactive_group)
+    # 模拟旧版本数据库：迁移标记复位后重新初始化。
+    db.execute("PRAGMA user_version = 0")
+    db.close()
+
+    reopened = Database(db_path)
+    reopened.init_schema()
+    rows = {
+        int(row["id"]): (int(row["free_small_daily_limit_enabled"]), int(row["free_small_daily_limit"]))
+        for row in reopened.query_all("SELECT id, free_small_daily_limit_enabled, free_small_daily_limit FROM users")
+    }
+    assert rows[follower] == (1, 5)
+    assert rows[custom_user] == (1, 2)
+    assert rows[inactive_member] == (0, 0)
+
+    # 再次初始化不会重复迁移：管理员手动关闭后保持关闭。
+    reopened.execute(
+        "UPDATE users SET free_small_daily_limit_enabled = 0, free_small_daily_limit = 0 WHERE id = ?",
+        (follower,),
+    )
+    reopened.init_schema()
+    row = reopened.query_one(
+        "SELECT free_small_daily_limit_enabled, free_small_daily_limit FROM users WHERE id = ?",
+        (follower,),
+    )
+    assert (int(row["free_small_daily_limit_enabled"]), int(row["free_small_daily_limit"])) == (0, 0)
+    reopened.close()
 
 
 def test_custom_utc8_reset_hour_changes_window_and_retry_after(tmp_path: Path):

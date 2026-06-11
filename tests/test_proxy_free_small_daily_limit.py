@@ -43,7 +43,7 @@ def test_user_free_small_daily_limit_returns_429_after_daily_allowance(tmp_path:
         assert rejected_log["error_code"] == "free_small_daily_limit_exceeded"
 
 
-def test_group_free_small_daily_limit_is_independent_per_user(tmp_path: Path, monkeypatch):
+def test_group_daily_limit_default_is_copied_per_user_and_independent(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 
@@ -61,10 +61,11 @@ def test_group_free_small_daily_limit_is_independent_per_user(tmp_path: Path, mo
         exceeded = client.post("/ai/generate-image", headers=first_headers, json=PAYLOAD)
 
         assert exceeded.status_code == 429
-        assert exceeded.json()["limit_scope"] == "group"
+        assert exceeded.json()["limit_scope"] == "user"
+        assert exceeded.json()["limit"] == 1
 
 
-def test_stricter_group_limit_wins_over_user_limit(tmp_path: Path, monkeypatch):
+def test_user_level_limit_overrides_group_default(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 
@@ -80,11 +81,12 @@ def test_stricter_group_limit_wins_over_user_limit(tmp_path: Path, monkeypatch):
         headers = {"Authorization": f"Bearer {user['api_key']}"}
 
         assert client.post("/ai/generate-image", headers=headers, json=PAYLOAD).status_code == 201
+        assert client.post("/ai/generate-image", headers=headers, json=PAYLOAD).status_code == 201
         exceeded = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
 
         assert exceeded.status_code == 429
-        assert exceeded.json()["limit_scope"] == "group"
-        assert exceeded.json()["limit"] == 1
+        assert exceeded.json()["limit_scope"] == "user"
+        assert exceeded.json()["limit"] == 2
 
 
 def test_free_small_daily_reservation_is_released_on_timeout(tmp_path: Path, monkeypatch):

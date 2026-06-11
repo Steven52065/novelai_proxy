@@ -206,6 +206,7 @@ class Database:
             self._add_column_if_missing("users", "deleted_at", "TEXT")
             self._add_column_if_missing("user_groups", "free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0")
             self._add_column_if_missing("user_groups", "free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0")
+            self._migrate_group_daily_limit_into_members()
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id)")
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_group_rate_limit_rules_group_id ON group_rate_limit_rules(group_id)"
@@ -632,6 +633,34 @@ class Database:
             END;
             """
         )
+
+    def _migrate_group_daily_limit_into_members(self) -> None:
+        """一次性迁移：把用户组的每日免费小图限制复制到成员的用户级配置。
+
+        每日限制曾经在运行时按"用户与组中较严格者"生效；改为仅以用户自身配置生效后，
+        需要把启用了该限制的启用组的配置，复制给组内未单独启用限制的用户，
+        避免升级后这些用户的限制凭空消失。
+        """
+        version = int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+        if version >= 1:
+            return
+        self.conn.execute(
+            """
+            UPDATE users
+            SET free_small_daily_limit_enabled = (
+                    SELECT g.free_small_daily_limit_enabled FROM user_groups g WHERE g.id = users.group_id
+                ),
+                free_small_daily_limit = (
+                    SELECT g.free_small_daily_limit FROM user_groups g WHERE g.id = users.group_id
+                )
+            WHERE deleted_at IS NULL
+              AND free_small_daily_limit_enabled = 0
+              AND group_id IN (
+                  SELECT id FROM user_groups WHERE is_active = 1 AND free_small_daily_limit_enabled = 1
+              )
+            """
+        )
+        self.conn.execute("PRAGMA user_version = 1")
 
     def _migrate_usage_logs_unique_constraint(self) -> None:
         """迁移 usage_logs 表的唯一约束，从 request_id 改为 (request_id, attempt_number)"""

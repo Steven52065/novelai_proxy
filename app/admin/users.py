@@ -255,12 +255,8 @@ async def create_user_form(
     if not has_admin_session(request):
         return RedirectResponse("/admin/login", status_code=303)
     parsed_group_id = _parse_optional_form_int(group_id)
-    daily_limit_payload = {
-        "free_small_daily_limit_enabled": free_small_daily_limit_enabled == "on",
-        "free_small_daily_limit": free_small_daily_limit,
-    }
     if use_group_defaults == "on" and parsed_group_id is not None:
-        payload = CreateUserRequest(name=name, group_id=parsed_group_id, **daily_limit_payload)
+        payload = CreateUserRequest(name=name, group_id=parsed_group_id)
     else:
         payload = CreateUserRequest(
             name=name,
@@ -270,7 +266,8 @@ async def create_user_form(
             reset_period=reset_period,
             reset_day=reset_day,
             free_small_only=free_small_only == "on",
-            **daily_limit_payload,
+            free_small_daily_limit_enabled=free_small_daily_limit_enabled == "on",
+            free_small_daily_limit=free_small_daily_limit,
             allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
         )
@@ -355,8 +352,6 @@ async def update_user_form(
     payload_data = {
         "name": name,
         "is_active": is_active == "on",
-        "free_small_daily_limit_enabled": free_small_daily_limit_enabled == "on",
-        "free_small_daily_limit": free_small_daily_limit,
     }
     if apply_group_defaults == "on":
         payload_data.update(
@@ -372,6 +367,8 @@ async def update_user_form(
             {
                 "tier": tier,
                 "free_small_only": free_small_only == "on",
+                "free_small_daily_limit_enabled": free_small_daily_limit_enabled == "on",
+                "free_small_daily_limit": free_small_daily_limit,
                 "anlas_total": anlas_total,
                 "reset_period": reset_period,
                 "reset_day": reset_day,
@@ -454,7 +451,6 @@ async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: i
 
 
 def _build_create_user_input(db: Database, payload: CreateUserRequest) -> CreateUserInput:
-    _validate_free_small_daily_limit(payload.free_small_daily_limit_enabled, payload.free_small_daily_limit)
     defaults = None
     if payload.group_id is not None:
         defaults = group_defaults(get_enabled_group(db, payload.group_id))
@@ -465,6 +461,9 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
             return getattr(payload, field_name)
         return defaults[field_name]
 
+    free_small_daily_limit_enabled = bool(value("free_small_daily_limit_enabled"))
+    free_small_daily_limit = int(value("free_small_daily_limit"))
+    _validate_free_small_daily_limit(free_small_daily_limit_enabled, free_small_daily_limit)
     reset_period = str(value("reset_period"))
     reset_day = _normalize_reset_day_or_400(reset_period, value("reset_day"))
     return CreateUserInput(
@@ -472,8 +471,8 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
         group_id=payload.group_id,
         tier=str(value("tier")),
         free_small_only=bool(value("free_small_only")),
-        free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
-        free_small_daily_limit=payload.free_small_daily_limit,
+        free_small_daily_limit_enabled=free_small_daily_limit_enabled,
+        free_small_daily_limit=free_small_daily_limit,
         allowed_endpoints=list(value("allowed_endpoints")),
         allowed_upstreams=list(value("allowed_upstreams")),
         anlas_total=int(value("anlas_total")),
@@ -487,7 +486,6 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
     update_group_id = "group_id" in fields_set
     if update_group_id and payload.group_id is not None:
         get_enabled_group(db, payload.group_id)
-    _validate_update_free_small_daily_limit(db, user_id, payload, fields_set)
 
     defaults = None
     if payload.apply_group_defaults:
@@ -503,6 +501,9 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
             return defaults[field_name]
         return None
 
+    free_small_daily_limit_enabled = optional_value("free_small_daily_limit_enabled")
+    free_small_daily_limit = optional_value("free_small_daily_limit")
+    _validate_update_free_small_daily_limit(db, user_id, free_small_daily_limit_enabled, free_small_daily_limit)
     allowed_endpoints = optional_value("allowed_endpoints")
     allowed_upstreams = optional_value("allowed_upstreams")
     reset_period_value = optional_value("reset_period")
@@ -520,9 +521,9 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         is_active=payload.is_active if "is_active" in fields_set else None,
         free_small_only=optional_value("free_small_only"),
         free_small_daily_limit_enabled=(
-            payload.free_small_daily_limit_enabled if "free_small_daily_limit_enabled" in fields_set else None
+            bool(free_small_daily_limit_enabled) if free_small_daily_limit_enabled is not None else None
         ),
-        free_small_daily_limit=payload.free_small_daily_limit if "free_small_daily_limit" in fields_set else None,
+        free_small_daily_limit=int(free_small_daily_limit) if free_small_daily_limit is not None else None,
         allowed_endpoints=list(allowed_endpoints) if allowed_endpoints is not None else None,
         allowed_upstreams=list(allowed_upstreams) if allowed_upstreams is not None else None,
         anlas_total=optional_value("anlas_total"),
@@ -555,10 +556,10 @@ def _normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int
 def _validate_update_free_small_daily_limit(
     db: Database,
     user_id: int,
-    payload: UpdateUserRequest,
-    fields_set: set[str],
+    enabled: bool | None,
+    limit: int | None,
 ) -> None:
-    if "free_small_daily_limit_enabled" not in fields_set and "free_small_daily_limit" not in fields_set:
+    if enabled is None and limit is None:
         return
     row = db.query_one(
         "SELECT free_small_daily_limit_enabled, free_small_daily_limit FROM users WHERE id = ? AND deleted_at IS NULL",
@@ -566,17 +567,9 @@ def _validate_update_free_small_daily_limit(
     )
     if row is None:
         raise HTTPException(status_code=404, detail={"message": "User not found"})
-    enabled = (
-        bool(payload.free_small_daily_limit_enabled)
-        if "free_small_daily_limit_enabled" in fields_set
-        else bool(row["free_small_daily_limit_enabled"])
-    )
-    limit = (
-        int(payload.free_small_daily_limit)
-        if "free_small_daily_limit" in fields_set and payload.free_small_daily_limit is not None
-        else int(row["free_small_daily_limit"] or 0)
-    )
-    _validate_free_small_daily_limit(enabled, limit)
+    effective_enabled = bool(enabled) if enabled is not None else bool(row["free_small_daily_limit_enabled"])
+    effective_limit = int(limit) if limit is not None else int(row["free_small_daily_limit"] or 0)
+    _validate_free_small_daily_limit(effective_enabled, effective_limit)
 
 
 def _validate_free_small_daily_limit(enabled: bool, limit: int) -> None:

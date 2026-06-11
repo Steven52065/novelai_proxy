@@ -11,6 +11,26 @@
   </a>
 </div>
 
+{% if saved %}
+<section class="notice" style="animation: fadeIn 0.4s ease-out;">
+  <div style="display: flex; align-items: center; gap: 10px;">
+    <i data-lucide="check-circle-2" style="width: 20px; height: 20px; stroke: #93c5fd; flex-shrink: 0;"></i>
+    <span>
+      已保存组默认配置。
+      {% if propagated is not none %}
+        {% if propagate_scope == "all" %}
+        已按「覆盖全部成员」更新了 {{ propagated }} 个成员的设置。
+        {% else %}
+        已按「仅覆盖跟随组配置的成员」更新了 {{ propagated }} 个成员的设置。
+        {% endif %}
+      {% else %}
+      未修改任何成员的设置。
+      {% endif %}
+    </span>
+  </div>
+</section>
+{% endif %}
+
 <div class="layout-grid">
   <div class="stack">
     <section class="panel" style="margin-bottom: 0;">
@@ -30,6 +50,7 @@
       </div>
 
       <form id="group-settings-form" method="post" action="/admin/user-groups/{{ group.id }}" class="stack">
+        <input type="hidden" name="propagate_scope" value="unmodified">
         <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
           <label>
             组名称
@@ -133,6 +154,7 @@
         同步到成员
       </h2>
       <form method="post" action="/admin/user-groups/{{ group.id }}/sync-members" class="stack">
+        <p class="muted" style="font-size: 12px; margin: 0;">把当前组默认配置强制覆盖到全部成员的所选字段。保存默认配置时也会弹窗按需覆盖，此处用于事后手动补齐。</p>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="tier">
@@ -141,6 +163,10 @@
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="free_small_only">
             免费小图策略
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="free_small_daily_limit">
+            免费小图单日限制
           </label>
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="allowed_endpoints">
@@ -292,4 +318,156 @@
     </section>
   </div>
 </div>
+
+<div id="propagate-overlay" style="position: fixed; inset: 0; background: rgba(3,4,9,0.6); backdrop-filter: blur(4px); z-index: 999; display: none;"></div>
+<div id="propagate-modal" role="dialog" aria-modal="true" aria-labelledby="propagate-modal-title" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; display: none; width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow-y: auto;">
+  <section class="panel" style="margin: 0;">
+    <h2 id="propagate-modal-title" style="font-size: 18px; margin-bottom: 8px;">
+      <i data-lucide="users-round" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+      把组配置覆盖到成员？
+    </h2>
+    <p class="muted" style="font-size: 13px; margin-bottom: 14px;">
+      以下组默认配置将发生变化。可以把新值直接写入成员的用户配置，使成员设置与组保持一致。
+    </p>
+    <div id="propagate-changes" class="stack" style="gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: var(--border-radius-md); padding: 14px; margin-bottom: 16px; font-size: 13px;"></div>
+    <div class="stack" style="gap: 10px; margin-bottom: 18px;">
+      <label class="check" style="color: #cbd5e1; font-weight: 500; align-items: flex-start;">
+        <input type="radio" name="propagate-choice" value="unmodified" checked style="margin-top: 3px;">
+        <span>仅覆盖跟随组配置的成员（默认）<br><span class="muted" style="font-size: 12px; font-weight: 400;">只更新当前设置仍与修改前组配置一致的成员，手动改过的成员保持不变。</span></span>
+      </label>
+      <label class="check" style="color: #cbd5e1; font-weight: 500; align-items: flex-start;">
+        <input type="radio" name="propagate-choice" value="all" style="margin-top: 3px;">
+        <span>覆盖全部成员<br><span class="muted" style="font-size: 12px; font-weight: 400;">包括手动修改过设置的成员，全部改为新的组配置。</span></span>
+      </label>
+      <label class="check" style="color: #cbd5e1; font-weight: 500; align-items: flex-start;">
+        <input type="radio" name="propagate-choice" value="none" style="margin-top: 3px;">
+        <span>仅保存组配置<br><span class="muted" style="font-size: 12px; font-weight: 400;">不修改任何成员，组配置只对之后新建的成员生效。</span></span>
+      </label>
+    </div>
+    <div style="display: flex; gap: 12px; justify-content: flex-end;">
+      <button type="button" class="secondary" id="propagate-cancel" style="min-height: 40px; padding: 0 18px;">取消</button>
+      <button type="button" id="propagate-confirm" style="min-height: 40px; padding: 0 22px;">
+        <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+        保存
+      </button>
+    </div>
+  </section>
+</div>
+
+<script>
+  (function () {
+    const form = document.getElementById("group-settings-form");
+    const overlay = document.getElementById("propagate-overlay");
+    const modal = document.getElementById("propagate-modal");
+    const changesBox = document.getElementById("propagate-changes");
+    const cancelButton = document.getElementById("propagate-cancel");
+    const confirmButton = document.getElementById("propagate-confirm");
+    const scopeInput = form.querySelector('input[name="propagate_scope"]');
+
+    function checkedValues(name) {
+      return Array.from(form.querySelectorAll('input[name="' + name + '"]:checked')).map((input) => input.value);
+    }
+
+    function intValue(name) {
+      const value = parseInt(form.elements[name].value, 10);
+      return Number.isNaN(value) ? 0 : value;
+    }
+
+    function buildPayload() {
+      return {
+        name: form.elements["name"].value,
+        is_active: form.elements["is_active"].checked,
+        default_tier: form.elements["default_tier"].value,
+        default_free_small_only: form.elements["default_free_small_only"].checked,
+        free_small_daily_limit_enabled: form.elements["free_small_daily_limit_enabled"].checked,
+        free_small_daily_limit: intValue("free_small_daily_limit"),
+        default_allowed_endpoints: checkedValues("default_allowed_endpoints"),
+        default_allowed_upstreams: checkedValues("default_allowed_upstreams"),
+        default_anlas_total: intValue("default_anlas_total"),
+        default_reset_period: form.elements["default_reset_period"].value,
+        default_reset_day: intValue("default_reset_day"),
+      };
+    }
+
+    function escapeHtml(value) {
+      const div = document.createElement("div");
+      div.textContent = String(value);
+      return div.innerHTML;
+    }
+
+    function renderPreview(preview) {
+      const rows = preview.fields.map((field) => {
+        return (
+          '<div style="display: flex; flex-direction: column; gap: 2px;">' +
+          '<strong style="color: #e2e8f0;">' + escapeHtml(field.label) + "</strong>" +
+          '<span class="muted">' + escapeHtml(field.old) + ' <span style="color: #f59e0b;">→</span> ' + escapeHtml(field.new) + "</span>" +
+          '<span class="muted" style="font-size: 12px;">' +
+          escapeHtml(field.unmodified_count) + " / " + escapeHtml(preview.member_count) +
+          " 名成员当前跟随组配置</span>" +
+          "</div>"
+        );
+      });
+      changesBox.innerHTML = rows.join("");
+    }
+
+    function openModal() {
+      overlay.style.display = "block";
+      modal.style.display = "block";
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    }
+
+    function closeModal() {
+      overlay.style.display = "none";
+      modal.style.display = "none";
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      fetch("/admin/api/user-groups/{{ group.id }}/propagation-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(buildPayload()),
+      })
+        .then(async function (response) {
+          if (!response.ok) {
+            const body = await response.json().catch(function () { return null; });
+            const detail = body && (body.detail || body);
+            const message = detail && detail.message ? detail.message : "保存预检失败（HTTP " + response.status + "）";
+            throw new Error(message);
+          }
+          return response.json();
+        })
+        .then(function (preview) {
+          if (!preview.fields.length || !preview.member_count) {
+            scopeInput.value = "none";
+            form.submit();
+            return;
+          }
+          renderPreview(preview);
+          openModal();
+        })
+        .catch(function (error) {
+          alert(error.message || "无法获取覆盖预览，请重试。");
+        });
+    });
+
+    confirmButton.addEventListener("click", function () {
+      const choice = modal.querySelector('input[name="propagate-choice"]:checked');
+      scopeInput.value = choice ? choice.value : "unmodified";
+      closeModal();
+      form.submit();
+    });
+
+    cancelButton.addEventListener("click", closeModal);
+    overlay.addEventListener("click", closeModal);
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && modal.style.display === "block") {
+        closeModal();
+      }
+    });
+  })();
+</script>
 {% endblock %}

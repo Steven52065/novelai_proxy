@@ -185,6 +185,11 @@ def test_account_shows_group_daily_usage_and_hides_zero_anlas_quota(tmp_path: Pa
     with TestClient(app) as client:
         _complete_discord_login(client)
         user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        user_row = client.app.state.db.query_one(
+            "SELECT free_small_daily_limit_enabled, free_small_daily_limit FROM users WHERE id = ?",
+            (user_id,),
+        )
+        assert dict(user_row) == {"free_small_daily_limit_enabled": 1, "free_small_daily_limit": 4}
 
         daily_manager = client.app.state.free_small_daily_limit_manager
         used_reservation = daily_manager.reserve(user_id, 1)

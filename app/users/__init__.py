@@ -1,4 +1,6 @@
 from .groups import (
+    MEMBER_FIELD_LABELS,
+    PROPAGATE_SCOPES,
     UserGroupInput,
     UserGroupUpdateInput,
     apply_group_defaults,
@@ -8,8 +10,10 @@ from .groups import (
     get_group,
     group_defaults,
     list_groups,
+    preview_group_propagation,
     sync_group_members,
     update_group,
+    update_group_with_propagation,
 )
 from .service import (
     CreateUserInput,
@@ -25,6 +29,8 @@ from .service import (
 __all__ = [
     "CreateUserInput",
     "CreatedUser",
+    "MEMBER_FIELD_LABELS",
+    "PROPAGATE_SCOPES",
     "UpdateUserInput",
     "UserGroupInput",
     "UserGroupUpdateInput",
@@ -38,8 +44,10 @@ __all__ = [
     "get_group",
     "group_defaults",
     "list_groups",
+    "preview_group_propagation",
     "reset_api_key",
     "sync_group_members",
     "update_group",
+    "update_group_with_propagation",
     "update_user",
 ]

@@ -163,34 +163,19 @@ class FreeSmallDailyLimitManager:
             )
 
     def _effective_limit(self, conn: Connection, user_id: int) -> _EffectiveLimit | None:
+        # 用户组的每日限制只作为批量写入用户配置的默认值，运行时仅以用户自身配置为准。
         row = conn.execute(
             """
-            SELECT u.free_small_daily_limit_enabled AS user_enabled,
-                   u.free_small_daily_limit AS user_limit,
-                   g.is_active AS group_is_active,
-                   g.free_small_daily_limit_enabled AS group_enabled,
-                   g.free_small_daily_limit AS group_limit
-            FROM users u
-            LEFT JOIN user_groups g ON g.id = u.group_id
-            WHERE u.id = ? AND u.deleted_at IS NULL
+            SELECT free_small_daily_limit_enabled AS enabled,
+                   free_small_daily_limit AS limit_value
+            FROM users
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (user_id,),
         ).fetchone()
-        if row is None:
+        if row is None or not int(row["enabled"] or 0):
             return None
-
-        candidates: list[tuple[str, int]] = []
-        if int(row["user_enabled"] or 0):
-            candidates.append(("user", int(row["user_limit"] or 0)))
-        if int(row["group_is_active"] or 0) and int(row["group_enabled"] or 0):
-            candidates.append(("group", int(row["group_limit"] or 0)))
-        if not candidates:
-            return None
-
-        limit = min(limit for _, limit in candidates)
-        strict_scopes = [scope for scope, candidate_limit in candidates if candidate_limit == limit]
-        scope = strict_scopes[0] if len(strict_scopes) == 1 else "user+group"
-        return _EffectiveLimit(scope=scope, limit=limit)
+        return _EffectiveLimit(scope="user", limit=int(row["limit_value"] or 0))
 
     @staticmethod
     def _usage_for_window(conn: Connection, user_id: int, window_start: str) -> tuple[int, int]:
