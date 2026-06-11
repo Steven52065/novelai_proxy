@@ -162,6 +162,21 @@ class FreeSmallDailyLimitManager:
                 ),
             )
 
+    def reset_usage(self, user_id: int, *, now: datetime | None = None) -> None:
+        # 管理员手动重置：只清零当前窗口的用量，窗口边界由时钟决定，
+        # 因此每日自动重置周期不受影响。
+        now = _coerce_datetime(now)
+        window_start, _ = _current_window(now, self.reset_hour_utc8)
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE free_small_daily_usage
+                SET used = 0, reserved = 0, updated_at = ?
+                WHERE user_id = ? AND window_start = ?
+                """,
+                (utc_now_iso(), user_id, window_start),
+            )
+
     def _effective_limit(self, conn: Connection, user_id: int) -> _EffectiveLimit | None:
         # 用户组的每日限制只作为批量写入用户配置的默认值，运行时仅以用户自身配置为准。
         row = conn.execute(

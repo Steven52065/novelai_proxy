@@ -5,12 +5,25 @@
     <i data-lucide="users" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
     用户管理
   </h1>
-  <!-- Open Drawer Trigger Button -->
-  <button type="button" id="open-drawer-btn">
-    <i data-lucide="user-plus" style="width: 18px; height: 18px;"></i>
-    创建新用户
-  </button>
+  <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+    <button type="button" id="bulk-reset-anlas-btn" class="secondary" disabled>
+      <i data-lucide="rotate-ccw" style="width: 16px; height: 16px;"></i>
+      重置Anlas点数
+    </button>
+    <button type="button" id="bulk-reset-daily-btn" class="secondary" disabled>
+      <i data-lucide="image" style="width: 16px; height: 16px;"></i>
+      重置日小图
+    </button>
+    <!-- Open Drawer Trigger Button -->
+    <button type="button" id="open-drawer-btn">
+      <i data-lucide="user-plus" style="width: 18px; height: 18px;"></i>
+      创建新用户
+    </button>
+  </div>
 </div>
+
+<!-- 批量重置提交用隐藏表单（JS 填充选中的 user_ids 后提交） -->
+<form id="bulk-reset-form" method="post" style="display: none;"></form>
 
 <!-- Slide-over Drawer System -->
 <div class="drawer-container">
@@ -163,6 +176,10 @@
     <table>
       <thead>
         <tr>
+          <th style="width: 36px;">
+            <input id="select-all-users" type="checkbox" title="全选/取消全选"
+                   style="width: 18px; height: 18px; min-height: auto; accent-color: var(--primary); cursor: pointer;">
+          </th>
           <th>ID</th>
           <th>备注名</th>
           <th>用户组</th>
@@ -178,6 +195,10 @@
       <tbody>
         {% for user in users %}
         <tr>
+          <td>
+            <input type="checkbox" class="user-select" value="{{ user.id }}" aria-label="选择用户 {{ user.name }}"
+                   style="width: 18px; height: 18px; min-height: auto; accent-color: var(--primary); cursor: pointer;">
+          </td>
           <td style="font-weight: 600; color: #64748b;">#{{ user.id }}</td>
           <td>
             <div style="font-weight: 700; color: #fff;">{{ user.name }}</div>
@@ -347,5 +368,77 @@
   if (drawerOverlay) {
     drawerOverlay.addEventListener("click", hideDrawer);
   }
+
+  // 批量重置：多选框联动与表单提交
+  const bulkResetForm = document.getElementById("bulk-reset-form");
+  const bulkResetAnlasBtn = document.getElementById("bulk-reset-anlas-btn");
+  const bulkResetDailyBtn = document.getElementById("bulk-reset-daily-btn");
+  const selectAllUsers = document.getElementById("select-all-users");
+  const userSelectBoxes = Array.from(document.querySelectorAll(".user-select"));
+
+  function selectedUserIds() {
+    return userSelectBoxes.filter((box) => box.checked).map((box) => box.value);
+  }
+
+  function refreshBulkResetState() {
+    const count = selectedUserIds().length;
+    [bulkResetAnlasBtn, bulkResetDailyBtn].forEach((button) => {
+      if (button) button.disabled = count === 0;
+    });
+    if (selectAllUsers) {
+      selectAllUsers.checked = userSelectBoxes.length > 0 && count === userSelectBoxes.length;
+      selectAllUsers.indeterminate = count > 0 && count < userSelectBoxes.length;
+    }
+  }
+
+  function submitBulkReset(action, confirmMessage) {
+    const ids = selectedUserIds();
+    if (!ids.length) {
+      showToast("请先勾选要操作的用户。");
+      return;
+    }
+    if (!confirm(confirmMessage)) return;
+    bulkResetForm.innerHTML = "";
+    ids.forEach((id) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "user_ids";
+      input.value = id;
+      bulkResetForm.appendChild(input);
+    });
+    bulkResetForm.action = action;
+    bulkResetForm.submit();
+  }
+
+  userSelectBoxes.forEach((box) => box.addEventListener("change", refreshBulkResetState));
+
+  if (selectAllUsers) {
+    selectAllUsers.addEventListener("change", () => {
+      userSelectBoxes.forEach((box) => { box.checked = selectAllUsers.checked; });
+      refreshBulkResetState();
+    });
+  }
+
+  if (bulkResetAnlasBtn) {
+    bulkResetAnlasBtn.addEventListener("click", () => {
+      const count = selectedUserIds().length;
+      submitBulkReset(
+        "/admin/users/bulk-reset-anlas",
+        `确认要为选中的 ${count} 个用户重置 Anlas 消耗吗？已用和锁定额度将清零，不影响原有的自动重置周期。`
+      );
+    });
+  }
+
+  if (bulkResetDailyBtn) {
+    bulkResetDailyBtn.addEventListener("click", () => {
+      const count = selectedUserIds().length;
+      submitBulkReset(
+        "/admin/users/bulk-reset-free-small-daily",
+        `确认要为选中的 ${count} 个用户重置今日免费小图用量吗？今日已用和锁定数量将清零，不影响每日自动重置周期。`
+      );
+    });
+  }
+
+  refreshBulkResetState();
 </script>
 {% endblock %}

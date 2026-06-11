@@ -116,16 +116,24 @@ class QuotaManager:
             (user_id, total, reset_period, reset_day, now, now),
         )
 
-    def reset_usage(self, user_id: int) -> None:
+    def reset_usage(self, user_id: int, *, update_last_reset_at: bool = True) -> None:
+        # update_last_reset_at=False 表示周期外的额外重置：只清零用量，
+        # 保留 last_reset_at，使下一次自动重置时间不受影响。
         with self.db.transaction() as conn:
-            conn.execute(
-                """
-                UPDATE user_anlas_quota
-                SET used = 0, reserved = 0, last_reset_at = ?
-                WHERE user_id = ?
-                """,
-                (utc_now_iso(), user_id),
-            )
+            if update_last_reset_at:
+                conn.execute(
+                    """
+                    UPDATE user_anlas_quota
+                    SET used = 0, reserved = 0, last_reset_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (utc_now_iso(), user_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE user_anlas_quota SET used = 0, reserved = 0 WHERE user_id = ?",
+                    (user_id,),
+                )
 
     def reset_if_due(self, user_id: int) -> bool:
         row = self.db.query_one(

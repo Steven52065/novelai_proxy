@@ -73,6 +73,10 @@ class RateLimitRuleRequest(BaseModel):
     is_active: bool = True
 
 
+class BulkUserIdsRequest(BaseModel):
+    user_ids: list[int] = Field(..., min_length=1)
+
+
 @api_router.get("/users", dependencies=[Depends(require_admin)])
 async def list_users(request: Request):
     db: Database = request.app.state.db
@@ -109,6 +113,29 @@ async def create_user(payload: CreateUserRequest, request: Request):
     )
     _notify_dashboard_change(request)
     return {"user_id": created.user_id, "api_key": created.api_key}
+
+
+@api_router.post("/users/bulk-reset-anlas", dependencies=[Depends(require_admin)])
+async def bulk_reset_anlas(payload: BulkUserIdsRequest, request: Request):
+    db: Database = request.app.state.db
+    user_ids = _normalize_bulk_user_ids(db, payload.user_ids)
+    quota_manager = request.app.state.quota_manager
+    for user_id in user_ids:
+        # 额外重置：不更新 last_reset_at，保持原有自动重置周期不变。
+        quota_manager.reset_usage(user_id, update_last_reset_at=False)
+    _notify_dashboard_change(request)
+    return {"ok": True, "user_ids": user_ids}
+
+
+@api_router.post("/users/bulk-reset-free-small-daily", dependencies=[Depends(require_admin)])
+async def bulk_reset_free_small_daily(payload: BulkUserIdsRequest, request: Request):
+    db: Database = request.app.state.db
+    user_ids = _normalize_bulk_user_ids(db, payload.user_ids)
+    manager = request.app.state.free_small_daily_limit_manager
+    for user_id in user_ids:
+        manager.reset_usage(user_id)
+    _notify_dashboard_change(request)
+    return {"ok": True, "user_ids": user_ids}
 
 
 @api_router.patch("/users/{user_id}", dependencies=[Depends(require_admin)])
@@ -278,6 +305,27 @@ async def create_user_form(
     response = RedirectResponse("/admin/users", status_code=303)
     _set_api_key_flash(response, request, result["api_key"])
     return response
+
+
+# 注意：批量路由必须先于 POST /users/{user_id} 注册，否则会被路径参数路由捕获。
+@web_router.post("/users/bulk-reset-anlas")
+async def bulk_reset_anlas_form(request: Request, user_ids: list[int] | None = Form(None)):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    if not user_ids:
+        raise HTTPException(status_code=400, detail={"message": "No users selected"})
+    await bulk_reset_anlas(BulkUserIdsRequest(user_ids=user_ids), request)
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@web_router.post("/users/bulk-reset-free-small-daily")
+async def bulk_reset_free_small_daily_form(request: Request, user_ids: list[int] | None = Form(None)):
+    if not has_admin_session(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    if not user_ids:
+        raise HTTPException(status_code=400, detail={"message": "No users selected"})
+    await bulk_reset_free_small_daily(BulkUserIdsRequest(user_ids=user_ids), request)
+    return RedirectResponse("/admin/users", status_code=303)
 
 
 @web_router.get("/users/{user_id}", response_class=HTMLResponse)
@@ -530,6 +578,19 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         reset_period=reset_period,
         reset_day=reset_day,
     )
+
+
+def _normalize_bulk_user_ids(db: Database, user_ids: list[int]) -> list[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for user_id in user_ids:
+        uid = int(user_id)
+        if uid in seen:
+            continue
+        seen.add(uid)
+        ensure_user_exists(db, uid)
+        normalized.append(uid)
+    return normalized
 
 
 def _get_user_group_id(db: Database, user_id: int) -> int | None:

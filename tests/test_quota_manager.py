@@ -83,3 +83,30 @@ def test_quota_reset_if_due_clears_used_and_reserved(tmp_path):
         assert snapshot.available == 10
     finally:
         db.close()
+
+
+def test_quota_extra_reset_without_schedule_update_keeps_next_auto_reset(tmp_path):
+    db, manager, user_id = _quota_manager(tmp_path)
+    try:
+        manager.create_or_update(user_id, total=10, reset_period="day")
+        manager.reserve(user_id, 5)
+        manager.confirm(user_id, 5)
+        overdue_reset_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        db.execute(
+            "UPDATE user_anlas_quota SET last_reset_at = ? WHERE user_id = ?",
+            (overdue_reset_at, user_id),
+        )
+
+        manager.reset_usage(user_id, update_last_reset_at=False)
+
+        row = db.query_one(
+            "SELECT used, reserved, last_reset_at FROM user_anlas_quota WHERE user_id = ?",
+            (user_id,),
+        )
+        assert row["used"] == 0
+        assert row["reserved"] == 0
+        assert row["last_reset_at"] == overdue_reset_at
+        # 周期未被推迟：原本已到期的自动重置依然会触发。
+        assert manager.reset_if_due(user_id) is True
+    finally:
+        db.close()
