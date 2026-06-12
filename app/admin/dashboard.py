@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger
 from .auth import has_admin_session, require_admin_or_session
@@ -189,7 +190,8 @@ def _dashboard_stats(request: Request | WebSocket) -> dict:
     total_users = db.query_one("SELECT COUNT(*) AS c FROM users WHERE deleted_at IS NULL")["c"]
     today_requests = _request_count_for_range(db, today_start, today_end)
     total_anlas = db.query_one(
-        "SELECT COALESCE(SUM(anlas_cost), 0) AS c FROM dashboard_hourly_stats WHERE upstream_id = '__all__'"
+        "SELECT COALESCE(SUM(anlas_cost), 0) AS c FROM dashboard_hourly_stats WHERE upstream_id = ?",
+        (ALL_UPSTREAMS,),
     )["c"]
     return {
         "total_users": total_users,
@@ -365,14 +367,14 @@ def _request_count_for_range(db: Database, start: datetime, end: datetime, upstr
           AND bucket_hour < ?
           AND upstream_id = ?
         """,
-        (_hour_bucket(start), _hour_bucket(end), _stats_upstream_id(upstream_id)),
+        (hour_bucket(start), hour_bucket(end), _stats_upstream_id(upstream_id)),
     )
     return int(row["c"] or 0)
 
 
 def _hour_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
-    start_bucket = _hour_bucket(start)
-    end_bucket = _hour_bucket(end)
+    start_bucket = hour_bucket(start)
+    end_bucket = hour_bucket(end)
     stats_upstream_id = _stats_upstream_id(upstream_id)
     return db.query_all(
         """
@@ -420,11 +422,9 @@ def _hour_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id:
             stats_upstream_id,
         ),
     )
-
-
 def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
-    start_bucket = _hour_bucket(start)
-    end_bucket = _hour_bucket(end)
+    start_bucket = hour_bucket(start)
+    end_bucket = hour_bucket(end)
     stats_upstream_id = _stats_upstream_id(upstream_id)
     return db.query_all(
         """
@@ -475,12 +475,7 @@ def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id:
 
 
 def _stats_upstream_id(upstream_id: str | None) -> str:
-    return upstream_id or "__all__"
-
-
-def _hour_bucket(value: datetime) -> str:
-    local = value.astimezone(DISPLAY_TIMEZONE).replace(minute=0, second=0, microsecond=0)
-    return local.strftime("%Y-%m-%dT%H:00:00+08:00")
+    return upstream_id or ALL_UPSTREAMS
 
 
 def _date_index_map(start: datetime, bucket_count: int) -> dict[str, int]:
