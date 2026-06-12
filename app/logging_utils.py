@@ -10,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import LoggingConfig
@@ -111,6 +112,18 @@ class RequestLoggingMiddleware:
                 _client_addr(scope),
                 json_dumps(_safe_headers(scope)),
             )
+
+
+def mark_request_total_duration(request: Request, request_id: str | None) -> None:
+    """按 RequestLoggingMiddleware 记录的起始时间，把请求总耗时写入 usage_logs。"""
+    if not request_id:
+        return
+    started_at = getattr(request.state, "request_started_at", None)
+    try:
+        total_ms = int((time.perf_counter() - float(started_at)) * 1000)
+    except (TypeError, ValueError):
+        return
+    request.app.state.usage_logs.mark_total_duration(request_id, max(0, total_ms))
 
 
 def archive_zip_images(

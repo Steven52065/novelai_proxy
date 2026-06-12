@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-import time
 import traceback
 from typing import Any, NoReturn
 from urllib.parse import urlsplit, urlunsplit
@@ -13,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..admin.common import templates
+from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database
 from ..logging_utils import json_dumps, logger
 from ..users import reset_api_key
@@ -28,10 +28,10 @@ SESSION_COOKIE = "novelai_proxy_self_service_session"
 API_KEY_FLASH_COOKIE = "novelai_proxy_self_service_key_flash"
 OAUTH_STATE_TTL_SECONDS = 5 * 60
 SESSION_TTL_SECONDS = 7 * 24 * 3600
-API_KEY_FLASH_TTL_SECONDS = 5 * 60
 SENSITIVE_OAUTH_FIELDS = {"access_token", "refresh_token", "client_secret", "token", "authorization"}
 SENSITIVE_QUERY_FIELDS = {"code", "state", "access_token", "refresh_token", "client_secret", "token"}
 REDACTED = "[redacted]"
+_api_key_flash = ApiKeyFlashStore(cookie_name=API_KEY_FLASH_COOKIE, state_attr="self_service_api_key_flash_store")
 
 
 @router.get("/signup", response_class=HTMLResponse)
@@ -109,7 +109,7 @@ async def discord_callback(request: Request, code: str | None = None, state: str
     _set_session_cookie(response, config.session_secret, login.user_id)
     response.delete_cookie(OAUTH_STATE_COOKIE)
     if login.api_key is not None:
-        _set_api_key_flash(response, request, login.user_id, login.api_key)
+        _api_key_flash.set_flash(response, request, login.api_key, owner_id=login.user_id)
     return response
 
 
@@ -143,7 +143,7 @@ async def account_page(request: Request):
     quota = request.app.state.quota_manager.get_snapshot(user_id)
     free_small_daily = request.app.state.free_small_daily_limit_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
-    new_api_key = _pop_api_key_flash(request, user_id)
+    new_api_key = _api_key_flash.pop_flash(request, owner_id=user_id)
     response = templates.TemplateResponse(
         request,
         "account.html",
@@ -172,7 +172,7 @@ async def account_reset_key(request: Request):
     _ensure_self_service_account_active(request.app.state.db, user_id)
     api_key = reset_api_key(request.app.state.db, user_id)
     response = RedirectResponse("/account", status_code=303)
-    _set_api_key_flash(response, request, user_id, api_key)
+    _api_key_flash.set_flash(response, request, api_key, owner_id=user_id)
     return response
 
 
@@ -331,51 +331,6 @@ def _ensure_self_service_account_active(db: Database, user_id: int) -> None:
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
     if not int(user["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
-
-
-def _set_api_key_flash(response, request: Request, user_id: int, api_key: str) -> None:
-    token = secrets.token_urlsafe(24)
-    _cleanup_api_key_flash_store(request)
-    _api_key_flash_store(request)[token] = (user_id, api_key, time.monotonic() + API_KEY_FLASH_TTL_SECONDS)
-    response.set_cookie(
-        API_KEY_FLASH_COOKIE,
-        token,
-        max_age=API_KEY_FLASH_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-    )
-
-
-def _pop_api_key_flash(request: Request, user_id: int) -> str | None:
-    token = request.cookies.get(API_KEY_FLASH_COOKIE)
-    if not token:
-        return None
-    _cleanup_api_key_flash_store(request)
-    value = _api_key_flash_store(request).pop(token, None)
-    if value is None:
-        return None
-    stored_user_id, api_key, expires_at = value
-    if time.monotonic() > expires_at:
-        return None
-    if int(stored_user_id) != user_id:
-        return None
-    return api_key
-
-
-def _api_key_flash_store(request: Request) -> dict[str, tuple[int, str, float]]:
-    store = getattr(request.app.state, "self_service_api_key_flash_store", None)
-    if store is None:
-        store = {}
-        request.app.state.self_service_api_key_flash_store = store
-    return store
-
-
-def _cleanup_api_key_flash_store(request: Request) -> None:
-    now = time.monotonic()
-    store = _api_key_flash_store(request)
-    for token, (_, _, expires_at) in list(store.items()):
-        if expires_at <= now:
-            store.pop(token, None)
 
 
 def _optional_str(value) -> str | None:

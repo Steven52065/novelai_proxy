@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import io
-import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -11,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from novelai_python._exceptions import APIError
 
+from ..logging_utils import mark_request_total_duration
 from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 from .auth import require_admin_or_session, require_admin_page_session
@@ -129,7 +129,7 @@ async def _replay_log_source(source, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=502, detail={"message": str(exc)}) from exc
     finally:
-        _mark_total_duration(request, replay_request_id)
+        mark_request_total_duration(request, replay_request_id)
 
     return {
         "ok": True,
@@ -175,15 +175,6 @@ def _replay_endpoint(action: str, payload: dict) -> str | None:
 
 def _encode_vibe_endpoint() -> str:
     return "https://image.novelai.net/ai/encode-vibe"
-
-
-def _mark_total_duration(request: Request, request_id: str) -> None:
-    started_at = getattr(request.state, "request_started_at", None)
-    try:
-        total_ms = int((time.perf_counter() - float(started_at)) * 1000)
-    except (TypeError, ValueError):
-        return
-    request.app.state.usage_logs.mark_total_duration(request_id, max(0, total_ms))
 
 
 def _zip_images_to_data_urls(zip_payload: bytes) -> list[dict[str, str | int]]:

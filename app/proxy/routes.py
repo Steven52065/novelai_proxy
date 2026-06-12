@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Awaitable, Callable
 from json import JSONDecodeError
 from typing import Any
@@ -13,7 +12,7 @@ from novelai_python.sdk.ai.upscale import Upscale
 
 from ..auth import UserContext, get_current_user
 from ..costing import GenerateCostEstimator, GenerateCostInputs, IMAGE_ANLAS_PER_VIBE_ENCODING
-from ..logging_utils import dump_model_payload, logger
+from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
 from .service import MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 
 
@@ -330,7 +329,7 @@ async def _read_json_payload(request: Request, endpoint: str) -> tuple[Any, JSON
 
 
 def _task_result_to_response(request: Request, result: ProxyTaskResult) -> Response | JSONResponse:
-    _mark_total_duration(request, result.request_id)
+    mark_request_total_duration(request, result.request_id)
     if result.is_binary:
         return Response(
             content=result.content,
@@ -343,17 +342,6 @@ def _task_result_to_response(request: Request, result: ProxyTaskResult) -> Respo
         content=result.content,
         headers=result.headers,
     )
-
-
-def _mark_total_duration(request: Request, request_id: str | None) -> None:
-    if not request_id:
-        return
-    started_at = getattr(request.state, "request_started_at", None)
-    try:
-        total_ms = int((time.perf_counter() - float(started_at)) * 1000)
-    except (TypeError, ValueError):
-        return
-    request.app.state.usage_logs.mark_total_duration(request_id, max(0, total_ms))
 
 
 def _generate_metadata(params: GenerateCostInputs) -> dict[str, Any]:

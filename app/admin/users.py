@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import secrets
-import time
-
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database, utc_now_iso
 from ..users import (
     CreateUserInput,
@@ -39,7 +37,7 @@ from .common import (
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 API_KEY_FLASH_COOKIE = "novelai_proxy_api_key_flash"
-API_KEY_FLASH_TTL_SECONDS = 5 * 60
+_api_key_flash = ApiKeyFlashStore(cookie_name=API_KEY_FLASH_COOKIE, state_attr="admin_api_key_flash_store")
 
 
 class CreateUserRequest(BaseModel):
@@ -227,7 +225,7 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
 @web_router.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request):
     db: Database = request.app.state.db
-    new_api_key = _pop_api_key_flash(request)
+    new_api_key = _api_key_flash.pop_flash(request)
     rows = db.query_all(
         """
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
@@ -304,7 +302,7 @@ async def create_user_form(
         request,
     )
     response = RedirectResponse("/admin/users", status_code=303)
-    _set_api_key_flash(response, request, result["api_key"])
+    _api_key_flash.set_flash(response, request, result["api_key"])
     return response
 
 
@@ -328,7 +326,7 @@ async def bulk_reset_free_small_daily_form(request: Request, user_ids: list[int]
 @web_router.get("/users/{user_id}", response_class=HTMLResponse)
 async def user_edit_page(user_id: int, request: Request):
     db: Database = request.app.state.db
-    new_api_key = _pop_api_key_flash(request)
+    new_api_key = _api_key_flash.pop_flash(request)
     user = db.query_one(
         """
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
@@ -441,7 +439,7 @@ async def reset_quota_form(user_id: int, request: Request):
 async def reset_key_form(user_id: int, request: Request):
     result = await reset_user_key(user_id, request)
     response = RedirectResponse(f"/admin/users/{user_id}", status_code=303)
-    _set_api_key_flash(response, request, result["api_key"])
+    _api_key_flash.set_flash(response, request, result["api_key"])
     return response
 
 
@@ -638,46 +636,3 @@ def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
     )
     if row is None:
         raise HTTPException(status_code=404, detail={"message": "Rate limit rule not found"})
-
-
-def _set_api_key_flash(response: Response, request: Request, api_key: str) -> None:
-    token = secrets.token_urlsafe(24)
-    _cleanup_api_key_flash_store(request)
-    _api_key_flash_store(request)[token] = (api_key, time.monotonic() + API_KEY_FLASH_TTL_SECONDS)
-    response.set_cookie(
-        API_KEY_FLASH_COOKIE,
-        token,
-        max_age=API_KEY_FLASH_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-    )
-
-
-def _pop_api_key_flash(request: Request) -> str | None:
-    token = request.cookies.get(API_KEY_FLASH_COOKIE)
-    if not token:
-        return None
-    _cleanup_api_key_flash_store(request)
-    value = _api_key_flash_store(request).pop(token, None)
-    if value is None:
-        return None
-    api_key, expires_at = value
-    if time.monotonic() > expires_at:
-        return None
-    return api_key
-
-
-def _api_key_flash_store(request: Request) -> dict[str, tuple[str, float]]:
-    store = getattr(request.app.state, "admin_api_key_flash_store", None)
-    if store is None:
-        store = {}
-        request.app.state.admin_api_key_flash_store = store
-    return store
-
-
-def _cleanup_api_key_flash_store(request: Request) -> None:
-    now = time.monotonic()
-    store = _api_key_flash_store(request)
-    for token, (_, expires_at) in list(store.items()):
-        if expires_at <= now:
-            store.pop(token, None)
