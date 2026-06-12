@@ -8,7 +8,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database, utc_now_iso
-from ..quota_manager import normalize_reset_day
 from ..users import (
     CreateUserInput,
     UpdateUserInput,
@@ -25,9 +24,15 @@ from .auth import require_admin, require_admin_page_session
 from .common import (
     ALLOWED_ENDPOINT_CHOICES,
     DEFAULT_ALLOWED_ENDPOINTS,
+    normalize_reset_day_or_400,
+    notify_dashboard_change,
     row_to_dict,
     templates,
+    upstream_choices,
     user_row_to_dict,
+    validate_allowed_endpoints,
+    validate_allowed_upstreams,
+    validate_free_small_daily_limit,
 )
 
 
@@ -104,14 +109,14 @@ async def list_users(request: Request):
 async def create_user(payload: CreateUserRequest, request: Request):
     db: Database = request.app.state.db
     create_input = _build_create_user_input(db, payload)
-    _validate_allowed_endpoints(create_input.allowed_endpoints)
-    _validate_allowed_upstreams(create_input.allowed_upstreams, request)
+    validate_allowed_endpoints(create_input.allowed_endpoints)
+    validate_allowed_upstreams(create_input.allowed_upstreams, request)
     created = create_user_record(
         db,
         request.app.state.quota_manager,
         create_input,
     )
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"user_id": created.user_id, "api_key": created.api_key}
 
 
@@ -123,7 +128,7 @@ async def bulk_reset_anlas(payload: BulkUserIdsRequest, request: Request):
     for user_id in user_ids:
         # 额外重置：不更新 last_reset_at，保持原有自动重置周期不变。
         quota_manager.reset_usage(user_id, update_last_reset_at=False)
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"ok": True, "user_ids": user_ids}
 
 
@@ -134,7 +139,7 @@ async def bulk_reset_free_small_daily(payload: BulkUserIdsRequest, request: Requ
     manager = request.app.state.free_small_daily_limit_manager
     for user_id in user_ids:
         manager.reset_usage(user_id)
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"ok": True, "user_ids": user_ids}
 
 
@@ -144,9 +149,9 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
     ensure_user_exists(db, user_id)
     update_input = _build_update_user_input(db, user_id, payload)
     if update_input.allowed_endpoints is not None:
-        _validate_allowed_endpoints(update_input.allowed_endpoints)
+        validate_allowed_endpoints(update_input.allowed_endpoints)
     if update_input.allowed_upstreams is not None:
-        _validate_allowed_upstreams(update_input.allowed_upstreams, request)
+        validate_allowed_upstreams(update_input.allowed_upstreams, request)
     changed = update_user_record(
         db,
         request.app.state.quota_manager,
@@ -154,7 +159,7 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
         update_input,
     )
     if changed:
-        _notify_dashboard_change(request)
+        notify_dashboard_change(request)
     return {"ok": True}
 
 
@@ -162,7 +167,7 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
 async def delete_user(user_id: int, request: Request):
     db: Database = request.app.state.db
     delete_user_record(db, user_id)
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"ok": True}
 
 
@@ -170,7 +175,7 @@ async def delete_user(user_id: int, request: Request):
 async def reset_user_quota(user_id: int, request: Request):
     ensure_user_exists(request.app.state.db, user_id)
     request.app.state.quota_manager.reset_usage(user_id)
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"ok": True}
 
 
@@ -252,7 +257,7 @@ async def users_page(request: Request):
             "users": users,
             "groups": _groups_for_select(db, active_only=True),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
-            "upstream_choices": _upstream_choices(request),
+            "upstream_choices": upstream_choices(request),
             "new_api_key": new_api_key,
         },
     )
@@ -356,7 +361,7 @@ async def user_edit_page(user_id: int, request: Request):
             "rules": [row_to_dict(row) for row in rules],
             "groups": _groups_for_select(db, active_only=False),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
-            "upstream_choices": _upstream_choices(request),
+            "upstream_choices": upstream_choices(request),
             "new_api_key": new_api_key,
         },
     )
@@ -487,9 +492,9 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
 
     free_small_daily_limit_enabled = bool(value("free_small_daily_limit_enabled"))
     free_small_daily_limit = int(value("free_small_daily_limit"))
-    _validate_free_small_daily_limit(free_small_daily_limit_enabled, free_small_daily_limit)
+    validate_free_small_daily_limit(free_small_daily_limit_enabled, free_small_daily_limit)
     reset_period = str(value("reset_period"))
-    reset_day = _normalize_reset_day_or_400(reset_period, value("reset_day"))
+    reset_day = normalize_reset_day_or_400(reset_period, value("reset_day"))
     return CreateUserInput(
         name=payload.name,
         group_id=payload.group_id,
@@ -534,9 +539,9 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
     reset_period = str(reset_period_value) if reset_period_value is not None else None
     reset_day = optional_value("reset_day")
     if reset_period is not None and reset_day is not None:
-        reset_day = _normalize_reset_day_or_400(str(reset_period), reset_day)
+        reset_day = normalize_reset_day_or_400(str(reset_period), reset_day)
     elif reset_period is None and reset_day is not None:
-        reset_day = _normalize_reset_day_or_400(_get_user_reset_period(db, user_id), reset_day)
+        reset_day = normalize_reset_day_or_400(_get_user_reset_period(db, user_id), reset_day)
     return UpdateUserInput(
         name=payload.name if "name" in fields_set else None,
         group_id=payload.group_id,
@@ -583,13 +588,6 @@ def _get_user_reset_period(db: Database, user_id: int) -> str:
     return str(row["reset_period"])
 
 
-def _normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int:
-    try:
-        return normalize_reset_day(reset_period, reset_day)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
-
-
 def _validate_update_free_small_daily_limit(
     db: Database,
     user_id: int,
@@ -606,15 +604,7 @@ def _validate_update_free_small_daily_limit(
         raise HTTPException(status_code=404, detail={"message": "User not found"})
     effective_enabled = bool(enabled) if enabled is not None else bool(row["free_small_daily_limit_enabled"])
     effective_limit = int(limit) if limit is not None else int(row["free_small_daily_limit"] or 0)
-    _validate_free_small_daily_limit(effective_enabled, effective_limit)
-
-
-def _validate_free_small_daily_limit(enabled: bool, limit: int) -> None:
-    if enabled and int(limit) < 1:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": "free_small_daily_limit must be >= 1 when enabled"},
-        )
+    validate_free_small_daily_limit(effective_enabled, effective_limit)
 
 
 def _groups_for_select(db: Database, active_only: bool) -> list[dict]:
@@ -648,20 +638,6 @@ def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
     )
     if row is None:
         raise HTTPException(status_code=404, detail={"message": "Rate limit rule not found"})
-
-
-def _validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
-    if allowed_endpoints is None:
-        return
-    normalized = [item.strip() for item in allowed_endpoints if item.strip()]
-    if not normalized:
-        raise HTTPException(status_code=400, detail={"message": "At least one endpoint must be allowed"})
-    unknown = sorted({item for item in normalized if item not in ALLOWED_ENDPOINT_CHOICES})
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": f"Unknown endpoint: {', '.join(unknown)}"},
-        )
 
 
 def _set_api_key_flash(response: Response, request: Request, api_key: str) -> None:
@@ -705,28 +681,3 @@ def _cleanup_api_key_flash_store(request: Request) -> None:
     for token, (_, expires_at) in list(store.items()):
         if expires_at <= now:
             store.pop(token, None)
-
-
-def _upstream_choices(request: Request) -> list[str]:
-    clients = getattr(request.app.state, "upstream_clients", None)
-    if isinstance(clients, dict) and clients:
-        return list(clients.keys())
-    return ["default"]
-
-
-def _validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Request) -> None:
-    if not allowed_upstreams:
-        return
-    valid_upstreams = set(_upstream_choices(request))
-    unknown = sorted({item.strip() for item in allowed_upstreams if item.strip()} - valid_upstreams)
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": f"Unknown upstream id: {', '.join(unknown)}"},
-        )
-
-
-def _notify_dashboard_change(request: Request) -> None:
-    event_bus = getattr(request.app.state, "dashboard_events", None)
-    if event_bus is not None:
-        event_bus.notify_nowait()

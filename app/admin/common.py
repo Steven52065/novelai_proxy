@@ -4,9 +4,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
+from ..quota_manager import normalize_reset_day
 from ..timezones import DISPLAY_TIMEZONE
 
 
@@ -69,6 +70,60 @@ def serialize_allowed_upstreams(value: list[str] | None) -> str | None:
         if upstream_id and upstream_id not in valid:
             valid.append(upstream_id)
     return ",".join(valid) if valid else None
+
+
+def upstream_choices(request: Request) -> list[str]:
+    clients = getattr(request.app.state, "upstream_clients", None)
+    if isinstance(clients, dict) and clients:
+        return list(clients.keys())
+    return ["default"]
+
+
+def validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
+    if allowed_endpoints is None:
+        return
+    normalized = [item.strip() for item in allowed_endpoints if item.strip()]
+    if not normalized:
+        raise HTTPException(status_code=400, detail={"message": "At least one endpoint must be allowed"})
+    unknown = sorted({item for item in normalized if item not in ALLOWED_ENDPOINT_CHOICES})
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": f"Unknown endpoint: {', '.join(unknown)}"},
+        )
+
+
+def validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Request) -> None:
+    if not allowed_upstreams:
+        return
+    valid_upstreams = set(upstream_choices(request))
+    unknown = sorted({item.strip() for item in allowed_upstreams if item.strip()} - valid_upstreams)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": f"Unknown upstream id: {', '.join(unknown)}"},
+        )
+
+
+def validate_free_small_daily_limit(enabled: bool, limit: int) -> None:
+    if enabled and int(limit) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "free_small_daily_limit must be >= 1 when enabled"},
+        )
+
+
+def normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int:
+    try:
+        return normalize_reset_day(reset_period, reset_day)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+
+
+def notify_dashboard_change(request: Request) -> None:
+    event_bus = getattr(request.app.state, "dashboard_events", None)
+    if event_bus is not None:
+        event_bus.notify_nowait()
 
 
 def usage_log_to_dict(row):

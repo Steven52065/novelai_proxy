@@ -7,7 +7,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database, utc_now_iso
-from ..quota_manager import normalize_reset_day
 from ..users import (
     UserGroupInput,
     UserGroupUpdateInput,
@@ -21,7 +20,18 @@ from ..users import (
 )
 from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
 from .auth import require_admin, require_admin_or_session, require_admin_page_session
-from .common import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS, row_to_dict, templates
+from .common import (
+    ALLOWED_ENDPOINT_CHOICES,
+    DEFAULT_ALLOWED_ENDPOINTS,
+    normalize_reset_day_or_400,
+    notify_dashboard_change,
+    row_to_dict,
+    templates,
+    upstream_choices,
+    validate_allowed_endpoints,
+    validate_allowed_upstreams,
+    validate_free_small_daily_limit,
+)
 
 
 api_router = APIRouter(prefix="/admin/api")
@@ -85,10 +95,10 @@ async def list_user_groups(request: Request):
 @api_router.post("/user-groups", dependencies=[Depends(require_admin)])
 async def create_user_group(payload: CreateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
-    _validate_free_small_daily_limit(payload.free_small_daily_limit_enabled, payload.free_small_daily_limit)
-    _validate_allowed_endpoints(payload.default_allowed_endpoints)
-    _validate_allowed_upstreams(payload.default_allowed_upstreams, request)
-    default_reset_day = _normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
+    validate_free_small_daily_limit(payload.free_small_daily_limit_enabled, payload.free_small_daily_limit)
+    validate_allowed_endpoints(payload.default_allowed_endpoints)
+    validate_allowed_upstreams(payload.default_allowed_upstreams, request)
+    default_reset_day = normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
     group_id = create_group(
         db,
         UserGroupInput(
@@ -105,7 +115,7 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
             default_reset_day=default_reset_day,
         ),
     )
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"group_id": group_id, "group": _group_row_to_dict(get_group(db, group_id))}
 
 
@@ -127,7 +137,7 @@ async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, reque
         propagate_scope=payload.propagate,
     )
     if summary["group_changed"] or summary["updated_users"]:
-        _notify_dashboard_change(request)
+        notify_dashboard_change(request)
     return {"ok": True, "propagation": summary}
 
 
@@ -146,9 +156,9 @@ def _build_group_update_input(
 ) -> UserGroupUpdateInput:
     _validate_update_free_small_daily_limit(db, group_id, payload)
     if payload.default_allowed_endpoints is not None:
-        _validate_allowed_endpoints(payload.default_allowed_endpoints)
+        validate_allowed_endpoints(payload.default_allowed_endpoints)
     if payload.default_allowed_upstreams is not None:
-        _validate_allowed_upstreams(payload.default_allowed_upstreams, request)
+        validate_allowed_upstreams(payload.default_allowed_upstreams, request)
     default_reset_day = _normalize_update_reset_day_or_400(db, group_id, payload)
     return UserGroupUpdateInput(
         name=payload.name,
@@ -169,7 +179,7 @@ def _build_group_update_input(
 async def delete_user_group(group_id: int, request: Request):
     db: Database = request.app.state.db
     delete_or_disable_group(db, group_id)
-    _notify_dashboard_change(request)
+    notify_dashboard_change(request)
     return {"ok": True}
 
 
@@ -182,7 +192,7 @@ async def sync_user_group_members(group_id: int, payload: SyncGroupMembersReques
         payload.fields,
     )
     if updated_users:
-        _notify_dashboard_change(request)
+        notify_dashboard_change(request)
     return {"ok": True, "updated_users": updated_users}
 
 
@@ -233,7 +243,7 @@ async def user_groups_page(request: Request):
             "active": "user_groups",
             "groups": [_group_row_to_dict(row) for row in list_groups(db)],
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
-            "upstream_choices": _upstream_choices(request),
+            "upstream_choices": upstream_choices(request),
         },
     )
 
@@ -308,7 +318,7 @@ async def user_group_edit_page(group_id: int, request: Request):
             "group_rules": group_rules,
             "members": members,
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
-            "upstream_choices": _upstream_choices(request),
+            "upstream_choices": upstream_choices(request),
             "saved": request.query_params.get("saved") == "1",
             "propagated": _parse_optional_int(request.query_params.get("propagated")),
             "propagate_scope": request.query_params.get("propagate_scope"),
@@ -426,38 +436,17 @@ def _parse_optional_int(value: str | None) -> int | None:
         return None
 
 
-def _validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
-    if allowed_endpoints is None:
-        return
-    normalized = [item.strip() for item in allowed_endpoints if item.strip()]
-    if not normalized:
-        raise HTTPException(status_code=400, detail={"message": "At least one endpoint must be allowed"})
-    unknown = sorted({item for item in normalized if item not in ALLOWED_ENDPOINT_CHOICES})
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": f"Unknown endpoint: {', '.join(unknown)}"},
-        )
-
-
 def _normalize_update_reset_day_or_400(
     db: Database,
     group_id: int,
     payload: UpdateUserGroupRequest,
 ) -> int | None:
     if payload.default_reset_period is not None:
-        return _normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
+        return normalize_reset_day_or_400(payload.default_reset_period, payload.default_reset_day)
     if payload.default_reset_day is None:
         return None
     group = get_group(db, group_id)
-    return _normalize_reset_day_or_400(str(group["default_reset_period"]), payload.default_reset_day)
-
-
-def _normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int:
-    try:
-        return normalize_reset_day(reset_period, reset_day)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+    return normalize_reset_day_or_400(str(group["default_reset_period"]), payload.default_reset_day)
 
 
 def _validate_update_free_small_daily_limit(
@@ -479,40 +468,7 @@ def _validate_update_free_small_daily_limit(
         if "free_small_daily_limit" in fields_set and payload.free_small_daily_limit is not None
         else int(group["free_small_daily_limit"] or 0)
     )
-    _validate_free_small_daily_limit(enabled, limit)
-
-
-def _validate_free_small_daily_limit(enabled: bool, limit: int) -> None:
-    if enabled and int(limit) < 1:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": "free_small_daily_limit must be >= 1 when enabled"},
-        )
-
-
-def _upstream_choices(request: Request) -> list[str]:
-    clients = getattr(request.app.state, "upstream_clients", None)
-    if isinstance(clients, dict) and clients:
-        return list(clients.keys())
-    return ["default"]
-
-
-def _validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Request) -> None:
-    if not allowed_upstreams:
-        return
-    valid_upstreams = set(_upstream_choices(request))
-    unknown = sorted({item.strip() for item in allowed_upstreams if item.strip()} - valid_upstreams)
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": f"Unknown upstream id: {', '.join(unknown)}"},
-        )
-
-
-def _notify_dashboard_change(request: Request) -> None:
-    event_bus = getattr(request.app.state, "dashboard_events", None)
-    if event_bus is not None:
-        event_bus.notify_nowait()
+    validate_free_small_daily_limit(enabled, limit)
 
 
 def _ensure_group_rate_limit_rule_exists(db: Database, rule_id: int) -> None:

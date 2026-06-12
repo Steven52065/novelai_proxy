@@ -17,6 +17,7 @@ from .common import (
     local_day_range,
     row_to_dict,
     templates,
+    upstream_choices,
 )
 
 
@@ -161,7 +162,7 @@ async def dashboard(request: Request):
             "queue": snapshot["queue"],
             "upstream_weights": snapshot["upstream_weights"],
             "request_trends": _request_trend_stats(db),
-            "upstream_choices": _upstream_choices(request),
+            "upstream_choices": upstream_choices(request),
         },
     )
 
@@ -546,18 +547,11 @@ def _merge_queue_log_details(item: dict, details: dict[str, dict]) -> dict:
     return merged
 
 
-def _upstream_choices(request: Request) -> list[str]:
-    clients = getattr(request.app.state, "upstream_clients", None)
-    if isinstance(clients, dict) and clients:
-        return list(clients.keys())
-    return ["default"]
-
-
 def _normalize_upstream_filter(request: Request | WebSocket, upstream_id: str | None) -> str | None:
     normalized = (upstream_id or "").strip()
     if not normalized:
         return None
-    if normalized not in set(_upstream_choices(request)):
+    if normalized not in set(upstream_choices(request)):
         raise HTTPException(status_code=400, detail={"message": f"Unknown upstream id: {normalized}"})
     return normalized
 
