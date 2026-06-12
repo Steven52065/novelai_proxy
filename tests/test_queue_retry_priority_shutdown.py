@@ -7,6 +7,7 @@ import time
 from helpers import PAYLOAD, FakeUpstream
 from app.free_small_daily_limit import FreeSmallDailyReservation
 from app.queue_manager import DispatchQueueItem, QueueClosed, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
+from app.request_accounting import RequestAccounting
 from queue_manager_helpers import (
     FirstRequestBlockingLabelUpstream,
     One429ThenSuccessfulUpstream,
@@ -308,7 +309,13 @@ def test_cancelled_429_retry_releases_reserved_quota():
             action="generate",
             tier="normal",
             estimated_cost=7,
-            manage_quota=True,
+            accounting=RequestAccounting(
+                quota_manager=quota,
+                usage_logs=_NoopUsageLogs(),
+                request_id="cancelled-retry",
+                user_id=42,
+                estimated_cost=7,
+            ),
             logging_config=object(),
             process_zip_response=False,
             allowed_upstreams=None,
@@ -345,6 +352,7 @@ def test_retry_attempt_insert_failure_releases_reserved_accounting():
         upstream = One429ThenSuccessfulUpstream(release_first, fail_label="retry-log-fails")
         quota = _RecordingQuota()
         daily = RecordingDailyLimit()
+        usage_logs = FailingRetryUsageLogs()
         reservation = FreeSmallDailyReservation(
             user_id=42,
             window_start="2026-06-08T00:00:00+08:00",
@@ -356,7 +364,7 @@ def test_retry_attempt_insert_failure_releases_reserved_accounting():
         queue = RoutingProxyQueue(
             targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
             quota_manager=quota,
-            usage_logs=FailingRetryUsageLogs(),
+            usage_logs=usage_logs,
             max_queue_size=2,
             upstream_interval_min_seconds=0,
             upstream_interval_max_seconds=0,
@@ -374,8 +382,15 @@ def test_retry_attempt_insert_failure_releases_reserved_accounting():
                     estimated_cost=7,
                     handler=lambda upstream: upstream.generate_image_payload_zip({"label": "retry-log-fails"}),
                     process_zip_response=False,
-                    free_small_daily_limit_manager=daily,
-                    free_small_daily_reservation=reservation,
+                    accounting=RequestAccounting(
+                        quota_manager=quota,
+                        usage_logs=usage_logs,
+                        request_id="retry-log-fails",
+                        user_id=42,
+                        estimated_cost=7,
+                        free_small_daily_limit_manager=daily,
+                        free_small_daily_reservation=reservation,
+                    ),
                 )
             )
             await _wait_until_async(lambda: upstream.started_labels == ["retry-log-fails"])
@@ -415,6 +430,7 @@ def test_vip_retry_attempt_insert_failure_finishes_client_future():
         upstream = One429ThenSuccessfulUpstream(release_first, fail_label="vip-retry-log-fails")
         quota = _RecordingQuota()
         daily = RecordingDailyLimit()
+        usage_logs = FailingRetryUsageLogs()
         reservation = FreeSmallDailyReservation(
             user_id=42,
             window_start="2026-06-08T00:00:00+08:00",
@@ -426,7 +442,7 @@ def test_vip_retry_attempt_insert_failure_finishes_client_future():
         queue = RoutingProxyQueue(
             targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
             quota_manager=quota,
-            usage_logs=FailingRetryUsageLogs(),
+            usage_logs=usage_logs,
             max_queue_size=2,
             upstream_interval_min_seconds=0,
             upstream_interval_max_seconds=0,
@@ -444,8 +460,15 @@ def test_vip_retry_attempt_insert_failure_finishes_client_future():
                     estimated_cost=7,
                     handler=lambda upstream: upstream.generate_image_payload_zip({"label": "vip-retry-log-fails"}),
                     process_zip_response=False,
-                    free_small_daily_limit_manager=daily,
-                    free_small_daily_reservation=reservation,
+                    accounting=RequestAccounting(
+                        quota_manager=quota,
+                        usage_logs=usage_logs,
+                        request_id="vip-retry-log-fails",
+                        user_id=42,
+                        estimated_cost=7,
+                        free_small_daily_limit_manager=daily,
+                        free_small_daily_reservation=reservation,
+                    ),
                 )
             )
             await _wait_until_async(lambda: upstream.started_labels == ["vip-retry-log-fails"])

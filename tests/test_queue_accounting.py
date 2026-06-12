@@ -8,6 +8,7 @@ from app.database import Database, utc_now_iso
 from app.free_small_daily_limit import FreeSmallDailyLimitManager
 from app.queue_manager import RoutingProxyQueue, UpstreamQueueTarget
 from app.quota_manager import QuotaManager
+from app.request_accounting import RequestAccounting
 from app.usage_logs import UsageLogCreate, UsageLogRepository
 from queue_manager_helpers import _wait_until_async
 
@@ -48,8 +49,7 @@ def test_cancel_before_upstream_execution_releases_reserved_accounting(tmp_path:
             estimated_cost=3,
             handler=lambda upstream: upstream.generate_image_payload_zip({}),
             process_zip_response=False,
-            free_small_daily_limit_manager=context["daily"],
-            free_small_daily_reservation=context["daily_reservation"],
+            accounting=_accounting(context, "cancel-before-run"),
         )
         future.cancel()
 
@@ -103,8 +103,7 @@ def test_cancel_during_upstream_interval_does_not_execute_or_charge(tmp_path: Pa
                 estimated_cost=3,
                 handler=lambda upstream: upstream.generate_image_payload_zip({"request": "cancel-during-interval"}),
                 process_zip_response=False,
-                free_small_daily_limit_manager=context["daily"],
-                free_small_daily_reservation=context["daily_reservation"],
+                accounting=_accounting(context, "cancel-during-interval"),
             )
             await _wait_until_async(
                 lambda: queue._queues["opus-a"]._running_item is not None
@@ -147,8 +146,7 @@ def test_cancel_after_upstream_started_confirms_accounting_on_success(tmp_path: 
                 estimated_cost=3,
                 handler=lambda upstream: upstream.generate_image_payload_zip({}),
                 process_zip_response=False,
-                free_small_daily_limit_manager=context["daily"],
-                free_small_daily_reservation=context["daily_reservation"],
+                accounting=_accounting(context, "cancel-after-start"),
             )
             await _wait_until_async(upstream.started.is_set)
 
@@ -223,6 +221,19 @@ def _accounting_context(tmp_path: Path) -> dict:
         "usage_logs": usage_logs,
         "user_id": user_id,
     }
+
+
+def _accounting(context: dict, request_id: str) -> RequestAccounting:
+    # 模拟 service 层在预检通过后创建的记账对象：额度与每日预约都已 reserved。
+    return RequestAccounting(
+        quota_manager=context["quota"],
+        usage_logs=context["usage_logs"],
+        request_id=request_id,
+        user_id=context["user_id"],
+        estimated_cost=3,
+        free_small_daily_limit_manager=context["daily"],
+        free_small_daily_reservation=context["daily_reservation"],
+    )
 
 
 def _create_user(db: Database) -> int:

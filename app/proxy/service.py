@@ -26,6 +26,7 @@ from ..queue_manager import (
 )
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
+from ..request_accounting import RequestAccounting
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 
@@ -110,7 +111,17 @@ class ProxyRequestService:
         pre_queue = self._check_before_queue(request_id, task)
         if pre_queue.rejected is not None:
             return pre_queue.rejected
-        free_small_daily_reservation = pre_queue.free_small_daily_reservation
+        # 预检通过后额度与每日预约都已 reserved，
+        # 之后的释放 / 确认 / 日志终态统一由记账生命周期对象负责。
+        accounting = RequestAccounting(
+            quota_manager=self.quota_manager,
+            usage_logs=self.usage_logs,
+            request_id=request_id,
+            user_id=task.user.id,
+            estimated_cost=task.estimated_cost,
+            free_small_daily_limit_manager=self.free_small_daily_limit_manager,
+            free_small_daily_reservation=pre_queue.free_small_daily_reservation,
+        )
 
         try:
             self._insert_queued(
@@ -121,8 +132,7 @@ class ProxyRequestService:
                 log_level="INFO",
             )
         except Exception:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
-            self.quota_manager.release(task.user.id, task.estimated_cost)
+            accounting.settle_released()
             raise
         logger.info(
             "proxy request queued request_id=%s user_id=%s action=%s estimated_cost=%s",
@@ -143,14 +153,10 @@ class ProxyRequestService:
                 handler=task.handler,
                 process_zip_response=task.process_zip_response,
                 allowed_upstreams=task.user.allowed_upstreams,
-                free_small_daily_limit_manager=self.free_small_daily_limit_manager,
-                free_small_daily_reservation=free_small_daily_reservation,
+                accounting=accounting,
             )
         except QueueClosed:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
-            self.quota_manager.release(task.user.id, task.estimated_cost)
-            self.usage_logs.mark_rejected(
-                request_id,
+            accounting.settle_rejected(
                 error_code="server_shutting_down",
                 error_message="Server is shutting down, please retry later",
                 log_level="INFO",
@@ -162,10 +168,7 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except QueueFull:
-            self._release_free_small_daily_reservation(free_small_daily_reservation)
-            self.quota_manager.release(task.user.id, task.estimated_cost)
-            self.usage_logs.mark_rejected(
-                request_id,
+            accounting.settle_rejected(
                 error_code="queue_full",
                 error_message="Queue full, please retry later",
                 log_level="ERROR",
@@ -180,8 +183,7 @@ class ProxyRequestService:
         try:
             binary_payload = await queue_future
         except QueueFull:
-            self.usage_logs.mark_rejected(
-                request_id,
+            accounting.settle_rejected(
                 error_code="queue_full",
                 error_message="Queue full, please retry later",
                 log_level="ERROR",
@@ -193,8 +195,7 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except NoAvailableUpstream as exc:
-            self.usage_logs.mark_rejected(
-                request_id,
+            accounting.settle_rejected(
                 error_code="no_available_upstream",
                 error_message=str(exc),
                 log_level="ERROR",
