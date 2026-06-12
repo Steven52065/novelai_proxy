@@ -14,6 +14,7 @@ from .config import LoggingConfig
 from .logging_utils import archive_zip_images, logger
 from .quota_manager import QuotaManager
 from .request_accounting import RequestAccounting
+from .retry_policy import RetryDecision, RetryPolicy
 from .usage_logs import UsageLogRepository
 
 
@@ -86,6 +87,7 @@ class ProxyQueue:
         upstream_error_extra_delay_seconds: float = 5,
         upstream_execution_timeout_seconds: float = 60,
         retry_429_queue_length_threshold: int = 3,
+        retry_policy: RetryPolicy | None = None,
         get_total_queue_length: callable | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
@@ -104,7 +106,7 @@ class ProxyQueue:
         self.upstream_execution_timeout_seconds = float(upstream_execution_timeout_seconds)
         if self.upstream_execution_timeout_seconds <= 0:
             raise ValueError("upstream_execution_timeout_seconds must be greater than 0")
-        self.retry_429_queue_length_threshold = int(retry_429_queue_length_threshold)
+        self._retry_policy = retry_policy or RetryPolicy(queue_length_threshold=retry_429_queue_length_threshold)
         self.get_total_queue_length = get_total_queue_length
         self._last_upstream_completed_at: float | None = None
         self._apply_error_extra_delay_next = False
@@ -280,7 +282,11 @@ class ProxyQueue:
 
                 # 检查是否为 429 错误且应该重试
                 if isinstance(exc, APIError) and str(exc.code) == "429":
-                    should_retry = self._should_retry_429(self.get_total_queue_length) if self.get_total_queue_length else False
+                    should_retry = (
+                        self._retry_policy.should_attempt_429_retry(self.get_total_queue_length())
+                        if self.get_total_queue_length
+                        else False
+                    )
                     if should_retry:
                         # 将 429 错误标记到日志，但状态仍为 failed
                         code, message = self._error_details(exc)
@@ -297,7 +303,7 @@ class ProxyQueue:
                             item.request_id,
                             item.attempt_number,
                             total_queue_length,
-                            self.retry_429_queue_length_threshold,
+                            self._retry_policy.queue_length_threshold,
                         )
                         # 429 是 API 错误，需要对下一个请求应用额外延迟
                         self._apply_error_extra_delay_next = True
@@ -416,17 +422,6 @@ class ProxyQueue:
             task.exception()
         except asyncio.CancelledError:
             pass
-
-    def _should_retry_429(self, get_total_queue_length: callable) -> bool:
-        """检查当前队列状态是否允许重试 429 错误
-
-        Args:
-            get_total_queue_length: 获取所有上游总排队长度的回调函数
-        """
-        if self.retry_429_queue_length_threshold < 0:
-            return False
-        total_queue_length = get_total_queue_length()
-        return total_queue_length <= self.retry_429_queue_length_threshold
 
     async def _wait_for_upstream_interval(self, request_id: str) -> None:
         interval = self._next_upstream_interval()
@@ -586,7 +581,11 @@ class RoutingProxyQueue:
     ):
         self._quota_manager = quota_manager
         self._usage_logs = usage_logs
-        self._retry_429_max_attempts = int(retry_429_max_attempts)
+        self._retry_policy = RetryPolicy(
+            queue_length_threshold=retry_429_queue_length_threshold,
+            max_attempts=retry_429_max_attempts,
+            vip_retry_priority=self.VIP_RETRY_PRIORITY,
+        )
         enabled_targets = [target for target in targets if target.id]
         if not enabled_targets:
             raise ValueError("at least one upstream target is required")
@@ -622,7 +621,7 @@ class RoutingProxyQueue:
                 upstream_interval_max_seconds=upstream_interval_max_seconds,
                 upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
                 upstream_execution_timeout_seconds=upstream_execution_timeout_seconds,
-                retry_429_queue_length_threshold=retry_429_queue_length_threshold,
+                retry_policy=self._retry_policy,
                 get_total_queue_length=self._get_total_queue_length,
                 image_hosting=image_hosting,
                 on_change=on_change,
@@ -914,25 +913,29 @@ class RoutingProxyQueue:
                     item.attempt_number,
                 )
                 return
-            next_attempt_number = item.attempt_number + 1
             retry_error = last_429_error or exc.original_error
-            if next_attempt_number >= self._retry_429_max_attempts:
+            decision = self._retry_policy.decide_retry(
+                tier=item.tier,
+                attempt_number=item.attempt_number,
+                current_priority=item.priority,
+            )
+            if not decision.should_retry:
                 self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
                 return
             logger.info(
                 "proxy request 429 retry attempt=%s request_id=%s upstream_id=%s next_attempt_number=%s",
-                next_attempt_number,
+                decision.next_attempt_number,
                 item.request_id,
                 upstream_id,
-                next_attempt_number,
+                decision.next_attempt_number,
             )
             try:
-                self._requeue_429_retry(item, next_attempt_number=next_attempt_number, retry_error=retry_error)
+                self._requeue_429_retry(item, decision=decision, retry_error=retry_error)
             except Exception as retry_exc:
                 logger.exception(
                     "proxy request 429 retry requeue failed request_id=%s next_attempt_number=%s",
                     item.request_id,
-                    next_attempt_number,
+                    decision.next_attempt_number,
                 )
                 if not item.future.done():
                     item.future.set_exception(retry_exc)
@@ -949,21 +952,19 @@ class RoutingProxyQueue:
         self,
         item: QueueItem,
         *,
-        next_attempt_number: int,
+        decision: RetryDecision,
         retry_error: APIError,
     ) -> None:
-        is_vip_retry = item.tier == "vip"
-        priority = self.VIP_RETRY_PRIORITY if is_vip_retry else item.priority
         next_item = dataclasses.replace(
             item,
-            priority=priority,
+            priority=decision.priority,
             sequence=next(self._sequence),
             enqueued_at=time.monotonic(),
             has_retried_429=True,
-            attempt_number=next_attempt_number,
+            attempt_number=decision.next_attempt_number,
             last_429_error=retry_error,
         )
-        if is_vip_retry:
+        if decision.immediate:
             self._dispatch_to_upstream(next_item, last_429_error=retry_error)
             return
         try:
@@ -972,7 +973,7 @@ class RoutingProxyQueue:
             logger.warning(
                 "proxy request 429 retry dispatch queue full request_id=%s next_attempt_number=%s",
                 item.request_id,
-                next_attempt_number,
+                decision.next_attempt_number,
             )
             self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
         else:
