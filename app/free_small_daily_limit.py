@@ -6,9 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlite3 import Connection
 
 from .database import Database, utc_now_iso
-
-
-UTC8 = timezone(timedelta(hours=8))
+from .timezones import DISPLAY_TIMEZONE as UTC8
 
 
 @dataclass(frozen=True)

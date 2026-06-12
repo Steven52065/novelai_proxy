@@ -7,9 +7,10 @@ from pathlib import Path
 from fastapi import HTTPException
 from fastapi.templating import Jinja2Templates
 
+from ..timezones import DISPLAY_TIMEZONE
+
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
-DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
 ALLOWED_ENDPOINT_CHOICES = {
     "generate-image": "图像生成",
     "suggest-tags": "标签建议",
