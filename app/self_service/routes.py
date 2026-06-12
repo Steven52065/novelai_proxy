@@ -12,11 +12,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..admin.common import templates
+from ..allowlists import AllowedEndpoints, AllowedUpstreams
 from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database
 from ..logging_utils import json_dumps, logger
 from ..users import reset_api_key
-from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
 from .accounts import DiscordProfile, login_or_register_discord_user
 from .discord import DiscordOAuthClient
 from .session import expiring_payload, sign_payload, verify_payload
@@ -205,8 +205,8 @@ def _account_user_to_dict(row) -> dict:
         "tier": row["tier"],
         "is_active": bool(row["is_active"]),
         "free_small_only": bool(row["free_small_only"]),
-        "allowed_endpoints_list": parse_allowed_endpoints(row["allowed_endpoints"]),
-        "allowed_upstreams_list": parse_allowed_upstreams(row["allowed_upstreams"]),
+        "allowed_endpoints_list": AllowedEndpoints.parse(row["allowed_endpoints"]).as_list(),
+        "allowed_upstreams_list": AllowedUpstreams.parse(row["allowed_upstreams"]).as_list(),
         "discord_username": row["discord_username"],
         "discord_global_name": row["discord_global_name"],
         "discord_avatar": row["discord_avatar"],

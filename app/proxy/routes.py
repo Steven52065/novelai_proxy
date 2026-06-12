@@ -10,6 +10,13 @@ from novelai_python._exceptions import APIError
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
+from ..allowlists import (
+    ENDPOINT_AUGMENT_IMAGE,
+    ENDPOINT_ENCODE_VIBE,
+    ENDPOINT_GENERATE_IMAGE,
+    ENDPOINT_SUGGEST_TAGS,
+    ENDPOINT_UPSCALE,
+)
 from ..auth import UserContext, get_current_user
 from ..costing import GenerateCostEstimator, GenerateCostInputs, IMAGE_ANLAS_PER_VIBE_ENCODING
 from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
@@ -18,11 +25,6 @@ from .service import MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, Proxy
 
 router = APIRouter()
 _generate_cost_estimator = GenerateCostEstimator()
-ENDPOINT_GENERATE_IMAGE = "generate-image"
-ENDPOINT_UPSCALE = "upscale"
-ENDPOINT_AUGMENT_IMAGE = "augment-image"
-ENDPOINT_ENCODE_VIBE = "encode-vibe"
-ENDPOINT_SUGGEST_TAGS = "suggest-tags"
 
 
 @router.get("/health")

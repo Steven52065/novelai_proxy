@@ -6,6 +6,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from ..allowlists import (
+    ALLOWED_ENDPOINT_CHOICES,
+    DEFAULT_ALLOWED_ENDPOINTS,
+    AllowedEndpoints,
+    AllowedUpstreams,
+)
 from ..database import Database, utc_now_iso
 from ..users import (
     UserGroupInput,
@@ -18,11 +24,8 @@ from ..users import (
     sync_group_members,
     update_group_with_propagation,
 )
-from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
 from .auth import require_admin, require_admin_or_session, require_admin_page_session
 from .common import (
-    ALLOWED_ENDPOINT_CHOICES,
-    DEFAULT_ALLOWED_ENDPOINTS,
     normalize_reset_day_or_400,
     notify_dashboard_change,
     row_to_dict,
@@ -422,8 +425,8 @@ async def delete_group_rate_limit_rule_form(rule_id: int, request: Request, grou
 
 def _group_row_to_dict(row):
     data = row_to_dict(row)
-    data["default_allowed_endpoints_list"] = parse_allowed_endpoints(data.get("default_allowed_endpoints"))
-    data["default_allowed_upstreams_list"] = parse_allowed_upstreams(data.get("default_allowed_upstreams"))
+    data["default_allowed_endpoints_list"] = AllowedEndpoints.parse(data.get("default_allowed_endpoints")).as_list()
+    data["default_allowed_upstreams_list"] = AllowedUpstreams.parse(data.get("default_allowed_upstreams")).as_list()
     return data
 
 

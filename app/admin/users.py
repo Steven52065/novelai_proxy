@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from ..allowlists import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS
 from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database, utc_now_iso
 from ..users import (
@@ -20,8 +21,6 @@ from ..users import (
 )
 from .auth import require_admin, require_admin_page_session
 from .common import (
-    ALLOWED_ENDPOINT_CHOICES,
-    DEFAULT_ALLOWED_ENDPOINTS,
     normalize_reset_day_or_400,
     notify_dashboard_change,
     row_to_dict,

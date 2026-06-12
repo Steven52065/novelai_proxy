@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
+from .allowlists import AllowedEndpoints, AllowedUpstreams
 from .database import Database
 from .security import hash_api_key
 
@@ -63,20 +64,6 @@ async def get_current_user(
         tier=str(row["tier"]),
         is_active=bool(row["is_active"]),
         free_small_only=bool(row["free_small_only"]),
-        allowed_endpoints=_parse_allowed_endpoints(row["allowed_endpoints"]),
-        allowed_upstreams=_parse_allowed_upstreams(row["allowed_upstreams"]),
+        allowed_endpoints=AllowedEndpoints.parse(row["allowed_endpoints"]).as_frozenset(),
+        allowed_upstreams=AllowedUpstreams.parse(row["allowed_upstreams"]).as_frozenset(),
     )
-
-
-def _parse_allowed_endpoints(value: str | None) -> frozenset[str]:
-    if not value:
-        return frozenset({"generate-image"})
-    endpoints = {item.strip() for item in value.split(",") if item.strip()}
-    return frozenset(endpoints or {"generate-image"})
-
-
-def _parse_allowed_upstreams(value: str | None) -> frozenset[str]:
-    if not value:
-        return frozenset()
-    upstreams = {item.strip() for item in value.split(",") if item.strip()}
-    return frozenset(upstreams)

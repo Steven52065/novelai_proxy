@@ -6,11 +6,10 @@ from sqlite3 import Connection
 
 from fastapi import HTTPException
 
+from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_ENDPOINTS
 from ..database import Database, utc_now_iso
 from ..quota_manager import QuotaManager
 from ..security import generate_api_key, hash_api_key
-
-DEFAULT_ALLOWED_ENDPOINTS = "generate-image"
 
 
 @dataclass(frozen=True)
@@ -76,8 +75,8 @@ def insert_user_record(
             1 if data.free_small_only else 0,
             1 if data.free_small_daily_limit_enabled else 0,
             data.free_small_daily_limit,
-            serialize_allowed_endpoints(data.allowed_endpoints),
-            serialize_allowed_upstreams(data.allowed_upstreams),
+            AllowedEndpoints.of(data.allowed_endpoints).serialize(),
+            AllowedUpstreams.of(data.allowed_upstreams).serialize(),
             data.group_id,
             now,
         ),
@@ -127,10 +126,10 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
         params.append(data.free_small_daily_limit)
     if data.allowed_endpoints is not None:
         fields.append("allowed_endpoints = ?")
-        params.append(serialize_allowed_endpoints(data.allowed_endpoints))
+        params.append(AllowedEndpoints.of(data.allowed_endpoints).serialize())
     if data.allowed_upstreams is not None:
         fields.append("allowed_upstreams = ?")
-        params.append(serialize_allowed_upstreams(data.allowed_upstreams))
+        params.append(AllowedUpstreams.of(data.allowed_upstreams).serialize())
     if data.update_group_id:
         fields.append("group_id = ?")
         params.append(data.group_id)
@@ -192,38 +191,3 @@ def ensure_user_exists(db: Database, user_id: int) -> None:
     )
     if row is None:
         raise HTTPException(status_code=404, detail={"message": "User not found"})
-
-
-def serialize_allowed_endpoints(value: list[str] | None) -> str:
-    if not value:
-        return DEFAULT_ALLOWED_ENDPOINTS
-    valid: list[str] = []
-    for endpoint in value:
-        endpoint = endpoint.strip()
-        if endpoint and endpoint not in valid:
-            valid.append(endpoint)
-    return ",".join(valid or [DEFAULT_ALLOWED_ENDPOINTS])
-
-
-def serialize_allowed_upstreams(value: list[str] | None) -> str | None:
-    if not value:
-        return None
-    valid: list[str] = []
-    for upstream_id in value:
-        upstream_id = upstream_id.strip()
-        if upstream_id and upstream_id not in valid:
-            valid.append(upstream_id)
-    return ",".join(valid) if valid else None
-
-
-def parse_allowed_endpoints(value: str | None) -> list[str]:
-    if not value:
-        return [DEFAULT_ALLOWED_ENDPOINTS]
-    endpoints = [item.strip() for item in value.split(",") if item.strip()]
-    return endpoints or [DEFAULT_ALLOWED_ENDPOINTS]
-
-
-def parse_allowed_upstreams(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]

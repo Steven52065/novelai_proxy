@@ -6,16 +6,10 @@ from typing import Iterable
 import sqlite3
 from fastapi import HTTPException
 
+from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_ENDPOINTS
 from ..database import Database, utc_now_iso
 from ..quota_manager import QuotaManager
-from .service import (
-    DEFAULT_ALLOWED_ENDPOINTS,
-    UpdateUserInput,
-    parse_allowed_endpoints,
-    parse_allowed_upstreams,
-    serialize_allowed_endpoints,
-    serialize_allowed_upstreams,
-)
+from .service import UpdateUserInput
 
 SYNCABLE_MEMBER_FIELDS = {
     "tier",
@@ -91,8 +85,8 @@ def create_group(db: Database, data: UserGroupInput) -> int:
             1 if data.default_free_small_only else 0,
             1 if data.free_small_daily_limit_enabled else 0,
             data.free_small_daily_limit,
-            serialize_allowed_endpoints(data.default_allowed_endpoints),
-            serialize_allowed_upstreams(data.default_allowed_upstreams),
+            AllowedEndpoints.of(data.default_allowed_endpoints).serialize(),
+            AllowedUpstreams.of(data.default_allowed_upstreams).serialize(),
             data.default_anlas_total,
             data.default_reset_period,
             data.default_reset_day,
@@ -127,10 +121,10 @@ def update_group(db: Database, group_id: int, data: UserGroupUpdateInput) -> boo
         params.append(data.free_small_daily_limit)
     if data.default_allowed_endpoints is not None:
         fields.append("default_allowed_endpoints = ?")
-        params.append(serialize_allowed_endpoints(data.default_allowed_endpoints))
+        params.append(AllowedEndpoints.of(data.default_allowed_endpoints).serialize())
     if data.default_allowed_upstreams is not None:
         fields.append("default_allowed_upstreams = ?")
-        params.append(serialize_allowed_upstreams(data.default_allowed_upstreams))
+        params.append(AllowedUpstreams.of(data.default_allowed_upstreams).serialize())
     if data.default_anlas_total is not None:
         fields.append("default_anlas_total = ?")
         params.append(data.default_anlas_total)
@@ -204,8 +198,8 @@ def group_defaults(row: sqlite3.Row) -> dict[str, object]:
         "free_small_only": bool(row["default_free_small_only"]),
         "free_small_daily_limit_enabled": bool(row["free_small_daily_limit_enabled"]),
         "free_small_daily_limit": int(row["free_small_daily_limit"] or 0),
-        "allowed_endpoints": parse_allowed_endpoints(row["default_allowed_endpoints"]),
-        "allowed_upstreams": parse_allowed_upstreams(row["default_allowed_upstreams"]),
+        "allowed_endpoints": AllowedEndpoints.parse(row["default_allowed_endpoints"]).as_list(),
+        "allowed_upstreams": AllowedUpstreams.parse(row["default_allowed_upstreams"]).as_list(),
         "anlas_total": int(row["default_anlas_total"]),
         "reset_period": str(row["default_reset_period"]),
         "reset_day": int(row["default_reset_day"]),
@@ -262,10 +256,10 @@ def sync_group_members(
         params.append(int(defaults["free_small_daily_limit"]))
     if "allowed_endpoints" in selected:
         user_fields.append("allowed_endpoints = ?")
-        params.append(serialize_allowed_endpoints(list(defaults["allowed_endpoints"])))
+        params.append(AllowedEndpoints.of(defaults["allowed_endpoints"]).serialize())
     if "allowed_upstreams" in selected:
         user_fields.append("allowed_upstreams = ?")
-        params.append(serialize_allowed_upstreams(list(defaults["allowed_upstreams"])))
+        params.append(AllowedUpstreams.of(defaults["allowed_upstreams"]).serialize())
     if user_fields:
         params.append(group_id)
         db.execute(
@@ -377,8 +371,8 @@ def _group_member_values(row: sqlite3.Row) -> dict[str, object]:
             1 if row["free_small_daily_limit_enabled"] else 0,
             int(row["free_small_daily_limit"] or 0),
         ),
-        "allowed_endpoints": serialize_allowed_endpoints(parse_allowed_endpoints(row["default_allowed_endpoints"])),
-        "allowed_upstreams": serialize_allowed_upstreams(parse_allowed_upstreams(row["default_allowed_upstreams"])),
+        "allowed_endpoints": AllowedEndpoints.parse(row["default_allowed_endpoints"]).serialize(),
+        "allowed_upstreams": AllowedUpstreams.parse(row["default_allowed_upstreams"]).serialize(),
         "anlas_quota": (
             int(row["default_anlas_total"] or 0),
             str(row["default_reset_period"]),
@@ -410,12 +404,12 @@ def _merged_group_member_values(row: sqlite3.Row, data: UserGroupUpdateInput) ->
         ),
         "free_small_daily_limit": (daily_enabled, daily_limit),
         "allowed_endpoints": (
-            serialize_allowed_endpoints(list(data.default_allowed_endpoints))
+            AllowedEndpoints.of(data.default_allowed_endpoints).serialize()
             if data.default_allowed_endpoints is not None
             else current["allowed_endpoints"]
         ),
         "allowed_upstreams": (
-            serialize_allowed_upstreams(list(data.default_allowed_upstreams))
+            AllowedUpstreams.of(data.default_allowed_upstreams).serialize()
             if data.default_allowed_upstreams is not None
             else current["allowed_upstreams"]
         ),
@@ -448,8 +442,8 @@ def _user_member_values(row: sqlite3.Row) -> dict[str, object]:
             1 if row["free_small_daily_limit_enabled"] else 0,
             int(row["free_small_daily_limit"] or 0),
         ),
-        "allowed_endpoints": serialize_allowed_endpoints(parse_allowed_endpoints(row["allowed_endpoints"])),
-        "allowed_upstreams": serialize_allowed_upstreams(parse_allowed_upstreams(row["allowed_upstreams"])),
+        "allowed_endpoints": AllowedEndpoints.parse(row["allowed_endpoints"]).serialize(),
+        "allowed_upstreams": AllowedUpstreams.parse(row["allowed_upstreams"]).serialize(),
         "anlas_quota": (
             int(row["anlas_total"] or 0),
             str(row["reset_period"] or "month"),

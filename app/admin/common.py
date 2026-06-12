@@ -7,19 +7,12 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
+from ..allowlists import ALLOWED_ENDPOINT_CHOICES, AllowedEndpoints, AllowedUpstreams
 from ..quota_manager import normalize_reset_day
 from ..timezones import DISPLAY_TIMEZONE
 
 
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
-ALLOWED_ENDPOINT_CHOICES = {
-    "generate-image": "图像生成",
-    "suggest-tags": "标签建议",
-    "upscale": "图片放大",
-    "augment-image": "图像增强",
-    "encode-vibe": "Vibe 编码",
-}
-DEFAULT_ALLOWED_ENDPOINTS = "generate-image"
 
 
 def row_to_dict(row):
@@ -28,48 +21,13 @@ def row_to_dict(row):
 
 def user_row_to_dict(row):
     data = row_to_dict(row)
-    data["allowed_endpoints_list"] = parse_allowed_endpoints(data.get("allowed_endpoints"))
+    data["allowed_endpoints_list"] = AllowedEndpoints.parse(data.get("allowed_endpoints")).as_list()
     data["allowed_endpoint_labels"] = [
         ALLOWED_ENDPOINT_CHOICES.get(endpoint, endpoint)
         for endpoint in data["allowed_endpoints_list"]
     ]
-    data["allowed_upstreams_list"] = parse_allowed_upstreams(data.get("allowed_upstreams"))
+    data["allowed_upstreams_list"] = AllowedUpstreams.parse(data.get("allowed_upstreams")).as_list()
     return data
-
-
-def parse_allowed_endpoints(value: str | None) -> list[str]:
-    if not value:
-        return [DEFAULT_ALLOWED_ENDPOINTS]
-    endpoints = [item.strip() for item in value.split(",") if item.strip()]
-    return endpoints or [DEFAULT_ALLOWED_ENDPOINTS]
-
-
-def serialize_allowed_endpoints(value: list[str] | None) -> str:
-    if not value:
-        return DEFAULT_ALLOWED_ENDPOINTS
-    valid = []
-    for endpoint in value:
-        endpoint = endpoint.strip()
-        if endpoint in ALLOWED_ENDPOINT_CHOICES and endpoint not in valid:
-            valid.append(endpoint)
-    return ",".join(valid or [DEFAULT_ALLOWED_ENDPOINTS])
-
-
-def parse_allowed_upstreams(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def serialize_allowed_upstreams(value: list[str] | None) -> str | None:
-    if not value:
-        return None
-    valid = []
-    for upstream_id in value:
-        upstream_id = upstream_id.strip()
-        if upstream_id and upstream_id not in valid:
-            valid.append(upstream_id)
-    return ",".join(valid) if valid else None
 
 
 def upstream_choices(request: Request) -> list[str]:
@@ -82,10 +40,10 @@ def upstream_choices(request: Request) -> list[str]:
 def validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
     if allowed_endpoints is None:
         return
-    normalized = [item.strip() for item in allowed_endpoints if item.strip()]
-    if not normalized:
+    endpoints = AllowedEndpoints.of(allowed_endpoints)
+    if not endpoints.items:
         raise HTTPException(status_code=400, detail={"message": "At least one endpoint must be allowed"})
-    unknown = sorted({item for item in normalized if item not in ALLOWED_ENDPOINT_CHOICES})
+    unknown = endpoints.unknown()
     if unknown:
         raise HTTPException(
             status_code=400,
@@ -97,7 +55,7 @@ def validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Req
     if not allowed_upstreams:
         return
     valid_upstreams = set(upstream_choices(request))
-    unknown = sorted({item.strip() for item in allowed_upstreams if item.strip()} - valid_upstreams)
+    unknown = sorted(AllowedUpstreams.of(allowed_upstreams).as_frozenset() - valid_upstreams)
     if unknown:
         raise HTTPException(
             status_code=400,
