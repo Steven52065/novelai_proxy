@@ -8,17 +8,17 @@ import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from novelai_python._exceptions import APIError
 
 from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..usage_logs import UsageLogCreate, UsageLogRepository
-from .auth import has_admin_session, require_admin_or_session
+from .auth import require_admin_or_session, require_admin_page_session
 from .common import json_or_none, optional_query_int, row_to_dict, templates, usage_log_to_dict
 
 
 api_router = APIRouter(prefix="/admin/api")
-web_router = APIRouter(prefix="/admin")
+web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 REPLAY_PRIORITY = -100
 REPLAY_IMAGE_CONTENT_TYPES = {
     ".png": "image/png",
@@ -143,8 +143,6 @@ async def _replay_log_source(source, request: Request):
 
 @web_router.get("/logs", response_class=HTMLResponse)
 async def logs_page(request: Request, user_id: str | None = None, limit: int = 100):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     selected_user_id = optional_query_int(user_id)
     data = await logs(request, user_id=selected_user_id, limit=limit)
     users = request.app.state.db.query_all("SELECT id, name FROM users ORDER BY name")

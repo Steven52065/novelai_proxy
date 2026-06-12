@@ -8,12 +8,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database
-from .auth import has_admin_session, require_admin
+from .auth import require_admin, require_admin_page_session
 from .common import format_bytes, format_display_time, row_to_dict, templates
 
 
 api_router = APIRouter(prefix="/admin/api")
-web_router = APIRouter(prefix="/admin")
+web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 
 
 class CleanupLogsRequest(BaseModel):
@@ -56,8 +56,6 @@ async def vacuum_database(request: Request):
 
 @web_router.get("/database", response_class=HTMLResponse)
 async def database_page(request: Request, message: str | None = None):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     return templates.TemplateResponse(
         request,
         "database.html",
@@ -76,8 +74,6 @@ async def cleanup_logs_form(
     older_than_days: int = Form(30),
     statuses: list[str] | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     result = _cleanup_logs(request, older_than_days, statuses or [])
     return RedirectResponse(f"/admin/database?message=已删除 {result['deleted_logs']} 条日志记录", status_code=303)
 
@@ -90,8 +86,6 @@ async def clear_payloads_form(
     clear_output_files: str | None = Form(None),
     clear_image_urls: str | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     result = _clear_payloads(
         request,
         older_than_days=older_than_days,
@@ -104,8 +98,6 @@ async def clear_payloads_form(
 
 @web_router.post("/database/vacuum")
 async def vacuum_database_form(request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     result = _vacuum_database(request)
     before = format_bytes(result["before_bytes"])
     after = format_bytes(result["after_bytes"])

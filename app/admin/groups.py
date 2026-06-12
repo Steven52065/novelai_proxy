@@ -20,12 +20,12 @@ from ..users import (
     update_group_with_propagation,
 )
 from ..users.service import parse_allowed_endpoints, parse_allowed_upstreams
-from .auth import has_admin_session, require_admin, require_admin_or_session
+from .auth import require_admin, require_admin_or_session, require_admin_page_session
 from .common import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS, row_to_dict, templates
 
 
 api_router = APIRouter(prefix="/admin/api")
-web_router = APIRouter(prefix="/admin")
+web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 
 
 class CreateUserGroupRequest(BaseModel):
@@ -225,8 +225,6 @@ async def delete_group_rate_limit_rule(rule_id: int, request: Request):
 
 @web_router.get("/user-groups", response_class=HTMLResponse)
 async def user_groups_page(request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
     return templates.TemplateResponse(
         request,
@@ -255,8 +253,6 @@ async def create_user_group_form(
     default_reset_period: str = Form("month"),
     default_reset_day: int = Form(1),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await create_user_group(
         CreateUserGroupRequest(
             name=name,
@@ -278,8 +274,6 @@ async def create_user_group_form(
 
 @web_router.get("/user-groups/{group_id}", response_class=HTMLResponse)
 async def user_group_edit_page(group_id: int, request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
     group = _group_row_to_dict(get_group(db, group_id))
     group_rules = [
@@ -339,8 +333,6 @@ async def update_user_group_form(
     default_reset_day: int = Form(1),
     propagate_scope: str = Form("unmodified"),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     if propagate_scope not in {"unmodified", "all", "none"}:
         propagate_scope = "unmodified"
     result = await patch_user_group(
@@ -370,8 +362,6 @@ async def update_user_group_form(
 
 @web_router.post("/user-groups/{group_id}/delete")
 async def delete_user_group_form(group_id: int, request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await delete_user_group(group_id, request)
     return RedirectResponse("/admin/user-groups", status_code=303)
 
@@ -382,8 +372,6 @@ async def sync_user_group_members_form(
     request: Request,
     fields: list[str] | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await sync_user_group_members(group_id, SyncGroupMembersRequest(fields=fields or []), request)
     return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
 
@@ -395,8 +383,6 @@ async def add_group_rate_limit_rule_form(
     period: str = Form(...),
     max_requests: int = Form(...),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await add_group_rate_limit_rule(group_id, GroupRateLimitRuleRequest(period=period, max_requests=max_requests), request)
     return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
 
@@ -410,8 +396,6 @@ async def update_group_rate_limit_rule_form(
     max_requests: int = Form(...),
     is_active: str | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await update_group_rate_limit_rule(
         rule_id,
         GroupRateLimitRuleRequest(period=period, max_requests=max_requests, is_active=is_active == "on"),
@@ -422,8 +406,6 @@ async def update_group_rate_limit_rule_form(
 
 @web_router.post("/group-rate-limit-rules/{rule_id}/delete")
 async def delete_group_rate_limit_rule_form(rule_id: int, request: Request, group_id: int = Form(...)):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await delete_group_rate_limit_rule(rule_id, request)
     return RedirectResponse(f"/admin/user-groups/{group_id}", status_code=303)
 

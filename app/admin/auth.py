@@ -36,6 +36,19 @@ def require_admin_or_session(
     require_admin(request, credentials)
 
 
+class AdminLoginRequired(Exception):
+    """管理后台页面缺少有效会话时由依赖抛出，应用层 handler 统一重定向到登录页。"""
+
+
+def require_admin_page_session(request: Request) -> None:
+    if not has_admin_session(request):
+        raise AdminLoginRequired()
+
+
+async def admin_login_required_handler(request: Request, exc: AdminLoginRequired) -> RedirectResponse:
+    return RedirectResponse("/admin/login", status_code=303)
+
+
 @web_router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse(request, "login.html", {"error": None})

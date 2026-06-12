@@ -15,7 +15,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .admin.routes import router as admin_router, set_admin_session_cookie, valid_admin_session
+from .admin.routes import (
+    AdminLoginRequired,
+    admin_login_required_handler,
+    router as admin_router,
+    set_admin_session_cookie,
+    valid_admin_session,
+)
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
@@ -130,6 +136,8 @@ if static_dir.exists():
 app.include_router(proxy_router)
 app.include_router(admin_router)
 app.include_router(self_service_router)
+# 管理后台页面的会话依赖未通过时，统一重定向到登录页。
+app.add_exception_handler(AdminLoginRequired, admin_login_required_handler)
 
 
 @app.middleware("http")

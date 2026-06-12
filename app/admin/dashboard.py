@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger
-from .auth import has_admin_session, require_admin_or_session
+from .auth import has_admin_session, require_admin_or_session, require_admin_page_session
 from .common import (
     DISPLAY_TIMEZONE,
     add_month,
@@ -61,7 +61,8 @@ async def upstream_weights(request: Request):
     return _upstream_weights_payload(request)
 
 
-@web_router.get("", response_class=HTMLResponse)
+# websocket 路由与页面共用本 router，会话依赖挂在各 HTML 路由上而非 router 级。
+@web_router.get("", response_class=HTMLResponse, dependencies=[Depends(require_admin_page_session)])
 async def dashboard_alias(request: Request):
     return await dashboard(request)
 
@@ -147,10 +148,8 @@ async def dashboard_ws(websocket: WebSocket):
             await asyncio.gather(event_task, return_exceptions=True)
 
 
-@web_router.get("/", response_class=HTMLResponse)
+@web_router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_admin_page_session)])
 async def dashboard(request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
     snapshot = dashboard_snapshot_payload(request, include_trends=False)
     return templates.TemplateResponse(

@@ -21,7 +21,7 @@ from ..users import (
     reset_api_key,
     update_user as update_user_record,
 )
-from .auth import has_admin_session, require_admin
+from .auth import require_admin, require_admin_page_session
 from .common import (
     ALLOWED_ENDPOINT_CHOICES,
     DEFAULT_ALLOWED_ENDPOINTS,
@@ -32,7 +32,7 @@ from .common import (
 
 
 api_router = APIRouter(prefix="/admin/api")
-web_router = APIRouter(prefix="/admin")
+web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 API_KEY_FLASH_COOKIE = "novelai_proxy_api_key_flash"
 API_KEY_FLASH_TTL_SECONDS = 5 * 60
 
@@ -221,8 +221,6 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
 
 @web_router.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
     new_api_key = _pop_api_key_flash(request)
     rows = db.query_all(
@@ -279,8 +277,6 @@ async def create_user_form(
     group_id: str | None = Form(None),
     use_group_defaults: str | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     parsed_group_id = _parse_optional_form_int(group_id)
     if use_group_defaults == "on" and parsed_group_id is not None:
         payload = CreateUserRequest(name=name, group_id=parsed_group_id)
@@ -310,8 +306,6 @@ async def create_user_form(
 # 注意：批量路由必须先于 POST /users/{user_id} 注册，否则会被路径参数路由捕获。
 @web_router.post("/users/bulk-reset-anlas")
 async def bulk_reset_anlas_form(request: Request, user_ids: list[int] | None = Form(None)):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     if not user_ids:
         raise HTTPException(status_code=400, detail={"message": "No users selected"})
     await bulk_reset_anlas(BulkUserIdsRequest(user_ids=user_ids), request)
@@ -320,8 +314,6 @@ async def bulk_reset_anlas_form(request: Request, user_ids: list[int] | None = F
 
 @web_router.post("/users/bulk-reset-free-small-daily")
 async def bulk_reset_free_small_daily_form(request: Request, user_ids: list[int] | None = Form(None)):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     if not user_ids:
         raise HTTPException(status_code=400, detail={"message": "No users selected"})
     await bulk_reset_free_small_daily(BulkUserIdsRequest(user_ids=user_ids), request)
@@ -330,8 +322,6 @@ async def bulk_reset_free_small_daily_form(request: Request, user_ids: list[int]
 
 @web_router.get("/users/{user_id}", response_class=HTMLResponse)
 async def user_edit_page(user_id: int, request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     db: Database = request.app.state.db
     new_api_key = _pop_api_key_flash(request)
     user = db.query_one(
@@ -393,8 +383,6 @@ async def update_user_form(
     group_id: str | None = Form(None),
     apply_group_defaults: str | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     parsed_group_id = _parse_optional_form_int(group_id)
     current_group_id = _get_user_group_id(request.app.state.db, user_id)
     payload_data = {
@@ -434,24 +422,18 @@ async def update_user_form(
 
 @web_router.post("/users/{user_id}/delete")
 async def delete_user_form(user_id: int, request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await delete_user(user_id, request)
     return RedirectResponse("/admin/users", status_code=303)
 
 
 @web_router.post("/users/{user_id}/reset-quota")
 async def reset_quota_form(user_id: int, request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await reset_user_quota(user_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
 
 @web_router.post("/users/{user_id}/reset-key")
 async def reset_key_form(user_id: int, request: Request):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     result = await reset_user_key(user_id, request)
     response = RedirectResponse(f"/admin/users/{user_id}", status_code=303)
     _set_api_key_flash(response, request, result["api_key"])
@@ -465,8 +447,6 @@ async def add_rate_limit_rule_form(
     period: str = Form(...),
     max_requests: int = Form(...),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await add_rate_limit_rule(user_id, RateLimitRuleRequest(period=period, max_requests=max_requests), request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
@@ -480,8 +460,6 @@ async def update_rate_limit_rule_form(
     max_requests: int = Form(...),
     is_active: str | None = Form(None),
 ):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await update_rate_limit_rule(
         rule_id,
         RateLimitRuleRequest(period=period, max_requests=max_requests, is_active=is_active == "on"),
@@ -492,8 +470,6 @@ async def update_rate_limit_rule_form(
 
 @web_router.post("/rate-limit-rules/{rule_id}/delete")
 async def delete_rate_limit_rule_form(rule_id: int, request: Request, user_id: int = Form(...)):
-    if not has_admin_session(request):
-        return RedirectResponse("/admin/login", status_code=303)
     await delete_rate_limit_rule(rule_id, request)
     return RedirectResponse(f"/admin/users/{user_id}", status_code=303)
 
