@@ -6,7 +6,7 @@ import time
 
 from helpers import PAYLOAD, FakeUpstream
 from app.free_small_daily_limit import FreeSmallDailyReservation
-from app.queue_manager import DispatchQueueItem, QueueClosed, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
+from app.queue_manager import QueueClosed, QueueItem, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
 from app.request_accounting import RequestAccounting
 from queue_manager_helpers import (
     FirstRequestBlockingLabelUpstream,
@@ -300,7 +300,7 @@ def test_cancelled_429_retry_releases_reserved_quota():
         client_future.cancel()
         completed = loop.create_future()
         completed.set_exception(Retry429Error(_api_429()))
-        item = DispatchQueueItem(
+        item = QueueItem(
             priority=RoutingProxyQueue.NORMAL_PRIORITY,
             sequence=0,
             enqueued_at=time.monotonic(),

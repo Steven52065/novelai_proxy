@@ -26,6 +26,21 @@ class ImageHostingServiceLike(Protocol):
 
 @dataclass(order=True)
 class QueueItem:
+    """单个代理请求在两层队列中流转的上下文。
+
+    同一个 dataclass 同时服务于两层队列：
+
+    - 调度层（``RoutingProxyQueue`` 的 dispatch 队列）：``upstream_id`` 为
+      ``None`` 表示尚未路由，``future`` 是面向调用方的最终 future，
+      ``cancel_future`` 为 ``None``。
+    - 执行层（每上游 ``ProxyQueue``）：``upstream_id`` 指向已选定的上游，
+      ``future`` 是本次 attempt 的 future（由调度层注册 done_callback），
+      ``cancel_future`` 指向调用方 future（用于检测客户端取消）。
+
+    两层之间通过 ``dataclasses.replace`` 整体复制，新增业务字段会自动
+    随之流动，无需在多个签名间手工同步。
+    """
+
     priority: int
     sequence: int
     enqueued_at: float = field(compare=False)
@@ -33,16 +48,18 @@ class QueueItem:
     user_id: int = field(compare=False)
     action: str = field(compare=False)
     tier: str = field(compare=False)
-    upstream_id: str | None = field(compare=False)
     estimated_cost: int = field(compare=False)
     accounting: RequestAccounting = field(compare=False)
     logging_config: LoggingConfig = field(compare=False)
     process_zip_response: bool = field(compare=False)
-    handler: Callable[[], Awaitable[bytes]] = field(compare=False)
+    handler: Callable[[Any], Awaitable[bytes]] = field(compare=False)
     future: asyncio.Future = field(compare=False)
+    upstream_id: str | None = field(default=None, compare=False)
+    allowed_upstreams: frozenset[str] | set[str] | list[str] | None = field(default=None, compare=False)
     cancel_future: asyncio.Future | None = field(default=None, compare=False)
-    is_retry_success: bool = field(default=False, compare=False)
+    has_retried_429: bool = field(default=False, compare=False)
     attempt_number: int = field(default=0, compare=False)
+    last_429_error: APIError | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -56,27 +73,6 @@ class AdaptiveUpstreamScore:
     score: float
 
 
-@dataclass(order=True)
-class DispatchQueueItem:
-    priority: int
-    sequence: int
-    enqueued_at: float = field(compare=False)
-    request_id: str = field(compare=False)
-    user_id: int = field(compare=False)
-    action: str = field(compare=False)
-    tier: str = field(compare=False)
-    estimated_cost: int = field(compare=False)
-    accounting: RequestAccounting = field(compare=False)
-    logging_config: LoggingConfig = field(compare=False)
-    process_zip_response: bool = field(compare=False)
-    allowed_upstreams: frozenset[str] | set[str] | list[str] | None = field(compare=False)
-    handler: Callable[[Any], Awaitable[bytes]] = field(compare=False)
-    future: asyncio.Future = field(compare=False)
-    has_retried_429: bool = field(default=False, compare=False)
-    attempt_number: int = field(default=0, compare=False)
-    last_429_error: APIError | None = field(default=None, compare=False)
-
-
 class ProxyQueue:
     def __init__(
         self,
@@ -84,6 +80,7 @@ class ProxyQueue:
         quota_manager: QuotaManager,
         usage_logs: UsageLogRepository,
         max_queue_size: int,
+        client_provider: Callable[[], Any] | None = None,
         upstream_interval_min_seconds: float = 2,
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
@@ -96,6 +93,7 @@ class ProxyQueue:
         self.upstream_id = upstream_id
         self.quota_manager = quota_manager
         self.usage_logs = usage_logs
+        self.client_provider = client_provider
         self.image_hosting = image_hosting
         self.queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=max_queue_size)
         self.upstream_interval_min_seconds = max(0.0, float(upstream_interval_min_seconds))
@@ -110,7 +108,6 @@ class ProxyQueue:
         self.get_total_queue_length = get_total_queue_length
         self._last_upstream_completed_at: float | None = None
         self._apply_error_extra_delay_next = False
-        self._sequence = itertools.count()
         self._worker: asyncio.Task | None = None
         self._image_upload_tasks: set[asyncio.Task] = set()
         self._running_item: QueueItem | None = None
@@ -148,12 +145,12 @@ class ProxyQueue:
     def snapshot(self) -> dict[str, object]:
         now = time.monotonic()
         queued = [
-            self._item_snapshot(item, now, "queued", position=index)
+            _item_snapshot(item, now, "queued", position=index)
             for index, item in enumerate(sorted(self.queue._queue), start=1)
         ]
         running = None
         if self._running_item is not None:
-            running = self._item_snapshot(self._running_item, now, "running", position=0)
+            running = _item_snapshot(self._running_item, now, "running", position=0)
             if self._running_started_at is not None:
                 running["running_seconds"] = max(0, int(now - self._running_started_at))
         return {
@@ -162,112 +159,47 @@ class ProxyQueue:
             "queued": queued,
         }
 
-    def enqueue(
-        self,
-        *,
-        request_id: str,
-        user_id: int,
-        tier: str,
-        action: str,
-        logging_config: LoggingConfig,
-        estimated_cost: int,
-        handler: Callable[[], Awaitable[bytes]],
-        process_zip_response: bool = True,
-        priority_override: int | None = None,
-        sequence_override: int | None = None,
-        manage_quota: bool = True,
-        is_retry_success: bool = False,
-        attempt_number: int = 0,
-        cancel_future: asyncio.Future | None = None,
-        allow_overflow: bool = False,
-        accounting: RequestAccounting | None = None,
-    ) -> asyncio.Future:
+    def enqueue(self, item: QueueItem, *, allow_overflow: bool = False) -> asyncio.Future:
+        """把调度层的 item 绑定到本上游后入队，返回本次 attempt 的 future。
+
+        传入的 item 不会被修改：本方法用 ``dataclasses.replace`` 复制出
+        执行层 item（``upstream_id`` 指向本上游、``future`` 换成新建的
+        attempt future、``cancel_future`` 指向调用方 future、排队计时重新
+        开始），调用方持有的调度层 item 仍指向最终 future。
+        """
         if self.queue.full() and not allow_overflow:
             raise QueueFull
 
-        if accounting is None:
-            accounting = RequestAccounting(
-                quota_manager=self.quota_manager,
-                usage_logs=self.usage_logs,
-                request_id=request_id,
-                user_id=user_id,
-                estimated_cost=estimated_cost,
-                manage_quota=manage_quota,
-            )
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        priority = priority_override if priority_override is not None else 0 if tier == "vip" else 10
-        sequence = sequence_override if sequence_override is not None else next(self._sequence)
-        item = QueueItem(
-            priority=priority,
-            sequence=sequence,
+        attempt_future: asyncio.Future = loop.create_future()
+        attempt_item = dataclasses.replace(
+            item,
             enqueued_at=time.monotonic(),
-            request_id=request_id,
-            user_id=user_id,
-            action=action,
-            tier=tier,
             upstream_id=self.upstream_id,
-            estimated_cost=estimated_cost,
-            accounting=accounting,
-            logging_config=logging_config,
-            process_zip_response=process_zip_response,
-            handler=handler,
-            future=future,
-            cancel_future=cancel_future,
-            is_retry_success=is_retry_success,
-            attempt_number=attempt_number,
+            future=attempt_future,
+            cancel_future=item.future,
         )
         # 如果是重试（attempt_number > 0），先插入新的数据库记录。
         # 这里没有 await，插入完成前 worker 不会开始处理刚入队的 item。
         # 插入失败时由 accounting 负责释放预留额度后重新抛出。
-        if attempt_number > 0:
-            accounting.record_retry_attempt(
-                attempt_number=attempt_number,
+        if attempt_item.attempt_number > 0:
+            attempt_item.accounting.record_retry_attempt(
+                attempt_number=attempt_item.attempt_number,
                 upstream_id=self.upstream_id,
             )
 
         try:
             if self.queue.full() and allow_overflow:
-                self.queue._put(item)
+                self.queue._put(attempt_item)
                 self.queue._unfinished_tasks += 1
                 self.queue._finished.clear()
                 self.queue._wakeup_next(self.queue._getters)
             else:
-                self.queue.put_nowait(item)
+                self.queue.put_nowait(attempt_item)
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
         self._notify_change()
-        return future
-
-    async def submit(
-        self,
-        *,
-        request_id: str,
-        user_id: int,
-        tier: str,
-        action: str,
-        logging_config: LoggingConfig,
-        estimated_cost: int,
-        handler: Callable[[], Awaitable[bytes]],
-        process_zip_response: bool = True,
-        priority_override: int | None = None,
-        manage_quota: bool = True,
-        accounting: RequestAccounting | None = None,
-    ) -> bytes:
-        future = self.enqueue(
-            request_id=request_id,
-            user_id=user_id,
-            tier=tier,
-            action=action,
-            logging_config=logging_config,
-            estimated_cost=estimated_cost,
-            handler=handler,
-            process_zip_response=process_zip_response,
-            priority_override=priority_override,
-            manage_quota=manage_quota,
-            accounting=accounting,
-        )
-        return await future
+        return attempt_future
 
     async def _run(self) -> None:
         while True:
@@ -415,16 +347,16 @@ class ProxyQueue:
                     final_cost=item.estimated_cost,
                     output_files=saved_files,
                     upstream_ms=upstream_ms,
-                    is_retry_success=item.is_retry_success,
+                    is_retry_success=item.has_retried_429,
                     attempt_number=item.attempt_number,
                 )
-                log_color = "white" if item.is_retry_success else "default"
+                log_color = "white" if item.has_retried_429 else "default"
                 logger.info(
                     "proxy request succeeded request_id=%s final_cost=%s output_files=%s is_retry_success=%s log_color=%s",
                     item.request_id,
                     item.estimated_cost,
                     len(saved_files),
-                    item.is_retry_success,
+                    item.has_retried_429,
                     log_color,
                 )
                 if not item.future.done():
@@ -447,7 +379,8 @@ class ProxyQueue:
         return exc.__class__.__name__, str(exc)
 
     async def _execute_handler_with_timeout(self, item: QueueItem) -> bytes:
-        handler_task = asyncio.create_task(item.handler())
+        client = self.client_provider() if self.client_provider is not None else None
+        handler_task = asyncio.create_task(item.handler(client))
         try:
             done, _pending = await asyncio.wait(
                 {handler_task},
@@ -557,25 +490,25 @@ class ProxyQueue:
         self.usage_logs.update_image_urls(request_id, image_urls, attempt_number)
         logger.info("image host upload succeeded request_id=%s image_urls=%s attempt_number=%s", request_id, len(image_urls), attempt_number)
 
-    @staticmethod
-    def _item_snapshot(item: QueueItem, now: float, status: str, position: int) -> dict[str, object]:
-        return {
-            "request_id": item.request_id,
-            "user_id": item.user_id,
-            "action": item.action,
-            "tier": item.tier,
-            "upstream_id": item.upstream_id,
-            "estimated_anlas_cost": item.estimated_cost,
-            "priority": item.priority,
-            "sequence": item.sequence,
-            "position": position,
-            "status": status,
-            "queued_seconds": max(0, int(now - item.enqueued_at)),
-        }
-
     def _notify_change(self) -> None:
         if self._on_change is not None:
             self._on_change()
+
+
+def _item_snapshot(item: QueueItem, now: float, status: str, position: int) -> dict[str, object]:
+    return {
+        "request_id": item.request_id,
+        "user_id": item.user_id,
+        "action": item.action,
+        "tier": item.tier,
+        "upstream_id": item.upstream_id,
+        "estimated_anlas_cost": item.estimated_cost,
+        "priority": item.priority,
+        "sequence": item.sequence,
+        "position": position,
+        "status": status,
+        "queued_seconds": max(0, int(now - item.enqueued_at)),
+    }
 
 
 class QueueFull(Exception):
@@ -672,9 +605,9 @@ class RoutingProxyQueue:
         }
         if dispatch_max_queue_size is None:
             dispatch_max_queue_size = max_queue_size * len(enabled_targets)
-        self._dispatch_queue: asyncio.PriorityQueue[DispatchQueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
+        self._dispatch_queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
-        self._dispatch_running_item: DispatchQueueItem | None = None
+        self._dispatch_running_item: QueueItem | None = None
         self._accepting = True
         self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
@@ -684,6 +617,7 @@ class RoutingProxyQueue:
                 quota_manager=quota_manager,
                 usage_logs=usage_logs,
                 max_queue_size=max_queue_size,
+                client_provider=target.client_provider,
                 upstream_interval_min_seconds=upstream_interval_min_seconds,
                 upstream_interval_max_seconds=upstream_interval_max_seconds,
                 upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
@@ -736,7 +670,7 @@ class RoutingProxyQueue:
         flattened_queued = []
         now = time.monotonic()
         dispatch_queued = [
-            self._dispatch_item_snapshot(item, now, position=index)
+            _item_snapshot(item, now, "dispatch_queued", position=index)
             for index, item in enumerate(sorted(self._dispatch_queue._queue), start=1)
         ]
         for upstream_id in self._target_order:
@@ -816,7 +750,7 @@ class RoutingProxyQueue:
         priority = priority_override if priority_override is not None else self.VIP_PRIORITY if tier == "vip" else self.NORMAL_PRIORITY
         try:
             self._dispatch_queue.put_nowait(
-                DispatchQueueItem(
+                QueueItem(
                     priority=priority,
                     sequence=next(self._sequence),
                     enqueued_at=time.monotonic(),
@@ -828,9 +762,9 @@ class RoutingProxyQueue:
                     accounting=accounting,
                     logging_config=logging_config,
                     process_zip_response=process_zip_response,
-                    allowed_upstreams=allowed_upstreams,
                     handler=handler,
                     future=future,
+                    allowed_upstreams=allowed_upstreams,
                 )
             )
         except asyncio.QueueFull as exc:
@@ -920,7 +854,7 @@ class RoutingProxyQueue:
 
     def _dispatch_to_upstream(
         self,
-        item: DispatchQueueItem,
+        item: QueueItem,
         *,
         last_429_error: APIError | None = None,
     ) -> None:
@@ -933,26 +867,9 @@ class RoutingProxyQueue:
             return
 
         for upstream_id in candidates:
-            target = self._targets[upstream_id]
             queue = self._queues[upstream_id]
             try:
-                upstream_future = queue.enqueue(
-                    request_id=item.request_id,
-                    user_id=item.user_id,
-                    tier=item.tier,
-                    action=item.action,
-                    logging_config=item.logging_config,
-                    estimated_cost=item.estimated_cost,
-                    handler=lambda target=target: item.handler(target.client_provider()),
-                    process_zip_response=item.process_zip_response,
-                    priority_override=item.priority,
-                    sequence_override=item.sequence,
-                    is_retry_success=item.has_retried_429,
-                    attempt_number=item.attempt_number,
-                    cancel_future=item.future,
-                    allow_overflow=item.tier == "vip",
-                    accounting=item.accounting,
-                )
+                upstream_future = queue.enqueue(item, allow_overflow=item.tier == "vip")
             except QueueFull as exc:
                 errors.append(exc)
                 continue
@@ -976,7 +893,7 @@ class RoutingProxyQueue:
         self,
         completed: asyncio.Future,
         *,
-        item: DispatchQueueItem,
+        item: QueueItem,
         upstream_id: str,
         last_429_error: APIError | None,
     ) -> None:
@@ -1030,7 +947,7 @@ class RoutingProxyQueue:
 
     def _requeue_429_retry(
         self,
-        item: DispatchQueueItem,
+        item: QueueItem,
         *,
         next_attempt_number: int,
         retry_error: APIError,
@@ -1063,7 +980,7 @@ class RoutingProxyQueue:
 
     def _finish_unavailable_dispatch(
         self,
-        item: DispatchQueueItem,
+        item: QueueItem,
         *,
         errors: list[Exception],
         last_429_error: APIError | None,
@@ -1077,7 +994,7 @@ class RoutingProxyQueue:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("No enabled upstream is available for this user")
 
-    def _finish_user_unavailable(self, item: DispatchQueueItem) -> None:
+    def _finish_user_unavailable(self, item: QueueItem) -> None:
         item.accounting.settle_rejected(
             error_code="user_unavailable",
             error_message="User is no longer active",
@@ -1154,32 +1071,3 @@ class RoutingProxyQueue:
     def _notify_change(self) -> None:
         if self._on_change is not None:
             self._on_change()
-
-    @staticmethod
-    def _copy_future_result(completed: asyncio.Future, future: asyncio.Future) -> None:
-        if future.done():
-            return
-        if completed.cancelled():
-            future.cancel()
-            return
-        exc = completed.exception()
-        if exc is not None:
-            future.set_exception(exc)
-            return
-        future.set_result(completed.result())
-
-    @staticmethod
-    def _dispatch_item_snapshot(item: DispatchQueueItem, now: float, position: int) -> dict[str, object]:
-        return {
-            "request_id": item.request_id,
-            "user_id": item.user_id,
-            "action": item.action,
-            "tier": item.tier,
-            "upstream_id": None,
-            "estimated_anlas_cost": item.estimated_cost,
-            "priority": item.priority,
-            "sequence": item.sequence,
-            "position": position,
-            "status": "dispatch_queued",
-            "queued_seconds": max(0, int(now - item.enqueued_at)),
-        }
