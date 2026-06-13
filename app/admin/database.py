@@ -8,8 +8,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database
+from ..templating import templates
 from .auth import require_admin, require_admin_page_session
-from .common import format_bytes, format_display_time, row_to_dict, templates
+from .common import format_bytes, format_display_time, row_to_dict
 
 
 api_router = APIRouter(prefix="/admin/api")

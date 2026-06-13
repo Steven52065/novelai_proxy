@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from ..security import constant_time_equal
-from .common import templates
+from ..templating import templates
 
 
 web_router = APIRouter(prefix="/admin")

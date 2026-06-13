@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi import HTTPException, Request
-from fastapi.templating import Jinja2Templates
 
 from ..allowlists import ALLOWED_ENDPOINT_CHOICES, AllowedEndpoints, AllowedUpstreams
 from ..quota_manager import normalize_reset_day
 from ..timezones import DISPLAY_TIMEZONE
-
-
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 
 
 def row_to_dict(row):

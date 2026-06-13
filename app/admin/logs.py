@@ -14,9 +14,10 @@ from ..logging_utils import mark_request_total_duration
 from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..queue_tiers import TIER_REPLAY
+from ..templating import templates
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 from .auth import require_admin_or_session, require_admin_page_session
-from .common import json_or_none, optional_query_int, row_to_dict, templates, usage_log_to_dict
+from .common import json_or_none, optional_query_int, row_to_dict, usage_log_to_dict
 
 
 api_router = APIRouter(prefix="/admin/api")

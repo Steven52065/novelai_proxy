@@ -14,6 +14,7 @@ from ..allowlists import (
 )
 from ..database import Database, utc_now_iso
 from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
+from ..templating import templates
 from ..users import (
     UserGroupInput,
     UserGroupUpdateInput,
@@ -30,7 +31,6 @@ from .common import (
     normalize_reset_day_or_400,
     notify_dashboard_change,
     row_to_dict,
-    templates,
     upstream_choices,
     validate_allowed_endpoints,
     validate_allowed_upstreams,

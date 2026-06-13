@@ -8,6 +8,7 @@ from ..allowlists import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS
 from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database, utc_now_iso
 from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
+from ..templating import templates
 from ..users import (
     CreateUserInput,
     UpdateUserInput,
@@ -25,7 +26,6 @@ from .common import (
     normalize_reset_day_or_400,
     notify_dashboard_change,
     row_to_dict,
-    templates,
     upstream_choices,
     user_row_to_dict,
     validate_allowed_endpoints,

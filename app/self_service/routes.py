@@ -11,7 +11,6 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ..admin.common import templates
 from ..allowlists import AllowedEndpoints, AllowedUpstreams
 from ..api_key_flash import ApiKeyFlashStore
 from ..config import DiscordSelfServiceConfig
@@ -26,6 +25,7 @@ from ..deps import (
 from ..free_small_daily_limit import FreeSmallDailyLimitManager
 from ..logging_utils import json_dumps, logger
 from ..quota_manager import QuotaManager
+from ..templating import templates
 from ..users import reset_api_key
 from .accounts import DiscordProfile, login_or_register_discord_user
 from .discord import DiscordOAuthClient
