@@ -175,7 +175,18 @@ def test_bulk_reset_web_forms_and_page_controls(tmp_path: Path, monkeypatch):
 
         page = client.get("/admin/users")
         assert page.status_code == 200
-        for marker in ("select-all-users", "user-select", "bulk-reset-anlas-btn", "bulk-reset-daily-btn", "重置Anlas点数", "重置日小图"):
+        for marker in (
+            "user-remark-search",
+            "搜索备注名",
+            "user-select-checkbox",
+            'data-user-name="bulk-web-user"',
+            "select-all-users",
+            "user-select",
+            "bulk-reset-anlas-btn",
+            "bulk-reset-daily-btn",
+            "重置Anlas点数",
+            "重置日小图",
+        ):
             assert marker in page.text
 
         anlas_resp = client.post(

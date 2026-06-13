@@ -5,7 +5,11 @@
     <i data-lucide="users" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
     用户管理
   </h1>
-  <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+  <div class="users-actions">
+    <div class="user-search">
+      <i data-lucide="search" style="width: 16px; height: 16px;"></i>
+      <input id="user-remark-search" type="search" placeholder="搜索备注名" aria-label="搜索备注名" autocomplete="off">
+    </div>
     <button type="button" id="bulk-reset-anlas-btn" class="secondary" disabled>
       <i data-lucide="rotate-ccw" style="width: 16px; height: 16px;"></i>
       重置Anlas点数
@@ -173,12 +177,11 @@
   </div>
 
   <div class="table-wrap" style="margin-top: 12px;">
-    <table>
+    <table class="users-table">
       <thead>
         <tr>
-          <th style="width: 36px;">
-            <input id="select-all-users" type="checkbox" title="全选/取消全选"
-                   style="width: 18px; height: 18px; min-height: auto; accent-color: var(--primary); cursor: pointer;">
+          <th class="user-select-cell">
+            <input id="select-all-users" class="user-select-checkbox" type="checkbox" title="全选/取消全选">
           </th>
           <th>ID</th>
           <th>备注名</th>
@@ -192,12 +195,11 @@
           <th>操作选项</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="users-table-body">
         {% for user in users %}
-        <tr>
-          <td>
-            <input type="checkbox" class="user-select" value="{{ user.id }}" aria-label="选择用户 {{ user.name }}"
-                   style="width: 18px; height: 18px; min-height: auto; accent-color: var(--primary); cursor: pointer;">
+        <tr data-user-row data-user-name="{{ user.name }}">
+          <td class="user-select-cell">
+            <input type="checkbox" class="user-select user-select-checkbox" value="{{ user.id }}" aria-label="选择用户 {{ user.name }}">
           </td>
           <td style="font-weight: 600; color: #64748b;">#{{ user.id }}</td>
           <td>
@@ -304,6 +306,9 @@
           </td>
         </tr>
         {% endfor %}
+        <tr id="users-empty-row" class="empty-row" hidden>
+          <td colspan="11" style="text-align: center; color: var(--text-muted); padding: 28px 20px;">未找到匹配的用户</td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -374,21 +379,57 @@
   const bulkResetAnlasBtn = document.getElementById("bulk-reset-anlas-btn");
   const bulkResetDailyBtn = document.getElementById("bulk-reset-daily-btn");
   const selectAllUsers = document.getElementById("select-all-users");
+  const userSearchInput = document.getElementById("user-remark-search");
+  const userRows = Array.from(document.querySelectorAll("[data-user-row]"));
+  const usersEmptyRow = document.getElementById("users-empty-row");
   const userSelectBoxes = Array.from(document.querySelectorAll(".user-select"));
 
+  function normalizeSearchText(value) {
+    return (value || "").trim().toLocaleLowerCase("zh-CN");
+  }
+
+  function visibleUserSelectBoxes() {
+    return userSelectBoxes.filter((box) => {
+      const row = box.closest("[data-user-row]");
+      return row && !row.hidden;
+    });
+  }
+
   function selectedUserIds() {
-    return userSelectBoxes.filter((box) => box.checked).map((box) => box.value);
+    return visibleUserSelectBoxes().filter((box) => box.checked).map((box) => box.value);
   }
 
   function refreshBulkResetState() {
+    const visibleBoxes = visibleUserSelectBoxes();
     const count = selectedUserIds().length;
     [bulkResetAnlasBtn, bulkResetDailyBtn].forEach((button) => {
       if (button) button.disabled = count === 0;
     });
     if (selectAllUsers) {
-      selectAllUsers.checked = userSelectBoxes.length > 0 && count === userSelectBoxes.length;
-      selectAllUsers.indeterminate = count > 0 && count < userSelectBoxes.length;
+      selectAllUsers.disabled = visibleBoxes.length === 0;
+      selectAllUsers.checked = visibleBoxes.length > 0 && count === visibleBoxes.length;
+      selectAllUsers.indeterminate = count > 0 && count < visibleBoxes.length;
     }
+  }
+
+  function applyUserSearch() {
+    const query = normalizeSearchText(userSearchInput ? userSearchInput.value : "");
+    let visibleCount = 0;
+    userRows.forEach((row) => {
+      const name = normalizeSearchText(row.dataset.userName);
+      const matches = !query || name.includes(query);
+      row.hidden = !matches;
+      if (matches) {
+        visibleCount += 1;
+      } else {
+        const checkbox = row.querySelector(".user-select");
+        if (checkbox) checkbox.checked = false;
+      }
+    });
+    if (usersEmptyRow) {
+      usersEmptyRow.hidden = visibleCount > 0;
+    }
+    refreshBulkResetState();
   }
 
   function submitBulkReset(action, confirmMessage) {
@@ -414,9 +455,14 @@
 
   if (selectAllUsers) {
     selectAllUsers.addEventListener("change", () => {
-      userSelectBoxes.forEach((box) => { box.checked = selectAllUsers.checked; });
+      visibleUserSelectBoxes().forEach((box) => { box.checked = selectAllUsers.checked; });
       refreshBulkResetState();
     });
+  }
+
+  if (userSearchInput) {
+    userSearchInput.addEventListener("input", applyUserSearch);
+    userSearchInput.addEventListener("search", applyUserSearch);
   }
 
   if (bulkResetAnlasBtn) {
@@ -439,6 +485,6 @@
     });
   }
 
-  refreshBulkResetState();
+  applyUserSearch();
 </script>
 {% endblock %}
