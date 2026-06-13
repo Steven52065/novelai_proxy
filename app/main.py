@@ -19,9 +19,8 @@ from .admin.routes import (
     AdminLoginRequired,
     admin_login_required_handler,
     router as admin_router,
-    set_admin_session_cookie,
-    valid_admin_session,
 )
+from .admin.session_middleware import AdminSessionRefreshMiddleware
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
@@ -131,6 +130,7 @@ def _build_upstream_clients(config) -> dict[str, UpstreamClient]:
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)
 app.add_middleware(ConfigurableCORSMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(AdminSessionRefreshMiddleware)
 static_dir = repo_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -139,20 +139,6 @@ app.include_router(admin_router)
 app.include_router(self_service_router)
 # 管理后台页面的会话依赖未通过时，统一重定向到登录页。
 app.add_exception_handler(AdminLoginRequired, admin_login_required_handler)
-
-
-@app.middleware("http")
-async def refresh_admin_session_cookie(request: Request, call_next):
-    response = await call_next(request)
-    if (
-        request.url.path.startswith("/admin")
-        and request.url.path != "/admin/login"
-        and request.url.path != "/admin/logout"
-        and valid_admin_session(request)
-        and response.status_code < 400
-    ):
-        set_admin_session_cookie(response, request)
-    return response
 
 
 @app.exception_handler(HTTPException)
