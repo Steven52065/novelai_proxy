@@ -772,18 +772,22 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.users-page-head {
+  align-items: flex-start;
+}
+
 .users-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) max-content max-content max-content;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .user-search {
   position: relative;
-  flex: 0 1 260px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .user-search svg {
@@ -803,8 +807,20 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   background: rgba(15, 23, 42, 0.72);
 }
 
+.users-actions button {
+  white-space: nowrap;
+}
+
 .users-table {
-  min-width: 1180px;
+  table-layout: fixed;
+  min-width: 1460px;
+}
+
+.users-table th,
+.users-table td {
+  min-width: 0;
+  padding: 14px 12px;
+  overflow-wrap: anywhere;
 }
 
 .users-table .user-select-cell {
@@ -815,6 +831,17 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   padding-right: 10px;
   text-align: center;
 }
+
+.users-table th:nth-child(2), .users-table td:nth-child(2) { width: 64px; }
+.users-table th:nth-child(3), .users-table td:nth-child(3) { width: 150px; }
+.users-table th:nth-child(4), .users-table td:nth-child(4) { width: 170px; }
+.users-table th:nth-child(5), .users-table td:nth-child(5) { width: 84px; text-align: center; }
+.users-table th:nth-child(6), .users-table td:nth-child(6) { width: 84px; text-align: center; }
+.users-table th:nth-child(7), .users-table td:nth-child(7) { width: 270px; }
+.users-table th:nth-child(8), .users-table td:nth-child(8) { width: 126px; }
+.users-table th:nth-child(9), .users-table td:nth-child(9) { width: 190px; }
+.users-table th:nth-child(10), .users-table td:nth-child(10) { width: 150px; }
+.users-table th:nth-child(11), .users-table td:nth-child(11) { width: 116px; }
 
 .users-table input.user-select-checkbox {
   appearance: none;
@@ -1735,6 +1762,16 @@ pre {
     grid-template-columns: 1fr;
     gap: 24px;
   }
+
+  .users-page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .users-actions {
+    grid-template-columns: minmax(220px, 1fr) max-content max-content max-content;
+    justify-content: stretch;
+  }
 }
 
 @media (max-width: 768px) {
@@ -1760,6 +1797,22 @@ pre {
   
   h1 {
     font-size: 24px;
+  }
+
+  .users-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .user-search {
+    grid-column: 1 / -1;
+  }
+
+  .users-actions button {
+    min-width: 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: normal;
   }
   
   .drawer {
