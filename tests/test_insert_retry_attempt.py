@@ -1,4 +1,4 @@
-"""测试 insert_retry_attempt 的两种调用方式"""
+"""测试 insert_retry_attempt 的重试记录复制行为"""
 import sys
 sys.path.insert(0, '.')
 
@@ -6,8 +6,8 @@ from app.database import Database
 from app.usage_logs import UsageLogRepository, UsageLogCreate
 
 
-def test_insert_retry_attempt_from_log():
-    """测试使用 log 对象插入重试记录"""
+def test_insert_retry_attempt_copies_initial_record():
+    """测试从初始记录复制并插入重试记录"""
     db = Database(':memory:')
     db.init_schema()
     repo = UsageLogRepository(db)
@@ -16,7 +16,6 @@ def test_insert_retry_attempt_from_log():
     db.execute('INSERT INTO users (api_key_hash, name, created_at) VALUES (?, ?, ?)',
                ('test_hash', 'test_user', '2026-06-03T00:00:00'))
 
-    # 使用 log 对象插入重试记录
     log = UsageLogCreate(
         request_id='test-request',
         user_id=1,
@@ -28,8 +27,9 @@ def test_insert_retry_attempt_from_log():
         steps=28,
         n_samples=1,
     )
+    repo.insert_queued(log, attempt_number=0)
 
-    repo.insert_retry_attempt(log=log, attempt_number=1, upstream_id='upstream-B')
+    repo.insert_retry_attempt(request_id='test-request', attempt_number=1, upstream_id='upstream-B')
 
     # 验证记录
     row = db.query_one('SELECT * FROM usage_logs WHERE request_id = ? AND attempt_number = ?',
@@ -40,7 +40,7 @@ def test_insert_retry_attempt_from_log():
     assert row['user_id'] == 1
     assert row['action'] == 'generate-image'
     assert row['model'] == 'nai-diffusion-3'
-    print('[PASS] 使用 log 对象插入重试记录成功')
+    print('[PASS] 复制初始记录插入重试记录成功')
 
 
 def test_insert_retry_attempt_from_database():
@@ -111,16 +111,15 @@ def test_insert_retry_attempt_validates_parameters():
     repo = UsageLogRepository(db)
 
     try:
-        # 不提供 log 也不提供 request_id 应该报错
         repo.insert_retry_attempt(attempt_number=1)
         assert False, "应该抛出 ValueError"
     except ValueError as e:
-        assert "Must provide either log or request_id" in str(e)
+        assert "Must provide request_id" in str(e)
         print('[PASS] 参数验证成功')
 
 
 if __name__ == '__main__':
-    test_insert_retry_attempt_from_log()
+    test_insert_retry_attempt_copies_initial_record()
     test_insert_retry_attempt_from_database()
     test_insert_retry_attempt_validates_parameters()
     print('\n[ALL PASS] 所有测试通过！')

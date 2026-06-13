@@ -39,11 +39,11 @@ def test_retry_creates_multiple_records():
     repo.mark_failed(request_id, queued_ms=150, error_code='429', error_message='Rate limit exceeded', attempt_number=0)
 
     # 3. 第二次尝试（upstream B）- 插入新记录（attempt_number=1）
-    repo.insert_retry_attempt(log, attempt_number=1, upstream_id='upstream-B')
+    repo.insert_retry_attempt(request_id=request_id, attempt_number=1, upstream_id='upstream-B')
     repo.mark_failed(request_id, queued_ms=200, error_code='429', error_message='Rate limit exceeded', attempt_number=1)
 
     # 4. 第三次尝试（upstream C）- 插入新记录（attempt_number=2）并成功
-    repo.insert_retry_attempt(log, attempt_number=2, upstream_id='upstream-C')
+    repo.insert_retry_attempt(request_id=request_id, attempt_number=2, upstream_id='upstream-C')
     repo.mark_success(request_id, queued_ms=250, final_cost=10, output_files=[], is_retry_success=True, attempt_number=2)
 
     # 验证结果
