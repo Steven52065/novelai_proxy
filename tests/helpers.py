@@ -171,7 +171,6 @@ server:
   host: 127.0.0.1
   port: 8080
 queue:
-  max_concurrent_upstream: 1
   max_queue_size: 2
   upstream_interval_min_seconds: {upstream_interval_min_seconds}
   upstream_interval_max_seconds: {upstream_interval_max_seconds}
@@ -228,7 +227,6 @@ server:
   host: 127.0.0.1
   port: 8080
 queue:
-  max_concurrent_upstream: 1
   max_queue_size: {max_queue_size}
 {dispatch_max_queue_size_yaml.rstrip()}
   upstream_interval_min_seconds: {upstream_interval_min_seconds}

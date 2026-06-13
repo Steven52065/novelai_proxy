@@ -21,7 +21,6 @@ class ServerConfig(BaseModel):
 
 
 class QueueConfig(BaseModel):
-    max_concurrent_upstream: int = 1
     max_queue_size: int = 50
     dispatch_max_queue_size: int | None = Field(default=None, ge=1)
     upstream_interval_min_seconds: float = Field(default=2, ge=0)

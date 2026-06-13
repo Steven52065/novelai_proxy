@@ -17,7 +17,6 @@ server:
   host: 127.0.0.1
   port: 8080
 queue:
-  max_concurrent_upstream: 1
   max_queue_size: 2
   upstream_interval_min_seconds: 0
   upstream_interval_max_seconds: 0
