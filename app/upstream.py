@@ -12,6 +12,8 @@ from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from novelai_python.sdk.ai.generate_image.suggest_tags import SuggestTags
 from novelai_python.sdk.ai.upscale import Upscale
 
+from .novelai_endpoints import ENCODE_VIBE_ENDPOINT, GENERATE_IMAGE_ENDPOINT
+
 
 class UpstreamClient:
     def __init__(self, api_key: str):
@@ -25,10 +27,10 @@ class UpstreamClient:
         return _files_to_zip(result.files or [])
 
     async def generate_image_payload_zip(self, payload: dict[str, Any]) -> bytes:
-        return await self._post_binary("https://image.novelai.net/ai/generate-image", payload)
+        return await self._post_binary(GENERATE_IMAGE_ENDPOINT, payload)
 
     async def encode_vibe_binary(self, payload: dict[str, Any]) -> bytes:
-        return await self._post_binary("https://image.novelai.net/ai/encode-vibe", payload)
+        return await self._post_binary(ENCODE_VIBE_ENDPOINT, payload)
 
     async def post_binary(self, url: str, payload: dict[str, Any]) -> bytes:
         return await self._post_binary(url, payload)

@@ -13,6 +13,7 @@ from ..allowlists import (
     AllowedUpstreams,
 )
 from ..database import Database, utc_now_iso
+from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
 from ..users import (
     UserGroupInput,
     UserGroupUpdateInput,
@@ -44,7 +45,7 @@ web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page
 class CreateUserGroupRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     is_active: bool = True
-    default_tier: str = Field(default="normal", pattern="^(normal|vip)$")
+    default_tier: str = Field(default=TIER_NORMAL, pattern=USER_TIER_PATTERN)
     default_free_small_only: bool = True
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = Field(default=0, ge=0)
@@ -58,7 +59,7 @@ class CreateUserGroupRequest(BaseModel):
 class UpdateUserGroupRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     is_active: bool | None = None
-    default_tier: str | None = Field(default=None, pattern="^(normal|vip)$")
+    default_tier: str | None = Field(default=None, pattern=USER_TIER_PATTERN)
     default_free_small_only: bool | None = None
     free_small_daily_limit_enabled: bool | None = None
     free_small_daily_limit: int | None = Field(default=None, ge=0)
@@ -256,7 +257,7 @@ async def create_user_group_form(
     request: Request,
     name: str = Form(...),
     is_active: str | None = Form(None),
-    default_tier: str = Form("normal"),
+    default_tier: str = Form(TIER_NORMAL),
     default_free_small_only: str | None = Form(None),
     free_small_daily_limit_enabled: str | None = Form(None),
     free_small_daily_limit: int = Form(0),
@@ -335,7 +336,7 @@ async def update_user_group_form(
     request: Request,
     name: str = Form(...),
     is_active: str | None = Form(None),
-    default_tier: str = Form("normal"),
+    default_tier: str = Form(TIER_NORMAL),
     default_free_small_only: str | None = Form(None),
     free_small_daily_limit_enabled: str | None = Form(None),
     free_small_daily_limit: int = Form(0),

@@ -8,13 +8,14 @@ from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_END
 from ..database import Database, utc_now_iso
 from ..domain_errors import InvalidDomainInput, UserNotFound
 from ..quota_manager import QuotaManager
+from ..queue_tiers import TIER_NORMAL
 from ..security import generate_api_key, hash_api_key
 
 
 @dataclass(frozen=True)
 class CreateUserInput:
     name: str
-    tier: str = "normal"
+    tier: str = TIER_NORMAL
     free_small_only: bool = False
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = 0

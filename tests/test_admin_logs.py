@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.novelai_endpoints import GENERATE_IMAGE_ENDPOINT
 from helpers import PAYLOAD, FakeUpstream, write_test_config
 
 
@@ -39,7 +40,7 @@ def test_admin_can_replay_rejected_generate_without_quota_charge(tmp_path: Path,
         assert body["replay_request_id"] != rejected_log["request_id"]
         assert body["images"][0]["filename"] == "image.png"
         assert body["images"][0]["data_url"].startswith("data:image/png;base64,")
-        assert fake_upstream.last_post_binary_url == "https://image.novelai.net/ai/generate-image"
+        assert fake_upstream.last_post_binary_url == GENERATE_IMAGE_ENDPOINT
         assert fake_upstream.last_post_binary_payload == paid_payload
 
         quota = app.state.quota_manager.get_snapshot(user_id)

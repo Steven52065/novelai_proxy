@@ -28,6 +28,7 @@ from ..deps import (
     get_quota_manager,
 )
 from ..free_small_daily_limit import FreeSmallDailyLimitManager
+from ..queue_tiers import is_vip_tier
 from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
 from ..queue_manager import RoutingProxyQueue
 from ..quota_manager import QuotaManager
@@ -306,7 +307,7 @@ async def subscription(
     quota = quota_manager.get_snapshot(user.id)
     free_small_daily = free_small_daily_limit_manager.get_snapshot(user.id)
     return {
-        "tier": 3 if user.tier == "vip" else 1,
+        "tier": 3 if is_vip_tier(user.tier) else 1,
         "active": True,
         "expiresAt": 0,
         "perks": {

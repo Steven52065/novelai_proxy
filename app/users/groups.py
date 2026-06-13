@@ -9,6 +9,7 @@ from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_END
 from ..database import Database, utc_now_iso
 from ..domain_errors import InvalidDomainInput, UserGroupDisabled, UserGroupNotFound
 from ..quota_manager import QuotaManager
+from ..queue_tiers import TIER_NORMAL
 from .service import UpdateUserInput
 
 SYNCABLE_MEMBER_FIELDS = {
@@ -40,7 +41,7 @@ MEMBER_FIELD_LABELS = {
 class UserGroupInput:
     name: str
     is_active: bool = True
-    default_tier: str = "normal"
+    default_tier: str = TIER_NORMAL
     default_free_small_only: bool = True
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = 0

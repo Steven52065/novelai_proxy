@@ -11,7 +11,9 @@ from fastapi.responses import HTMLResponse
 from novelai_python._exceptions import APIError
 
 from ..logging_utils import mark_request_total_duration
+from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
+from ..queue_tiers import TIER_REPLAY
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 from .auth import require_admin_or_session, require_admin_page_session
 from .common import json_or_none, optional_query_int, row_to_dict, templates, usage_log_to_dict
@@ -19,7 +21,6 @@ from .common import json_or_none, optional_query_int, row_to_dict, templates, us
 
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
-REPLAY_PRIORITY = -100
 REPLAY_IMAGE_CONTENT_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -69,7 +70,7 @@ async def _replay_log_source(source, request: Request):
     if not isinstance(request_payload, dict):
         raise HTTPException(status_code=400, detail={"message": "This log has no replayable request payload"})
 
-    endpoint = _replay_endpoint(str(source["action"]), request_payload)
+    endpoint = replay_endpoint_for(str(source["action"]), request_payload)
     if endpoint is None:
         raise HTTPException(status_code=400, detail={"message": "This log action is not replayable"})
 
@@ -95,13 +96,12 @@ async def _replay_log_source(source, request: Request):
         binary_payload = await request.app.state.proxy_queue.submit(
             request_id=replay_request_id,
             user_id=int(source["user_id"]),
-            tier="replay",
+            tier=TIER_REPLAY,
             action=action,
             logging_config=request.app.state.config.logging,
             estimated_cost=0,
             handler=lambda upstream: upstream.post_binary(endpoint, request_payload),
-            process_zip_response=endpoint != _encode_vibe_endpoint(),
-            priority_override=REPLAY_PRIORITY,
+            process_zip_response=endpoint != ENCODE_VIBE_ENDPOINT,
             manage_quota=False,
             allowed_upstreams=[source["upstream_id"]] if source["upstream_id"] else None,
         )
@@ -159,22 +159,6 @@ async def logs_page(request: Request, user_id: str | None = None, limit: int = 1
             "next_before_id": data["next_before_id"],
         },
     )
-
-
-def _replay_endpoint(action: str, payload: dict) -> str | None:
-    if action == "upscale":
-        return "https://api.novelai.net/ai/upscale"
-    if action == "encode-vibe":
-        return _encode_vibe_endpoint()
-    if isinstance(payload.get("parameters"), dict) and isinstance(payload.get("model"), str):
-        return "https://image.novelai.net/ai/generate-image"
-    if isinstance(payload.get("req_type"), str):
-        return "https://image.novelai.net/ai/augment-image"
-    return None
-
-
-def _encode_vibe_endpoint() -> str:
-    return "https://image.novelai.net/ai/encode-vibe"
 
 
 def _zip_images_to_data_urls(zip_payload: bytes) -> list[dict[str, str | int]]:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .queue_tiers import QUEUE_PRIORITY_VIP_RETRY, is_vip_tier
+
 # 与 RoutingProxyQueue 的优先级常量保持一致的默认值，仅用于直接构造
 # ProxyQueue（如单元测试）时的兜底策略；这些字段在执行层并不会被读取。
 DEFAULT_MAX_ATTEMPTS = 5
-DEFAULT_VIP_RETRY_PRIORITY = -1
+DEFAULT_VIP_RETRY_PRIORITY = QUEUE_PRIORITY_VIP_RETRY
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ class RetryPolicy:
                 priority=current_priority,
                 immediate=False,
             )
-        is_vip = tier == "vip"
+        is_vip = is_vip_tier(tier)
         return RetryDecision(
             should_retry=True,
             next_attempt_number=next_attempt_number,

@@ -13,6 +13,13 @@ from novelai_python._exceptions import APIError
 from .config import LoggingConfig
 from .logging_utils import archive_zip_images, logger
 from .quota_manager import QuotaManager
+from .queue_tiers import (
+    QUEUE_PRIORITY_NORMAL,
+    QUEUE_PRIORITY_VIP,
+    QUEUE_PRIORITY_VIP_RETRY,
+    priority_for_tier,
+    tier_allows_overflow,
+)
 from .request_accounting import RequestAccounting
 from .retry_policy import RetryDecision, RetryPolicy
 from .usage_logs import UsageLogRepository
@@ -554,9 +561,9 @@ def _user_is_available(quota_manager: QuotaManager, user_id: int) -> bool:
 
 
 class RoutingProxyQueue:
-    VIP_PRIORITY = 0
-    NORMAL_PRIORITY = 10
-    VIP_RETRY_PRIORITY = -1
+    VIP_PRIORITY = QUEUE_PRIORITY_VIP
+    NORMAL_PRIORITY = QUEUE_PRIORITY_NORMAL
+    VIP_RETRY_PRIORITY = QUEUE_PRIORITY_VIP_RETRY
 
     def __init__(
         self,
@@ -746,7 +753,7 @@ class RoutingProxyQueue:
             )
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        priority = priority_override if priority_override is not None else self.VIP_PRIORITY if tier == "vip" else self.NORMAL_PRIORITY
+        priority = priority_override if priority_override is not None else priority_for_tier(tier)
         try:
             self._dispatch_queue.put_nowait(
                 QueueItem(
@@ -868,7 +875,7 @@ class RoutingProxyQueue:
         for upstream_id in candidates:
             queue = self._queues[upstream_id]
             try:
-                upstream_future = queue.enqueue(item, allow_overflow=item.tier == "vip")
+                upstream_future = queue.enqueue(item, allow_overflow=tier_allows_overflow(item.tier))
             except QueueFull as exc:
                 errors.append(exc)
                 continue

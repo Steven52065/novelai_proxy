@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from ..allowlists import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS
 from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database, utc_now_iso
+from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
 from ..users import (
     CreateUserInput,
     UpdateUserInput,
@@ -42,7 +43,7 @@ _api_key_flash = ApiKeyFlashStore(cookie_name=API_KEY_FLASH_COOKIE, state_attr="
 class CreateUserRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     group_id: int | None = Field(default=None, ge=1)
-    tier: str = Field(default="normal", pattern="^(normal|vip)$")
+    tier: str = Field(default=TIER_NORMAL, pattern=USER_TIER_PATTERN)
     free_small_only: bool = False
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = Field(default=0, ge=0)
@@ -57,7 +58,7 @@ class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     group_id: int | None = Field(default=None, ge=1)
     apply_group_defaults: bool = False
-    tier: str | None = Field(default=None, pattern="^(normal|vip)$")
+    tier: str | None = Field(default=None, pattern=USER_TIER_PATTERN)
     is_active: bool | None = None
     free_small_only: bool | None = None
     free_small_daily_limit_enabled: bool | None = None
@@ -267,7 +268,7 @@ async def users_page(request: Request):
 async def create_user_form(
     request: Request,
     name: str = Form(...),
-    tier: str = Form("normal"),
+    tier: str = Form(TIER_NORMAL),
     anlas_total: int = Form(0),
     reset_period: str = Form("month"),
     reset_day: int | None = Form(None),
@@ -372,7 +373,7 @@ async def update_user_form(
     user_id: int,
     request: Request,
     name: str = Form(...),
-    tier: str = Form("normal"),
+    tier: str = Form(TIER_NORMAL),
     is_active: str | None = Form(None),
     anlas_total: int = Form(0),
     reset_period: str = Form("month"),
