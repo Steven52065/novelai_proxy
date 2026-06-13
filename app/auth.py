@@ -3,11 +3,12 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
 from fastapi.security import APIKeyHeader
 
 from .allowlists import AllowedEndpoints, AllowedUpstreams
 from .database import Database
+from .deps import get_db
 from .security import hash_api_key
 
 
@@ -35,14 +36,13 @@ def _extract_bearer(value: str | None) -> str | None:
 
 
 async def get_current_user(
-    request: Request,
     authorization: str | None = Depends(api_key_header),
+    db: Database = Depends(get_db),
 ) -> UserContext:
     api_key = _extract_bearer(authorization)
     if not api_key:
         raise HTTPException(status_code=401, detail={"message": "Invalid or missing API Key"})
 
-    db: Database = request.app.state.db
     api_key_hash = hash_api_key(api_key)
     row = db.query_one(
         """

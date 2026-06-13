@@ -18,8 +18,19 @@ from ..allowlists import (
     ENDPOINT_UPSCALE,
 )
 from ..auth import UserContext, get_current_user
+from ..config import AppConfig, ImageFormatConfig
 from ..costing import GenerateCostEstimator, GenerateCostInputs, IMAGE_ANLAS_PER_VIBE_ENCODING
+from ..deps import (
+    get_config,
+    get_free_small_daily_limit_manager,
+    get_proxy_queue,
+    get_proxy_service,
+    get_quota_manager,
+)
+from ..free_small_daily_limit import FreeSmallDailyLimitManager
 from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
+from ..queue_manager import RoutingProxyQueue
+from ..quota_manager import QuotaManager
 from .service import MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 
 
@@ -28,10 +39,10 @@ _generate_cost_estimator = GenerateCostEstimator()
 
 
 @router.get("/health")
-async def health(request: Request):
+async def health(proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue)):
     return {
         "status": "ok",
-        "queue_size": request.app.state.proxy_queue.qsize(),
+        "queue_size": proxy_queue.qsize(),
     }
 
 
@@ -39,6 +50,8 @@ async def health(request: Request):
 async def generate_image(
     request: Request,
     user: UserContext = Depends(get_current_user),
+    config: AppConfig = Depends(get_config),
+    proxy_service: ProxyRequestService = Depends(get_proxy_service),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_GENERATE_IMAGE)
     if endpoint_denied is not None:
@@ -55,11 +68,11 @@ async def generate_image(
         logger.error("generate-image payload validation failed errors=%s", str(exc))
         return JSONResponse(status_code=400, content={"message": "Invalid request"})
 
-    _apply_image_format_policy(request_payload, request.app.state.config.image_format)
+    _apply_image_format_policy(request_payload, config.image_format)
     try:
         estimated_cost, cost_is_certainly_free = _generate_cost_estimator.calculate(
             cost_inputs,
-            is_opus=request.app.state.config.novelai.account_tier >= 3,
+            is_opus=config.novelai.account_tier >= 3,
         )
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
@@ -74,6 +87,7 @@ async def generate_image(
         free_small_only_allowed=cost_is_certainly_free,
         free_small_daily_count=cost_inputs.n_samples if cost_is_certainly_free else 0,
         handler=lambda upstream: upstream.generate_image_payload_zip(request_payload),
+        proxy_service=proxy_service,
     )
 
 
@@ -82,6 +96,8 @@ async def upscale(
     req: Upscale,
     request: Request,
     user: UserContext = Depends(get_current_user),
+    config: AppConfig = Depends(get_config),
+    proxy_service: ProxyRequestService = Depends(get_proxy_service),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_UPSCALE)
     if endpoint_denied is not None:
@@ -99,8 +115,9 @@ async def upscale(
             "n_samples": 1,
         },
         request_payload=dump_model_payload(req),
-        estimated_cost=request.app.state.config.novelai.upscale_anlas_cost,
+        estimated_cost=config.novelai.upscale_anlas_cost,
         handler=lambda upstream: upstream.upscale_zip(req),
+        proxy_service=proxy_service,
     )
 
 
@@ -109,13 +126,15 @@ async def augment_image(
     req: AugmentImageInfer,
     request: Request,
     user: UserContext = Depends(get_current_user),
+    config: AppConfig = Depends(get_config),
+    proxy_service: ProxyRequestService = Depends(get_proxy_service),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_AUGMENT_IMAGE)
     if endpoint_denied is not None:
         return endpoint_denied
 
     try:
-        estimated_cost = int(req.calculate_cost(is_opus=request.app.state.config.novelai.account_tier >= 3))
+        estimated_cost = int(req.calculate_cost(is_opus=config.novelai.account_tier >= 3))
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 
@@ -133,6 +152,7 @@ async def augment_image(
         request_payload=dump_model_payload(req),
         estimated_cost=estimated_cost,
         handler=lambda upstream: upstream.augment_image_zip(req),
+        proxy_service=proxy_service,
     )
 
 
@@ -140,6 +160,7 @@ async def augment_image(
 async def encode_vibe(
     request: Request,
     user: UserContext = Depends(get_current_user),
+    proxy_service: ProxyRequestService = Depends(get_proxy_service),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_ENCODE_VIBE)
     if endpoint_denied is not None:
@@ -168,6 +189,7 @@ async def encode_vibe(
         handler=lambda upstream: upstream.encode_vibe_binary(payload),
         media_type="application/binary",
         process_zip_response=False,
+        proxy_service=proxy_service,
     )
 
 
@@ -182,8 +204,9 @@ async def _submit_zip_task(
     handler: Callable[[Any], Awaitable[bytes]],
     free_small_only_allowed: bool = False,
     free_small_daily_count: int = 0,
+    proxy_service: ProxyRequestService,
 ):
-    result = await _proxy_service(request).submit_zip(
+    result = await proxy_service.submit_zip(
         ProxyTaskRequest(
             user=user,
             action=action,
@@ -212,8 +235,9 @@ async def _submit_binary_task(
     free_small_only_allowed: bool = False,
     response_headers: dict[str, str] | None = None,
     process_zip_response: bool = True,
+    proxy_service: ProxyRequestService,
 ):
-    result = await _proxy_service(request).submit_binary(
+    result = await proxy_service.submit_binary(
         ProxyTaskRequest(
             user=user,
             action=action,
@@ -237,6 +261,7 @@ async def suggest_tags(
     request: Request,
     lang: str = "en",
     user: UserContext = Depends(get_current_user),
+    proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_SUGGEST_TAGS)
     if endpoint_denied is not None:
@@ -246,7 +271,7 @@ async def suggest_tags(
         # suggest-tags is kept as a lightweight compatibility endpoint for now:
         # it only selects a user-allowed upstream client and does not enter the
         # generation queue, so it is not protected by per-upstream queue delays.
-        upstream = request.app.state.proxy_queue.select_client(user.allowed_upstreams)
+        upstream = proxy_queue.select_client(user.allowed_upstreams)
         return await upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
     except APIError as exc:
         status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
@@ -267,17 +292,19 @@ async def suggest_tags_alias(
     request: Request,
     lang: str = "en",
     user: UserContext = Depends(get_current_user),
+    proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
 ):
-    return await suggest_tags(model=model, prompt=prompt, request=request, lang=lang, user=user)
+    return await suggest_tags(model=model, prompt=prompt, request=request, lang=lang, user=user, proxy_queue=proxy_queue)
 
 
 @router.get("/user/subscription")
 async def subscription(
-    request: Request,
     user: UserContext = Depends(get_current_user),
+    quota_manager: QuotaManager = Depends(get_quota_manager),
+    free_small_daily_limit_manager: FreeSmallDailyLimitManager = Depends(get_free_small_daily_limit_manager),
 ):
-    quota = request.app.state.quota_manager.get_snapshot(user.id)
-    free_small_daily = request.app.state.free_small_daily_limit_manager.get_snapshot(user.id)
+    quota = quota_manager.get_snapshot(user.id)
+    free_small_daily = free_small_daily_limit_manager.get_snapshot(user.id)
     return {
         "tier": 3 if user.tier == "vip" else 1,
         "active": True,
@@ -316,10 +343,6 @@ async def subscription(
             "resetAt": free_small_daily.reset_at,
         },
     }
-
-
-def _proxy_service(request: Request) -> ProxyRequestService:
-    return request.app.state.proxy_service
 
 
 async def _read_json_payload(request: Request, endpoint: str) -> tuple[Any, JSONResponse | None]:
@@ -365,7 +388,7 @@ def _reject_disallowed_endpoint(user: UserContext, endpoint: str) -> JSONRespons
     )
 
 
-def _apply_image_format_policy(payload: dict[str, Any], config) -> None:
+def _apply_image_format_policy(payload: dict[str, Any], config: ImageFormatConfig) -> None:
     parameters = payload.get("parameters")
     if not isinstance(parameters, dict):
         return

@@ -8,14 +8,24 @@ from typing import Any, NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..admin.common import templates
 from ..allowlists import AllowedEndpoints, AllowedUpstreams
 from ..api_key_flash import ApiKeyFlashStore
+from ..config import DiscordSelfServiceConfig
 from ..database import Database
+from ..deps import (
+    get_db,
+    get_discord_oauth_client,
+    get_discord_self_service_config,
+    get_free_small_daily_limit_manager,
+    get_quota_manager,
+)
+from ..free_small_daily_limit import FreeSmallDailyLimitManager
 from ..logging_utils import json_dumps, logger
+from ..quota_manager import QuotaManager
 from ..users import reset_api_key
 from .accounts import DiscordProfile, login_or_register_discord_user
 from .discord import DiscordOAuthClient
@@ -35,17 +45,24 @@ _api_key_flash = ApiKeyFlashStore(cookie_name=API_KEY_FLASH_COOKIE, state_attr="
 
 
 @router.get("/signup", response_class=HTMLResponse)
-async def signup_page(request: Request):
-    _require_discord_enabled(request)
+async def signup_page(
+    request: Request,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+):
+    _require_discord_enabled(config)
     return templates.TemplateResponse(request, "signup.html", {"active": "signup"})
 
 
 @router.get("/auth/discord/start")
-async def discord_start(request: Request):
-    config = _require_discord_enabled(request)
+async def discord_start(
+    request: Request,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    oauth: DiscordOAuthClient = Depends(get_discord_oauth_client),
+):
+    _require_discord_enabled(config)
     state = secrets.token_urlsafe(24)
     response = RedirectResponse(
-        _discord_client(request).authorization_url(redirect_uri=config.redirect_uri, state=state),
+        oauth.authorization_url(redirect_uri=config.redirect_uri, state=state),
         status_code=303,
     )
     response.set_cookie(
@@ -59,13 +76,20 @@ async def discord_start(request: Request):
 
 
 @router.get("/auth/discord/callback")
-async def discord_callback(request: Request, code: str | None = None, state: str | None = None):
-    config = _require_discord_enabled(request)
+async def discord_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    oauth: DiscordOAuthClient = Depends(get_discord_oauth_client),
+    db: Database = Depends(get_db),
+    quota_manager: QuotaManager = Depends(get_quota_manager),
+):
+    _require_discord_enabled(config)
     saved_state = verify_payload(request.cookies.get(OAUTH_STATE_COOKIE), config.session_secret)
     if not code or not state or saved_state is None or saved_state.get("state") != state:
         raise HTTPException(status_code=400, detail={"message": "Invalid Discord OAuth state"})
 
-    oauth = _discord_client(request)
     try:
         token_payload = await oauth.exchange_code(code=code, redirect_uri=config.redirect_uri)
     except Exception as exc:
@@ -100,8 +124,8 @@ async def discord_callback(request: Request, code: str | None = None, state: str
 
     profile = _profile_from_payload(user_payload)
     login = login_or_register_discord_user(
-        request.app.state.db,
-        request.app.state.quota_manager,
+        db,
+        quota_manager,
         default_group_id=int(config.default_group_id),
         profile=profile,
     )
@@ -114,12 +138,17 @@ async def discord_callback(request: Request, code: str | None = None, state: str
 
 
 @router.get("/account", response_class=HTMLResponse)
-async def account_page(request: Request):
-    config = _require_discord_enabled(request)
+async def account_page(
+    request: Request,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    db: Database = Depends(get_db),
+    quota_manager: QuotaManager = Depends(get_quota_manager),
+    free_small_daily_limit_manager: FreeSmallDailyLimitManager = Depends(get_free_small_daily_limit_manager),
+):
+    _require_discord_enabled(config)
     user_id = _current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         return RedirectResponse("/signup", status_code=303)
-    db: Database = request.app.state.db
     user = db.query_one(
         """
         SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
@@ -140,8 +169,8 @@ async def account_page(request: Request):
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
     if not int(user["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
-    quota = request.app.state.quota_manager.get_snapshot(user_id)
-    free_small_daily = request.app.state.free_small_daily_limit_manager.get_snapshot(user_id)
+    quota = quota_manager.get_snapshot(user_id)
+    free_small_daily = free_small_daily_limit_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
     new_api_key = _api_key_flash.pop_flash(request, owner_id=user_id)
     response = templates.TemplateResponse(
@@ -164,21 +193,27 @@ async def account_page(request: Request):
 
 
 @router.post("/account/reset-key")
-async def account_reset_key(request: Request):
-    config = _require_discord_enabled(request)
+async def account_reset_key(
+    request: Request,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    db: Database = Depends(get_db),
+):
+    _require_discord_enabled(config)
     user_id = _current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         return RedirectResponse("/signup", status_code=303)
-    _ensure_self_service_account_active(request.app.state.db, user_id)
-    api_key = reset_api_key(request.app.state.db, user_id)
+    _ensure_self_service_account_active(db, user_id)
+    api_key = reset_api_key(db, user_id)
     response = RedirectResponse("/account", status_code=303)
     _api_key_flash.set_flash(response, request, api_key, owner_id=user_id)
     return response
 
 
 @router.post("/account/logout")
-async def account_logout(request: Request):
-    _require_discord_enabled(request)
+async def account_logout(
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+):
+    _require_discord_enabled(config)
     response = RedirectResponse("/signup", status_code=303)
     response.delete_cookie(SESSION_COOKIE)
     response.delete_cookie(API_KEY_FLASH_COOKIE)
@@ -213,15 +248,10 @@ def _account_user_to_dict(row) -> dict:
     }
 
 
-def _require_discord_enabled(request: Request):
-    config = request.app.state.config.self_service.discord
+def _require_discord_enabled(config: DiscordSelfServiceConfig) -> DiscordSelfServiceConfig:
     if not config.enabled:
         raise HTTPException(status_code=404, detail={"message": "Discord self-service is disabled"})
     return config
-
-
-def _discord_client(request: Request) -> DiscordOAuthClient:
-    return request.app.state.discord_oauth_client
 
 
 def _raise_discord_oauth_failure(phase: str, exc: Exception, *, extra: dict[str, Any] | None = None) -> NoReturn:
