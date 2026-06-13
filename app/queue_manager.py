@@ -13,6 +13,7 @@ from novelai_python._exceptions import APIError
 from .config import LoggingConfig
 from .logging_utils import archive_zip_images, logger
 from .quota_manager import QuotaManager
+from .queue_snapshot import ProxyQueueSnapshot, QueueItemSnapshot, QueueSnapshotStatus, RoutingQueueSnapshot
 from .queue_tiers import (
     QUEUE_PRIORITY_NORMAL,
     QUEUE_PRIORITY_VIP,
@@ -151,7 +152,7 @@ class ProxyQueue:
     def qsize(self) -> int:
         return self.queue.qsize()
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self) -> ProxyQueueSnapshot:
         now = time.monotonic()
         queued = [
             _item_snapshot(item, now, "queued", position=index)
@@ -497,7 +498,7 @@ class ProxyQueue:
             self._on_change()
 
 
-def _item_snapshot(item: QueueItem, now: float, status: str, position: int) -> dict[str, object]:
+def _item_snapshot(item: QueueItem, now: float, status: QueueSnapshotStatus, position: int) -> QueueItemSnapshot:
     return {
         "request_id": item.request_id,
         "user_id": item.user_id,
@@ -543,7 +544,7 @@ class Retry429Error(Exception):
         super().__init__(str(original_error))
 
 
-def _without_sequence(item: dict[str, object]) -> dict[str, object]:
+def _without_sequence(item: QueueItemSnapshot) -> QueueItemSnapshot:
     clean = dict(item)
     clean.pop("sequence", None)
     return clean
@@ -670,7 +671,7 @@ class RoutingProxyQueue:
     def qsize(self) -> int:
         return self._dispatch_queue.qsize() + sum(queue.qsize() for queue in self._queues.values())
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self) -> RoutingQueueSnapshot:
         upstream_snapshots = []
         flattened_running = []
         flattened_queued = []
