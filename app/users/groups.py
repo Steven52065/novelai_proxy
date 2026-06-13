@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 import sqlite3
-from fastapi import HTTPException
 
 from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_ENDPOINTS
 from ..database import Database, utc_now_iso
+from ..domain_errors import InvalidDomainInput, UserGroupDisabled, UserGroupNotFound
 from ..quota_manager import QuotaManager
 from .service import UpdateUserInput
 
@@ -164,14 +164,14 @@ def get_group(db: Database, group_id: int) -> sqlite3.Row:
         (group_id,),
     )
     if row is None:
-        raise HTTPException(status_code=404, detail={"message": "User group not found"})
+        raise UserGroupNotFound()
     return row
 
 
 def get_enabled_group(db: Database, group_id: int) -> sqlite3.Row:
     row = get_group(db, group_id)
     if not int(row["is_active"]):
-        raise HTTPException(status_code=400, detail={"message": "User group is disabled"})
+        raise UserGroupDisabled()
     return row
 
 
@@ -231,9 +231,9 @@ def sync_group_members(
     selected = set(fields)
     unknown = sorted(selected - SYNCABLE_MEMBER_FIELDS)
     if unknown:
-        raise HTTPException(status_code=400, detail={"message": f"Unknown sync field: {', '.join(unknown)}"})
+        raise InvalidDomainInput(f"Unknown sync field: {', '.join(unknown)}")
     if not selected:
-        raise HTTPException(status_code=400, detail={"message": "At least one sync field must be selected"})
+        raise InvalidDomainInput("At least one sync field must be selected")
 
     defaults = group_defaults(group)
     members = db.query_all(
@@ -309,7 +309,7 @@ def update_group_with_propagation(
     propagate_scope: str = PROPAGATE_SCOPE_UNMODIFIED,
 ) -> dict[str, object]:
     if propagate_scope not in PROPAGATE_SCOPES:
-        raise HTTPException(status_code=400, detail={"message": f"Unknown propagate scope: {propagate_scope}"})
+        raise InvalidDomainInput(f"Unknown propagate scope: {propagate_scope}")
     group = get_group(db, group_id)
     old_values = _group_member_values(group)
     new_values = _merged_group_member_values(group, data)

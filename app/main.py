@@ -26,6 +26,7 @@ from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
 from .database import Database, validate_discord_self_service_config
+from .domain_errors import DomainError
 from .free_small_daily_limit import FreeSmallDailyLimitManager
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
@@ -159,6 +160,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning("http exception path=%s status=%s detail=%s", request.url.path, exc.status_code, exc.detail)
     content = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
     return JSONResponse(status_code=exc.status_code, content=content, headers=exc.headers)
+
+
+@app.exception_handler(DomainError)
+async def domain_error_handler(request: Request, exc: DomainError):
+    logger.warning("domain error path=%s status=%s message=%s", request.url.path, exc.status_code, exc.message)
+    return JSONResponse(status_code=exc.status_code, content={"message": exc.message})
 
 
 @app.exception_handler(RequestValidationError)

@@ -4,10 +4,9 @@ import secrets
 from dataclasses import dataclass, field
 from sqlite3 import Connection
 
-from fastapi import HTTPException
-
 from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_ENDPOINTS
 from ..database import Database, utc_now_iso
+from ..domain_errors import InvalidDomainInput, UserNotFound
 from ..quota_manager import QuotaManager
 from ..security import generate_api_key, hash_api_key
 
@@ -98,7 +97,7 @@ def create_user(db: Database, quota_manager: QuotaManager, data: CreateUserInput
                 now=now,
             )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+        raise InvalidDomainInput(str(exc)) from exc
     return created
 
 
@@ -154,7 +153,7 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
         try:
             quota_manager.create_or_update(user_id, total, reset_period, reset_day)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+            raise InvalidDomainInput(str(exc)) from exc
     return bool(fields or has_quota_update)
 
 
@@ -190,4 +189,4 @@ def ensure_user_exists(db: Database, user_id: int) -> None:
         (user_id,),
     )
     if row is None:
-        raise HTTPException(status_code=404, detail={"message": "User not found"})
+        raise UserNotFound()

@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from sqlite3 import Connection
 
-from fastapi import HTTPException
-
 from ..database import Database, utc_now_iso
+from ..domain_errors import (
+    SelfServiceAccountDeleted,
+    SelfServiceAccountDisabled,
+    UserGroupDisabled,
+    UserGroupNotFound,
+)
 from ..quota_manager import QuotaManager
 from ..users import CreateUserInput, group_defaults
 from ..users.service import insert_user_record
@@ -36,9 +40,9 @@ def login_or_register_discord_user(
         row = _get_discord_link(conn, profile.user_id)
         if row is not None:
             if row["deleted_at"] is not None:
-                raise HTTPException(status_code=403, detail={"message": "Account was deleted; contact administrator"})
+                raise SelfServiceAccountDeleted()
             if not int(row["is_active"]):
-                raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
+                raise SelfServiceAccountDisabled()
             _sync_existing_discord_link(conn, row, profile)
             return DiscordLoginResult(user_id=int(row["user_id"]), api_key=None)
 
@@ -128,9 +132,9 @@ def _get_enabled_group(conn: Connection, group_id: int):
         (group_id,),
     ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail={"message": "User group not found"})
+        raise UserGroupNotFound()
     if not int(row["is_active"]):
-        raise HTTPException(status_code=400, detail={"message": "User group is disabled"})
+        raise UserGroupDisabled()
     return row
 
 
