@@ -813,7 +813,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 
 .users-table {
   table-layout: fixed;
-  min-width: 1460px;
+  min-width: 1334px;
 }
 
 .users-table th,
@@ -838,10 +838,9 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 .users-table th:nth-child(5), .users-table td:nth-child(5) { width: 84px; text-align: center; }
 .users-table th:nth-child(6), .users-table td:nth-child(6) { width: 84px; text-align: center; }
 .users-table th:nth-child(7), .users-table td:nth-child(7) { width: 270px; }
-.users-table th:nth-child(8), .users-table td:nth-child(8) { width: 126px; }
-.users-table th:nth-child(9), .users-table td:nth-child(9) { width: 190px; }
-.users-table th:nth-child(10), .users-table td:nth-child(10) { width: 150px; }
-.users-table th:nth-child(11), .users-table td:nth-child(11) { width: 116px; }
+.users-table th:nth-child(8), .users-table td:nth-child(8) { width: 190px; }
+.users-table th:nth-child(9), .users-table td:nth-child(9) { width: 150px; }
+.users-table th:nth-child(10), .users-table td:nth-child(10) { width: 116px; }
 
 .users-table input.user-select-checkbox {
   appearance: none;

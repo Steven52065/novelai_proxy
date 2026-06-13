@@ -189,7 +189,6 @@
           <th>账号等级</th>
           <th>状态</th>
           <th>功能限制</th>
-          <th>API 密钥凭证</th>
           <th>Anlas额度 (已用 + 锁定 / 总额)</th>
           <th>Anlas额度重置规则</th>
           <th>操作选项</th>
@@ -242,9 +241,7 @@
             {% if daily.enabled %}
             <span class="badge" style="background: rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.25); color:#7dd3fc; margin-left: 4px;">每日 {{ daily.limit }} 张</span>
             <div class="muted" style="font-size: 12px; margin-top: 6px;">
-              免费小图单日数量：
-              <span class="mono" style="color:#e2e8f0;">{{ daily.used }} + {{ daily.reserved }} / {{ daily.limit }}</span>
-              <span style="display:block; margin-top: 2px;">可用 {{ daily.available }}</span>
+              可用 {{ daily.available }} 张
             </div>
             {% endif %}
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
@@ -261,18 +258,6 @@
                 <span class="badge" style="background: rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.18); color:#cbd5e1;">全部上游</span>
               {% endif %}
             </div>
-          </td>
-          <td>
-            {% if user.api_key %}
-            <button class="secondary copy-button" type="button" data-copy-value="{{ user.api_key }}" style="min-height: 30px; padding: 4px 10px; font-size: 12px;">
-              <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
-              <span>复制 Key</span>
-            </button>
-            {% else %}
-            <span class="muted" style="font-size: 12px; display: inline-flex; align-items: center; gap: 4px;">
-              <i data-lucide="help-circle" style="width: 12px; height: 12px;"></i>需在编辑中重置
-            </span>
-            {% endif %}
           </td>
           <td class="mono" style="font-weight: 500;">
             {% if (user.anlas_total or 0) > 0 %}
@@ -307,7 +292,7 @@
         </tr>
         {% endfor %}
         <tr id="users-empty-row" class="empty-row" hidden>
-          <td colspan="11" style="text-align: center; color: var(--text-muted); padding: 28px 20px;">未找到匹配的用户</td>
+          <td colspan="10" style="text-align: center; color: var(--text-muted); padding: 28px 20px;">未找到匹配的用户</td>
         </tr>
       </tbody>
     </table>

@@ -192,9 +192,12 @@ def test_admin_user_pages_show_daily_usage_and_hide_zero_anlas_usage(tmp_path: P
         users_page = client.get("/admin/users")
         assert users_page.status_code == 200
         users_text = _normalized_text(users_page.text)
-        assert "免费小图单日数量" in users_text
-        assert "2 + 1 / 5" in users_text
-        assert "可用 2" in users_text
+        assert "API 密钥凭证" not in users_text
+        assert "需在编辑中重置" not in users_text
+        assert "每日 5 张" in users_text
+        assert "可用 2 张" in users_text
+        assert "免费小图单日数量：" not in users_text
+        assert "2 + 1 / 5" not in users_text
         assert "未配置Anlas额度" in users_text
         assert "0 + 0 / 0" not in users_text
         assert "3 + 2 / 12" in users_text
