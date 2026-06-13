@@ -191,3 +191,11 @@ def ensure_user_exists(db: Database, user_id: int) -> None:
     )
     if row is None:
         raise UserNotFound()
+
+
+def user_is_available(db: Database, user_id: int) -> bool:
+    row = db.query_one(
+        "SELECT is_active, deleted_at FROM users WHERE id = ?",
+        (user_id,),
+    )
+    return row is not None and bool(row["is_active"]) and row["deleted_at"] is None

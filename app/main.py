@@ -37,6 +37,7 @@ from .rate_limiter import RateLimiter
 from .self_service.discord import DiscordOAuthClient
 from .self_service.routes import router as self_service_router
 from .upstream import UpstreamClient
+from .users.service import user_is_available
 from .usage_logs import UsageLogRepository
 
 
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
         upstream_execution_timeout_seconds=config.queue.upstream_execution_timeout_seconds,
         retry_429_queue_length_threshold=config.queue.retry_429_queue_length_threshold,
         retry_429_max_attempts=config.queue.retry_429_max_attempts,
+        is_user_available=lambda user_id: user_is_available(db, user_id),
         image_hosting=ImageHostingService(config.image_hosting),
         on_change=dashboard_events.notify_nowait,
     )

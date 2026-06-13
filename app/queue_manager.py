@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import heapq
 import itertools
 import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal, Protocol
 
@@ -82,6 +84,71 @@ class AdaptiveUpstreamScore:
     score: float
 
 
+class PriorityWorkQueue:
+    """Small priority queue with explicit snapshot and overflow support."""
+
+    def __init__(self, *, maxsize: int = 0):
+        self.maxsize = max(0, int(maxsize))
+        self._items: list[Any] = []
+        self._getters: deque[asyncio.Future] = deque()
+        self._unfinished_tasks = 0
+        self._finished = asyncio.Event()
+        self._finished.set()
+
+    def qsize(self) -> int:
+        return len(self._items)
+
+    def full(self) -> bool:
+        return self.maxsize > 0 and self.qsize() >= self.maxsize
+
+    def snapshot_items(self) -> list[Any]:
+        return sorted(self._items)
+
+    def put_nowait(self, item: Any, *, allow_overflow: bool = False) -> None:
+        if self.full() and not allow_overflow:
+            raise asyncio.QueueFull
+        heapq.heappush(self._items, item)
+        self._unfinished_tasks += 1
+        self._finished.clear()
+        self._wake_next_getter()
+
+    async def get(self) -> Any:
+        while not self._items:
+            loop = asyncio.get_running_loop()
+            getter = loop.create_future()
+            self._getters.append(getter)
+            try:
+                await getter
+            except BaseException:
+                getter.cancel()
+                try:
+                    self._getters.remove(getter)
+                except ValueError:
+                    pass
+                if self._items:
+                    self._wake_next_getter()
+                raise
+        return heapq.heappop(self._items)
+
+    def task_done(self) -> None:
+        if self._unfinished_tasks <= 0:
+            raise ValueError("task_done() called too many times")
+        self._unfinished_tasks -= 1
+        if self._unfinished_tasks == 0:
+            self._finished.set()
+
+    async def join(self) -> None:
+        if self._unfinished_tasks > 0:
+            await self._finished.wait()
+
+    def _wake_next_getter(self) -> None:
+        while self._getters:
+            getter = self._getters.popleft()
+            if not getter.done():
+                getter.set_result(None)
+                break
+
+
 class ProxyQueue:
     def __init__(
         self,
@@ -97,15 +164,15 @@ class ProxyQueue:
         retry_429_queue_length_threshold: int = 3,
         retry_policy: RetryPolicy | None = None,
         get_total_queue_length: callable | None = None,
+        is_user_available: Callable[[int], bool] | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
     ):
         self.upstream_id = upstream_id
-        self.quota_manager = quota_manager
         self.usage_logs = usage_logs
         self.client_provider = client_provider
         self.image_hosting = image_hosting
-        self.queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=max_queue_size)
+        self.queue = PriorityWorkQueue(maxsize=max_queue_size)
         self.upstream_interval_min_seconds = max(0.0, float(upstream_interval_min_seconds))
         self.upstream_interval_max_seconds = max(0.0, float(upstream_interval_max_seconds))
         if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
@@ -116,6 +183,7 @@ class ProxyQueue:
             raise ValueError("upstream_execution_timeout_seconds must be greater than 0")
         self._retry_policy = retry_policy or RetryPolicy(queue_length_threshold=retry_429_queue_length_threshold)
         self.get_total_queue_length = get_total_queue_length
+        self._is_user_available = is_user_available or (lambda _user_id: True)
         self._last_upstream_completed_at: float | None = None
         self._apply_error_extra_delay_next = False
         self._worker: asyncio.Task | None = None
@@ -156,7 +224,7 @@ class ProxyQueue:
         now = time.monotonic()
         queued = [
             _item_snapshot(item, now, "queued", position=index)
-            for index, item in enumerate(sorted(self.queue._queue), start=1)
+            for index, item in enumerate(self.queue.snapshot_items(), start=1)
         ]
         running = None
         if self._running_item is not None:
@@ -199,13 +267,7 @@ class ProxyQueue:
             )
 
         try:
-            if self.queue.full() and allow_overflow:
-                self.queue._put(attempt_item)
-                self.queue._unfinished_tasks += 1
-                self.queue._finished.clear()
-                self.queue._wakeup_next(self.queue._getters)
-            else:
-                self.queue.put_nowait(attempt_item)
+            self.queue.put_nowait(attempt_item, allow_overflow=allow_overflow)
         except asyncio.QueueFull as exc:
             raise QueueFull from exc
         self._notify_change()
@@ -236,7 +298,7 @@ class ProxyQueue:
                         item.attempt_number,
                     )
                     continue
-                if item.accounting.manage_quota and not _user_is_available(self.quota_manager, item.user_id):
+                if item.accounting.manage_quota and not self._is_user_available(item.user_id):
                     item.accounting.settle_rejected(
                         error_code="user_unavailable",
                         error_message="User is no longer active",
@@ -550,17 +612,6 @@ def _without_sequence(item: QueueItemSnapshot) -> QueueItemSnapshot:
     return clean
 
 
-def _user_is_available(quota_manager: QuotaManager, user_id: int) -> bool:
-    db = getattr(quota_manager, "db", None)
-    if db is None:
-        return True
-    row = db.query_one(
-        "SELECT is_active, deleted_at FROM users WHERE id = ?",
-        (user_id,),
-    )
-    return row is not None and bool(row["is_active"]) and row["deleted_at"] is None
-
-
 class RoutingProxyQueue:
     VIP_PRIORITY = QUEUE_PRIORITY_VIP
     NORMAL_PRIORITY = QUEUE_PRIORITY_NORMAL
@@ -584,6 +635,7 @@ class RoutingProxyQueue:
         upstream_execution_timeout_seconds: float = 60,
         retry_429_queue_length_threshold: int = 3,
         retry_429_max_attempts: int = 5,
+        is_user_available: Callable[[int], bool] | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
     ):
@@ -612,12 +664,13 @@ class RoutingProxyQueue:
         }
         if dispatch_max_queue_size is None:
             dispatch_max_queue_size = max_queue_size * len(enabled_targets)
-        self._dispatch_queue: asyncio.PriorityQueue[QueueItem] = asyncio.PriorityQueue(maxsize=dispatch_max_queue_size)
+        self._dispatch_queue = PriorityWorkQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
         self._dispatch_running_item: QueueItem | None = None
         self._accepting = True
         self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
+        self._is_user_available = is_user_available or (lambda _user_id: True)
         self._queues = {
             target.id: ProxyQueue(
                 upstream_id=target.id,
@@ -631,6 +684,7 @@ class RoutingProxyQueue:
                 upstream_execution_timeout_seconds=upstream_execution_timeout_seconds,
                 retry_policy=self._retry_policy,
                 get_total_queue_length=self._get_total_queue_length,
+                is_user_available=self._is_user_available,
                 image_hosting=image_hosting,
                 on_change=on_change,
             )
@@ -678,7 +732,7 @@ class RoutingProxyQueue:
         now = time.monotonic()
         dispatch_queued = [
             _item_snapshot(item, now, "dispatch_queued", position=index)
-            for index, item in enumerate(sorted(self._dispatch_queue._queue), start=1)
+            for index, item in enumerate(self._dispatch_queue.snapshot_items(), start=1)
         ]
         for upstream_id in self._target_order:
             upstream_snapshot = self._queues[upstream_id].snapshot()
@@ -841,7 +895,7 @@ class RoutingProxyQueue:
                         item.attempt_number,
                     )
                     continue
-                if item.accounting.manage_quota and not _user_is_available(self._quota_manager, item.user_id):
+                if item.accounting.manage_quota and not self._is_user_available(item.user_id):
                     self._finish_user_unavailable(item)
                     logger.info(
                         "proxy request skipped by dispatcher because user is unavailable request_id=%s user_id=%s attempt_number=%s",
