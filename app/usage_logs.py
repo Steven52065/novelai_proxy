@@ -9,6 +9,9 @@ from .database import Database, utc_now_iso
 from .logging_utils import json_dumps
 
 
+USAGE_LOG_STATUSES = ("queued", "running", "success", "failed", "rejected")
+
+
 @dataclass(frozen=True)
 class UsageLogCreate:
     request_id: str
@@ -274,53 +277,61 @@ class UsageLogRepository:
             (log_id,),
         )
 
-    def list_logs(self, *, user_id: int | None, limit: int, before_id: int | None) -> list[Row]:
-        fetch_limit = limit + 1
-        if user_id is None and before_id is None:
-            return self.db.query_all(
-                """
-                SELECT l.*, u.name AS user_name
-                FROM usage_logs l
-                JOIN users u ON u.id = l.user_id
-                ORDER BY l.id DESC
-                LIMIT ?
-                """,
-                (fetch_limit,),
-            )
-        if user_id is None:
-            return self.db.query_all(
-                """
-                SELECT l.*, u.name AS user_name
-                FROM usage_logs l
-                JOIN users u ON u.id = l.user_id
-                WHERE l.id < ?
-                ORDER BY l.id DESC
-                LIMIT ?
-                """,
-                (before_id, fetch_limit),
-            )
-        if before_id is None:
-            return self.db.query_all(
-                """
-                SELECT l.*, u.name AS user_name
-                FROM usage_logs l
-                JOIN users u ON u.id = l.user_id
-                WHERE l.user_id = ?
-                ORDER BY l.id DESC
-                LIMIT ?
-                """,
-                (user_id, fetch_limit),
-            )
-        return self.db.query_all(
+    def list_actions(self) -> list[str]:
+        rows = self.db.query_all(
             """
+            SELECT DISTINCT action
+            FROM usage_logs
+            ORDER BY action
+            """
+        )
+        return [str(row["action"]) for row in rows]
+
+    def list_logs(
+        self,
+        *,
+        user_id: int | None,
+        limit: int,
+        before_id: int | None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        action: str | None = None,
+        status: str | None = None,
+    ) -> list[Row]:
+        fetch_limit = limit + 1
+        where: list[str] = []
+        params: list[Any] = []
+        if user_id is not None:
+            where.append("l.user_id = ?")
+            params.append(user_id)
+        if action is not None:
+            where.append("l.action = ?")
+            params.append(action)
+        if status is not None:
+            where.append("l.status = ?")
+            params.append(status)
+        if created_from is not None:
+            where.append("l.created_at >= ?")
+            params.append(created_from)
+        if created_to is not None:
+            where.append("l.created_at < ?")
+            params.append(created_to)
+        if before_id is not None:
+            where.append("l.id < ?")
+            params.append(before_id)
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        params.append(fetch_limit)
+        return self.db.query_all(
+            f"""
             SELECT l.*, u.name AS user_name
             FROM usage_logs l
             JOIN users u ON u.id = l.user_id
-            WHERE l.user_id = ? AND l.id < ?
+            {where_sql}
             ORDER BY l.id DESC
             LIMIT ?
             """,
-            (user_id, before_id, fetch_limit),
+            tuple(params),
         )
 
     @staticmethod

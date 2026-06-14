@@ -7,27 +7,66 @@
   </h1>
 </div>
 
-<section class="panel logs-filter-panel" style="padding: 20px 24px; margin-bottom: 24px;">
-  <form id="logs-filter-form" method="get" action="/admin/logs" class="inline-form" style="display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
-    <label style="flex: 1; min-width: 200px; gap: 6px;">
-      筛选发起用户
-      <select name="user_id">
-        <option value="">全部用户账号</option>
-        {% for user in users %}
-        <option value="{{ user.id }}" {{ "selected" if selected_user_id == user.id else "" }}>{{ user.name }}</option>
+<section class="panel logs-filter-panel">
+  <form id="logs-filter-form" method="get" action="/admin/logs" class="inline-form logs-filter-form">
+    <div class="logs-filter-field logs-user-filter">
+      <span class="logs-filter-label">筛选发起用户</span>
+      <div class="logs-user-picker" data-initial-user-name="{{ selected_user.name if selected_user else '' }}">
+        <input id="logs-user-id-input" name="user_id" type="hidden" value="{{ selected_user_id if selected_user_id is not none else '' }}">
+        <div class="user-search logs-user-search">
+          <i data-lucide="search" style="width: 16px; height: 16px;"></i>
+          <input id="logs-user-search-input" type="search" value="{{ selected_user.name if selected_user else '' }}" placeholder="搜索备注名" autocomplete="off" aria-label="筛选发起用户" aria-controls="logs-user-suggestions">
+        </div>
+        <div id="logs-user-suggestions" class="logs-user-suggestions" role="listbox" hidden></div>
+      </div>
+    </div>
+
+    <label class="logs-filter-field">
+      开始时间
+      <input name="created_from" type="datetime-local" step="3600" value="{{ created_from }}">
+    </label>
+
+    <label class="logs-filter-field">
+      结束时间
+      <input name="created_to" type="datetime-local" step="3600" value="{{ created_to }}">
+    </label>
+
+    <label class="logs-filter-field">
+      API动作
+      <select name="action">
+        <option value="">全部动作</option>
+        {% for option in action_options %}
+        <option value="{{ option }}" {{ "selected" if selected_action == option else "" }}>{{ option }}</option>
         {% endfor %}
       </select>
     </label>
 
-    <label style="width: 140px; gap: 6px;">
+    <label class="logs-filter-field">
+      运行状态
+      <select name="status">
+        <option value="">全部状态</option>
+        {% for option in status_options %}
+        <option value="{{ option.value }}" {{ "selected" if selected_status == option.value else "" }}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="logs-filter-field logs-limit-field">
       展示日志条数
       <input id="logs-limit-input" name="limit" type="number" min="1" max="500" value="{{ limit }}" placeholder="条数上限">
     </label>
 
-    <button type="submit" style="min-height: 44px; padding: 0 24px;">
-      <i data-lucide="search" style="width: 16px; height: 16px;"></i>
-      执行筛选
-    </button>
+    <div class="logs-filter-actions">
+      <button type="submit">
+        <i data-lucide="search" style="width: 16px; height: 16px;"></i>
+        执行筛选
+      </button>
+
+      <a class="button-like secondary" href="/admin/logs">
+        <i data-lucide="rotate-ccw" style="width: 16px; height: 16px;"></i>
+        重置
+      </a>
+    </div>
 
     <div class="logs-column-filter">
       <button id="logs-column-filter-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="logs-column-filter-menu" style="min-height: 44px; padding: 0 16px;">
@@ -299,6 +338,10 @@
   const logsTable = document.querySelector(".logs-table");
   const filterForm = document.getElementById("logs-filter-form");
   const limitInput = document.getElementById("logs-limit-input");
+  const logUserIdInput = document.getElementById("logs-user-id-input");
+  const logUserSearchInput = document.getElementById("logs-user-search-input");
+  const logUserSuggestions = document.getElementById("logs-user-suggestions");
+  const logUserPicker = document.querySelector(".logs-user-picker");
   const tableBody = document.getElementById("logs-table-body");
   const infiniteStatus = document.getElementById("logs-infinite-status");
   const infiniteSentinel = document.getElementById("logs-infinite-sentinel");
@@ -310,10 +353,14 @@
   const base64Cache = new Map();
   let cacheCounter = 0;
   let loadingMoreLogs = false;
+  let selectedLogUserName = logUserPicker?.dataset.initialUserName || "";
+  let logUserSearchTimer = null;
+  let logUserSearchToken = 0;
 
   applyStoredLimit();
   applyStoredColumns();
   bindLimitPersistence();
+  bindUserAutocomplete();
   bindColumnFilter();
   bindLogInteractions();
   setupInfiniteScroll();
@@ -346,6 +393,124 @@
         limitInput.value = String(limit);
       });
     }
+  }
+
+  function bindUserAutocomplete() {
+    if (!logUserIdInput || !logUserSearchInput || !logUserSuggestions) return;
+    logUserSearchInput.addEventListener("input", () => {
+      const query = logUserSearchInput.value.trim();
+      if (!query) {
+        logUserIdInput.value = "";
+        selectedLogUserName = "";
+        hideUserSuggestions();
+        return;
+      }
+      if (query !== selectedLogUserName) {
+        logUserIdInput.value = "";
+      }
+      scheduleLogUserSearch(query);
+    });
+    logUserSearchInput.addEventListener("focus", () => {
+      const query = logUserSearchInput.value.trim();
+      if (query && query !== selectedLogUserName) {
+        scheduleLogUserSearch(query, 0);
+      }
+    });
+    logUserSearchInput.addEventListener("search", () => {
+      if (!logUserSearchInput.value.trim()) {
+        logUserIdInput.value = "";
+        selectedLogUserName = "";
+        hideUserSuggestions();
+      }
+    });
+    logUserSuggestions.addEventListener("click", (event) => {
+      const option = event.target.closest?.("[data-log-user-option]");
+      if (!option) return;
+      event.preventDefault();
+      logUserIdInput.value = option.dataset.userId || "";
+      selectedLogUserName = option.dataset.userName || "";
+      logUserSearchInput.value = selectedLogUserName;
+      hideUserSuggestions();
+    });
+    if (filterForm) {
+      filterForm.addEventListener("submit", (event) => {
+        const query = logUserSearchInput.value.trim();
+        if (!query) {
+          logUserIdInput.value = "";
+          selectedLogUserName = "";
+          return;
+        }
+        if (!logUserIdInput.value) {
+          event.preventDefault();
+          showToast("请先从候选用户中选择一个账号。");
+          logUserSearchInput.focus();
+          scheduleLogUserSearch(query, 0);
+        }
+      });
+    }
+    document.addEventListener("click", (event) => {
+      if (!logUserPicker || !logUserSuggestions || logUserSuggestions.hidden) return;
+      const target = event.target;
+      if (logUserPicker.contains(target)) return;
+      hideUserSuggestions();
+    });
+  }
+
+  function scheduleLogUserSearch(query, delay = 180) {
+    window.clearTimeout(logUserSearchTimer);
+    logUserSearchTimer = window.setTimeout(() => {
+      searchLogUsers(query);
+    }, delay);
+  }
+
+  async function searchLogUsers(query) {
+    const normalized = query.trim();
+    if (!normalized || !logUserSuggestions) {
+      hideUserSuggestions();
+      return;
+    }
+    const token = ++logUserSearchToken;
+    const params = new URLSearchParams({q: normalized, limit: "20"});
+    try {
+      const response = await fetch(`/admin/api/users/search?${params.toString()}`, {
+        headers: {"Accept": "application/json"},
+      });
+      const body = await response.json().catch(() => ({}));
+      if (token !== logUserSearchToken) return;
+      if (!response.ok) {
+        throw new Error(body.message || body.detail?.message || `搜索失败：HTTP ${response.status}`);
+      }
+      const users = Array.isArray(body.users) ? body.users : [];
+      renderUserSuggestions(users);
+    } catch (err) {
+      renderUserSuggestionMessage(err.message || "搜索用户失败。");
+    }
+  }
+
+  function renderUserSuggestions(users) {
+    if (!logUserSuggestions) return;
+    if (!users.length) {
+      renderUserSuggestionMessage("未找到匹配用户。");
+      return;
+    }
+    logUserSuggestions.innerHTML = users.map((user) => `
+      <button class="logs-user-suggestion" type="button" role="option" data-log-user-option data-user-id="${escapeAttr(user.id)}" data-user-name="${escapeAttr(user.name)}">
+        <span>${escapeHtml(user.name)}</span>
+        <code>#${escapeHtml(user.id)}</code>
+      </button>
+    `).join("");
+    logUserSuggestions.hidden = false;
+  }
+
+  function renderUserSuggestionMessage(message) {
+    if (!logUserSuggestions) return;
+    logUserSuggestions.innerHTML = `<div class="logs-user-suggestion-empty">${escapeHtml(message)}</div>`;
+    logUserSuggestions.hidden = false;
+  }
+
+  function hideUserSuggestions() {
+    if (!logUserSuggestions) return;
+    logUserSuggestions.hidden = true;
   }
 
   function readStoredValue(key) {
@@ -545,13 +710,12 @@
 
     const limit = normalizeLimit(limitInput?.value) || 100;
     const beforeId = Math.max(0, Number.parseInt(tableBody.dataset.nextBeforeId || "0", 10) || 0);
-    const params = new URLSearchParams({limit: String(limit)});
+    const params = new URLSearchParams(window.location.search);
+    params.set("limit", String(limit));
     if (beforeId > 0) {
       params.set("before_id", String(beforeId));
-    }
-    const selectedUserId = tableBody.dataset.selectedUserId;
-    if (selectedUserId) {
-      params.set("user_id", selectedUserId);
+    } else {
+      params.delete("before_id");
     }
 
     try {

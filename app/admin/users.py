@@ -21,7 +21,7 @@ from ..users import (
     reset_api_key,
     update_user as update_user_record,
 )
-from .auth import require_admin, require_admin_page_session
+from .auth import require_admin, require_admin_or_session, require_admin_page_session
 from .common import (
     normalize_reset_day_or_400,
     notify_dashboard_change,
@@ -101,6 +101,30 @@ async def list_users(request: Request):
         """
     )
     return {"users": [user_row_to_dict(row) for row in rows]}
+
+
+@api_router.get("/users/search", dependencies=[Depends(require_admin_or_session)])
+async def search_users(request: Request, q: str = "", limit: int = 20):
+    db: Database = request.app.state.db
+    normalized_limit = max(1, min(int(limit), 50))
+    query = q.strip()
+    params: list[object] = []
+    where = "deleted_at IS NULL"
+    if query:
+        where += " AND name LIKE ? ESCAPE '\\'"
+        params.append(f"%{_escape_like(query)}%")
+    params.append(normalized_limit)
+    rows = db.query_all(
+        f"""
+        SELECT id, name
+        FROM users
+        WHERE {where}
+        ORDER BY name COLLATE NOCASE, id DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    )
+    return {"users": [row_to_dict(row) for row in rows], "q": query, "limit": normalized_limit}
 
 
 @api_router.post("/users", dependencies=[Depends(require_admin)])
@@ -616,6 +640,10 @@ def _parse_optional_form_int(value: str | None) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _attach_free_small_daily_snapshots(request: Request, users: list[dict]) -> None:

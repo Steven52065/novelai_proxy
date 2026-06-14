@@ -4,6 +4,8 @@ import base64
 import io
 import uuid
 import zipfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,7 +17,8 @@ from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..queue_tiers import TIER_REPLAY
 from ..templating import templates
-from ..usage_logs import UsageLogCreate, UsageLogRepository
+from ..timezones import DISPLAY_TIMEZONE
+from ..usage_logs import USAGE_LOG_STATUSES, UsageLogCreate, UsageLogRepository
 from .auth import require_admin_or_session, require_admin_page_session
 from .common import json_or_none, optional_query_int, row_to_dict, usage_log_to_dict
 
@@ -29,14 +32,56 @@ REPLAY_IMAGE_CONTENT_TYPES = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+LOG_STATUS_LABELS = {
+    "queued": "排队中",
+    "running": "运行中",
+    "success": "成功",
+    "failed": "失败",
+    "rejected": "已拒绝",
+}
+
+
+@dataclass(frozen=True)
+class LogFilters:
+    user_id: int | None
+    created_from: str
+    created_to: str
+    created_from_utc: str | None
+    created_to_utc: str | None
+    action: str | None
+    status: str | None
 
 
 @api_router.get("/logs", dependencies=[Depends(require_admin_or_session)])
-async def logs(request: Request, user_id: int | None = None, limit: int = 100, before_id: int | None = None):
+async def logs(
+    request: Request,
+    user_id: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    action: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    before_id: int | None = None,
+):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
+    filters = _parse_log_filters(
+        user_id=user_id,
+        created_from=created_from,
+        created_to=created_to,
+        action=action,
+        status=status,
+    )
     limit = max(1, min(limit, 500))
     before_id = before_id if before_id is not None and before_id > 0 else None
-    rows = usage_logs.list_logs(user_id=user_id, limit=limit, before_id=before_id)
+    rows = usage_logs.list_logs(
+        user_id=filters.user_id,
+        created_from=filters.created_from_utc,
+        created_to=filters.created_to_utc,
+        action=filters.action,
+        status=filters.status,
+        limit=limit,
+        before_id=before_id,
+    )
     page_rows = rows[:limit]
     return {
         "logs": [usage_log_to_dict(row) for row in page_rows],
@@ -143,23 +188,114 @@ async def _replay_log_source(source, request: Request):
 
 
 @web_router.get("/logs", response_class=HTMLResponse)
-async def logs_page(request: Request, user_id: str | None = None, limit: int = 100):
-    selected_user_id = optional_query_int(user_id)
-    data = await logs(request, user_id=selected_user_id, limit=limit)
-    users = request.app.state.db.query_all("SELECT id, name FROM users ORDER BY name")
+async def logs_page(
+    request: Request,
+    user_id: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    action: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+):
+    filters = _parse_log_filters(
+        user_id=user_id,
+        created_from=created_from,
+        created_to=created_to,
+        action=action,
+        status=status,
+    )
+    data = await logs(
+        request,
+        user_id=user_id,
+        created_from=created_from,
+        created_to=created_to,
+        action=action,
+        status=status,
+        limit=limit,
+    )
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
+    action_options = usage_logs.list_actions()
+    if filters.action is not None and filters.action not in action_options:
+        action_options.append(filters.action)
+        action_options.sort()
     return templates.TemplateResponse(
         request,
         "logs.html",
         {
             "active": "logs",
             "logs": data["logs"],
-            "users": [row_to_dict(row) for row in users],
-            "selected_user_id": selected_user_id,
+            "selected_user": _selected_user(request, filters.user_id),
+            "selected_user_id": filters.user_id,
+            "created_from": filters.created_from,
+            "created_to": filters.created_to,
+            "action_options": action_options,
+            "selected_action": filters.action,
+            "status_options": [{"value": value, "label": LOG_STATUS_LABELS[value]} for value in USAGE_LOG_STATUSES],
+            "selected_status": filters.status,
             "limit": data["limit"],
             "has_more": data["has_more"],
             "next_before_id": data["next_before_id"],
         },
     )
+
+
+def _parse_log_filters(
+    *,
+    user_id: str | None,
+    created_from: str | None,
+    created_to: str | None,
+    action: str | None,
+    status: str | None,
+) -> LogFilters:
+    parsed_from, created_from_utc = _parse_datetime_local_filter(created_from, "created_from")
+    parsed_to, created_to_utc = _parse_datetime_local_filter(created_to, "created_to")
+    return LogFilters(
+        user_id=optional_query_int(user_id),
+        created_from=parsed_from,
+        created_to=parsed_to,
+        created_from_utc=created_from_utc,
+        created_to_utc=created_to_utc,
+        action=_optional_query_text(action),
+        status=_parse_status_filter(status),
+    )
+
+
+def _optional_query_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _parse_status_filter(value: str | None) -> str | None:
+    status = _optional_query_text(value)
+    if status is None:
+        return None
+    if status not in USAGE_LOG_STATUSES:
+        raise HTTPException(status_code=400, detail={"message": "Invalid status filter"})
+    return status
+
+
+def _parse_datetime_local_filter(value: str | None, field_name: str) -> tuple[str, str | None]:
+    raw = _optional_query_text(value)
+    if raw is None:
+        return "", None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": f"Invalid {field_name} filter"}) from exc
+    if parsed.tzinfo is None:
+        local_time = parsed.replace(tzinfo=DISPLAY_TIMEZONE)
+    else:
+        local_time = parsed.astimezone(DISPLAY_TIMEZONE)
+    return local_time.strftime("%Y-%m-%dT%H:%M"), local_time.astimezone(timezone.utc).isoformat()
+
+
+def _selected_user(request: Request, user_id: int | None) -> dict | None:
+    if user_id is None:
+        return None
+    row = request.app.state.db.query_one("SELECT id, name FROM users WHERE id = ?", (user_id,))
+    return row_to_dict(row) if row is not None else None
 
 
 def _zip_images_to_data_urls(zip_payload: bytes) -> list[dict[str, str | int]]:

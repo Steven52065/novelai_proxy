@@ -250,3 +250,199 @@ def test_admin_logs_api_supports_session_pagination(tmp_path: Path, monkeypatch)
         assert "window.localStorage" in logs_page.text
         assert "readStoredValue" in logs_page.text
         assert "IntersectionObserver" in logs_page.text
+
+
+def test_admin_logs_api_filters_by_user_action_status_and_utc8_hour_range(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        alpha_id = _create_admin_user(client, "alpha-log-user")
+        beta_id = _create_admin_user(client, "beta-log-user")
+        _insert_usage_log(
+            client,
+            user_id=alpha_id,
+            request_id="alpha-success",
+            action="generate",
+            status="success",
+            created_at="2026-05-27T00:00:00+00:00",
+        )
+        _insert_usage_log(
+            client,
+            user_id=alpha_id,
+            request_id="alpha-upscale",
+            action="upscale",
+            status="failed",
+            created_at="2026-05-27T01:00:00+00:00",
+        )
+        _insert_usage_log(
+            client,
+            user_id=beta_id,
+            request_id="beta-rejected",
+            action="generate",
+            status="rejected",
+            created_at="2026-05-27T02:00:00+00:00",
+        )
+
+        by_user = client.get(f"/admin/api/logs?user_id={alpha_id}&limit=100", auth=("admin", "admin123"))
+        assert by_user.status_code == 200
+        assert {row["request_id"] for row in by_user.json()["logs"]} == {"alpha-success", "alpha-upscale"}
+
+        by_action = client.get("/admin/api/logs?action=upscale&limit=100", auth=("admin", "admin123"))
+        assert by_action.status_code == 200
+        assert [row["request_id"] for row in by_action.json()["logs"]] == ["alpha-upscale"]
+
+        by_status = client.get("/admin/api/logs?status=rejected&limit=100", auth=("admin", "admin123"))
+        assert by_status.status_code == 200
+        assert [row["request_id"] for row in by_status.json()["logs"]] == ["beta-rejected"]
+
+        by_hour = client.get(
+            "/admin/api/logs?created_from=2026-05-27T09:00&created_to=2026-05-27T10:00&limit=100",
+            auth=("admin", "admin123"),
+        )
+        assert by_hour.status_code == 200
+        assert [row["request_id"] for row in by_hour.json()["logs"]] == ["alpha-upscale"]
+
+        combined = client.get(
+            (
+                f"/admin/api/logs?user_id={alpha_id}&action=generate&status=success"
+                "&created_from=2026-05-27T08:00&created_to=2026-05-27T09:00&limit=100"
+            ),
+            auth=("admin", "admin123"),
+        )
+        assert combined.status_code == 200
+        assert [row["request_id"] for row in combined.json()["logs"]] == ["alpha-success"]
+
+        invalid_status = client.get("/admin/api/logs?status=unknown", auth=("admin", "admin123"))
+        assert invalid_status.status_code == 400
+
+
+def test_admin_logs_api_keeps_filters_when_paginating_with_before_id(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        user_id = _create_admin_user(client, "filtered-pagination-user")
+        for index in range(7):
+            _insert_usage_log(
+                client,
+                user_id=user_id,
+                request_id=f"filtered-page-{index}",
+                action="generate" if index % 2 == 0 else "upscale",
+                status="success",
+                created_at=f"2026-05-27T00:00:0{index}+00:00",
+            )
+
+        first_page = client.get("/admin/api/logs?action=generate&limit=2", auth=("admin", "admin123"))
+        assert first_page.status_code == 200
+        first_body = first_page.json()
+        assert [row["request_id"] for row in first_body["logs"]] == ["filtered-page-6", "filtered-page-4"]
+        assert first_body["has_more"] is True
+
+        _insert_usage_log(
+            client,
+            user_id=user_id,
+            request_id="filtered-page-newer",
+            action="generate",
+            status="success",
+            created_at="2026-05-27T00:01:00+00:00",
+        )
+
+        second_page = client.get(
+            f"/admin/api/logs?action=generate&limit=2&before_id={first_body['next_before_id']}",
+            auth=("admin", "admin123"),
+        )
+        assert second_page.status_code == 200
+        second_body = second_page.json()
+        assert [row["request_id"] for row in second_body["logs"]] == ["filtered-page-2", "filtered-page-0"]
+        assert {row["action"] for row in second_body["logs"]} == {"generate"}
+        assert second_body["has_more"] is False
+
+
+def test_admin_logs_page_preserves_filter_controls(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        user_id = _create_admin_user(client, "render-filter-user")
+        _insert_usage_log(
+            client,
+            user_id=user_id,
+            request_id="render-filter-log",
+            action="generate",
+            status="success",
+            created_at="2026-05-27T00:00:00+00:00",
+        )
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        page = client.get(
+            (
+                f"/admin/logs?user_id={user_id}&created_from=2026-05-27T08:00"
+                "&created_to=2026-05-27T09:00&action=generate&status=success&limit=25"
+            )
+        )
+        assert page.status_code == 200
+        assert f'id="logs-user-id-input" name="user_id" type="hidden" value="{user_id}"' in page.text
+        assert 'id="logs-user-search-input" type="search" value="render-filter-user"' in page.text
+        assert 'name="created_from" type="datetime-local" step="3600" value="2026-05-27T08:00"' in page.text
+        assert 'name="created_to" type="datetime-local" step="3600" value="2026-05-27T09:00"' in page.text
+        assert '<option value="generate" selected>generate</option>' in page.text
+        assert '<option value="success" selected>成功</option>' in page.text
+
+
+def test_admin_users_search_api_supports_session_and_excludes_deleted_users(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        active_one = _create_admin_user(client, "alpha-search-one")
+        active_two = _create_admin_user(client, "alpha-search-two")
+        deleted = _create_admin_user(client, "alpha-search-deleted")
+        _create_admin_user(client, "beta-search-user")
+        delete_resp = client.delete(f"/admin/api/users/{deleted}", auth=("admin", "admin123"))
+        assert delete_resp.status_code == 200
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        search = client.get("/admin/api/users/search?q=alpha-search&limit=5")
+        assert search.status_code == 200
+        users = search.json()["users"]
+        assert {row["id"] for row in users} == {active_one, active_two}
+        assert all(row["name"] != "alpha-search-deleted" for row in users)
+
+        limited = client.get("/admin/api/users/search?q=alpha-search&limit=1")
+        assert limited.status_code == 200
+        assert len(limited.json()["users"]) == 1
+
+
+def _create_admin_user(client: TestClient, name: str) -> int:
+    response = client.post(
+        "/admin/api/users",
+        auth=("admin", "admin123"),
+        json={"name": name, "tier": "normal", "anlas_total": 100},
+    )
+    assert response.status_code == 200
+    return int(response.json()["user_id"])
+
+
+def _insert_usage_log(
+    client: TestClient,
+    *,
+    user_id: int,
+    request_id: str,
+    action: str,
+    status: str,
+    created_at: str,
+) -> None:
+    client.app.state.db.execute(
+        """
+        INSERT INTO usage_logs (
+            request_id, user_id, action, estimated_anlas_cost, status, log_level, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (request_id, user_id, action, 0, status, "INFO", created_at),
+    )
