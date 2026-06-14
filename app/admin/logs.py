@@ -249,6 +249,8 @@ def _parse_log_filters(
 ) -> LogFilters:
     parsed_from, created_from_utc = _parse_datetime_local_filter(created_from, "created_from")
     parsed_to, created_to_utc = _parse_datetime_local_filter(created_to, "created_to")
+    if created_from_utc is not None and created_to_utc is not None and created_from_utc > created_to_utc:
+        raise HTTPException(status_code=400, detail={"message": "created_from must be earlier than created_to"})
     return LogFilters(
         user_id=optional_query_int(user_id),
         created_from=parsed_from,

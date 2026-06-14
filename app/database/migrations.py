@@ -106,6 +106,12 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_usage_user_created
             ON usage_logs(user_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_usage_created_at
+            ON usage_logs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_usage_action_created
+            ON usage_logs(action, created_at);
+        CREATE INDEX IF NOT EXISTS idx_usage_status_created
+            ON usage_logs(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_usage_status
             ON usage_logs(status);
         CREATE INDEX IF NOT EXISTS idx_usage_request_id

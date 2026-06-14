@@ -219,6 +219,7 @@ def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_pa
     }
     assert "idx_users_group_id" in indexes
     assert "idx_group_rate_limit_rules_group_id" in indexes
+    assert {"idx_usage_created_at", "idx_usage_action_created", "idx_usage_status_created"} <= indexes
     db.close()
 
 
@@ -314,4 +315,9 @@ def test_usage_logs_unique_constraint_migration_allows_retry_attempts(tmp_path: 
     assert [row["attempt_number"] for row in rows] == [0, 1]
     table_sql = db.query_one("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage_logs'")["sql"]
     assert "UNIQUE(request_id, attempt_number)" in table_sql
+    indexes = {
+        row["name"]
+        for row in db.query_all("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'usage_logs'")
+    }
+    assert {"idx_usage_created_at", "idx_usage_action_created", "idx_usage_status_created"} <= indexes
     db.close()

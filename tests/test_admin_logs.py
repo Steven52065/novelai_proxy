@@ -316,6 +316,20 @@ def test_admin_logs_api_filters_by_user_action_status_and_utc8_hour_range(tmp_pa
         invalid_status = client.get("/admin/api/logs?status=unknown", auth=("admin", "admin123"))
         assert invalid_status.status_code == 400
 
+        invalid_created_from = client.get(
+            "/admin/api/logs?created_from=not-a-date",
+            auth=("admin", "admin123"),
+        )
+        assert invalid_created_from.status_code == 400
+        assert invalid_created_from.json()["message"] == "Invalid created_from filter"
+
+        reversed_range = client.get(
+            "/admin/api/logs?created_from=2026-05-27T10:00&created_to=2026-05-27T09:00",
+            auth=("admin", "admin123"),
+        )
+        assert reversed_range.status_code == 400
+        assert reversed_range.json()["message"] == "created_from must be earlier than created_to"
+
 
 def test_admin_logs_api_keeps_filters_when_paginating_with_before_id(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -416,6 +430,43 @@ def test_admin_users_search_api_supports_session_and_excludes_deleted_users(tmp_
         limited = client.get("/admin/api/users/search?q=alpha-search&limit=1")
         assert limited.status_code == 200
         assert len(limited.json()["users"]) == 1
+
+
+def test_admin_users_search_api_treats_like_wildcards_as_literals(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        percent_id = _create_admin_user(client, "wild%literal")
+        _create_admin_user(client, "wildXliteral")
+        underscore_id = _create_admin_user(client, "under_score")
+        _create_admin_user(client, "underXscore")
+        backslash_id = _create_admin_user(client, "path\\literal")
+        _create_admin_user(client, "pathliteral")
+
+        percent = client.get(
+            "/admin/api/users/search",
+            params={"q": "wild%", "limit": "10"},
+            auth=("admin", "admin123"),
+        )
+        assert percent.status_code == 200
+        assert [row["id"] for row in percent.json()["users"]] == [percent_id]
+
+        underscore = client.get(
+            "/admin/api/users/search",
+            params={"q": "under_", "limit": "10"},
+            auth=("admin", "admin123"),
+        )
+        assert underscore.status_code == 200
+        assert [row["id"] for row in underscore.json()["users"]] == [underscore_id]
+
+        backslash = client.get(
+            "/admin/api/users/search",
+            params={"q": "path\\", "limit": "10"},
+            auth=("admin", "admin123"),
+        )
+        assert backslash.status_code == 200
+        assert [row["id"] for row in backslash.json()["users"]] == [backslash_id]
 
 
 def _create_admin_user(client: TestClient, name: str) -> int:
