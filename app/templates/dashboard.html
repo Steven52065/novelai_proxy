@@ -514,6 +514,14 @@
   let dashboardFallbackTimer = null;
   let dashboardReconnectTimer = null;
   let queueClockTimer = null;
+  let queueElapsedObserver = null;
+  const visibleQueueElapsedNodes = new Set();
+
+  function refreshIcons() {
+    if (window.lucide && typeof window.lucide.createIcons === "function") {
+      window.lucide.createIcons();
+    }
+  }
 
   function formatSeconds(seconds) {
     const value = Number(seconds || 0);
@@ -529,12 +537,70 @@
   }
 
   function updateQueueElapsedTimes() {
-    for (const node of document.querySelectorAll(".queue-elapsed")) {
+    if (document.hidden) return;
+    for (const node of Array.from(visibleQueueElapsedNodes)) {
+      if (!node.isConnected) {
+        visibleQueueElapsedNodes.delete(node);
+        continue;
+      }
       const baseSeconds = Number(node.dataset.baseSeconds || 0);
       const baseTime = Number(node.dataset.baseTime || Date.now());
       const elapsed = baseSeconds + Math.max(0, Math.floor((Date.now() - baseTime) / 1000));
-      node.textContent = formatSeconds(elapsed);
+      const text = formatSeconds(elapsed);
+      if (node.textContent !== text) node.textContent = text;
     }
+  }
+
+  function startQueueClock() {
+    if (queueClockTimer !== null || document.hidden || visibleQueueElapsedNodes.size === 0) return;
+    queueClockTimer = window.setInterval(updateQueueElapsedTimes, 1000);
+  }
+
+  function stopQueueClock() {
+    if (queueClockTimer === null) return;
+    window.clearInterval(queueClockTimer);
+    queueClockTimer = null;
+  }
+
+  function syncQueueClock() {
+    if (document.hidden || visibleQueueElapsedNodes.size === 0) {
+      stopQueueClock();
+    } else {
+      startQueueClock();
+    }
+  }
+
+  function observeQueueElapsedNodes() {
+    visibleQueueElapsedNodes.clear();
+    if (queueElapsedObserver) {
+      queueElapsedObserver.disconnect();
+      queueElapsedObserver = null;
+    }
+
+    const nodes = Array.from(queueBody.querySelectorAll(".queue-elapsed"));
+    if (!("IntersectionObserver" in window)) {
+      for (const node of nodes) visibleQueueElapsedNodes.add(node);
+      syncQueueClock();
+      updateQueueElapsedTimes();
+      return;
+    }
+
+    queueElapsedObserver = new IntersectionObserver((entries) => {
+      let needsUpdate = false;
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          visibleQueueElapsedNodes.add(entry.target);
+          needsUpdate = true;
+        } else {
+          visibleQueueElapsedNodes.delete(entry.target);
+        }
+      }
+      if (needsUpdate) updateQueueElapsedTimes();
+      syncQueueClock();
+    }, {rootMargin: "240px 0px"});
+
+    for (const node of nodes) queueElapsedObserver.observe(node);
+    syncQueueClock();
   }
 
   function requestLabel(requestId) {
@@ -599,7 +665,8 @@
       row.firstChild.colSpan = 9;
       row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
-      lucide.createIcons();
+      observeQueueElapsedNodes();
+      refreshIcons();
       return;
     }
     
@@ -651,7 +718,8 @@
     }
     
     // Rerender icons dynamically for dynamically generated inline icons
-    lucide.createIcons();
+    observeQueueElapsedNodes();
+    refreshIcons();
     updateQueueElapsedTimes();
   }
 
@@ -686,7 +754,7 @@
       </div>`;
       row.appendChild(cell);
       weightsBody.appendChild(row);
-      lucide.createIcons();
+      refreshIcons();
       return;
     }
 
@@ -728,7 +796,7 @@
       weightsBody.appendChild(row);
     }
 
-    lucide.createIcons();
+    refreshIcons();
   }
 
   function dashboardQueryParams() {
@@ -856,7 +924,14 @@
   } catch (error) {
     // The websocket or fallback request will populate the table.
   }
-  queueClockTimer = window.setInterval(updateQueueElapsedTimes, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopQueueClock();
+    } else {
+      updateQueueElapsedTimes();
+      syncQueueClock();
+    }
+  });
   connectDashboardSocket();
 })();
 </script>
