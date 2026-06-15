@@ -339,7 +339,7 @@
                     {% set image_url = image.url if image is mapping else image %}
                     {% set image_name = image.filename if image is mapping and image.filename else image_url %}
                     <div class="hosted-image-card">
-                      <img class="hosted-image-preview" src="{{ image_url }}" alt="{{ image_name }}" data-image-url="{{ image_url }}" title="点击放大查看">
+                      <img class="hosted-image-preview" alt="{{ image_name }}" data-image-url="{{ image_url }}" title="点击放大查看">
                       <span>
                         <i data-lucide="image" style="width: 13px; height: 13px;"></i>
                         {{ image.provider if image is mapping and image.provider else "image-host" }}
@@ -1238,14 +1238,27 @@
     }
   }
 
-  // Show or hide a log's detail panel; render its payload lazily on first open
+  function loadHostedImages(logId) {
+    const detailRow = document.querySelector(`.log-detail-row[data-log-id="${logId}"]`);
+    if (!detailRow) return;
+    detailRow.querySelectorAll(".hosted-image-preview").forEach((img) => {
+      if (!img.getAttribute("src") && img.dataset.imageUrl) {
+        img.src = img.dataset.imageUrl;
+      }
+    });
+  }
+
+  // Show or hide a log's detail panel; render its payload and hosted images lazily on first open
   function setLogDetailOpen(logId, open) {
     const detailRow = document.querySelector(`.log-detail-row[data-log-id="${logId}"]`);
     const toggleBtn = document.querySelector(`.log-toggle-btn[data-log-id="${logId}"]`);
     if (!detailRow) return;
     detailRow.hidden = !open;
     if (toggleBtn) toggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) renderPayload(logId);
+    if (open) {
+      renderPayload(logId);
+      loadHostedImages(logId);
+    }
   }
 
   async function copyRawPayload(btn) {
@@ -1529,7 +1542,7 @@
       const provider = (typeof image === "object" && image?.provider) ? image.provider : "image-host";
       return `
                     <div class="hosted-image-card">
-                      <img class="hosted-image-preview" src="${escapeAttr(imageUrl)}" alt="${escapeAttr(imageName)}" data-image-url="${escapeAttr(imageUrl)}" title="点击放大查看">
+                      <img class="hosted-image-preview" alt="${escapeAttr(imageName)}" data-image-url="${escapeAttr(imageUrl)}" title="点击放大查看">
                       <span>
                         <i data-lucide="image" style="width: 13px; height: 13px;"></i>
                         ${escapeHtml(provider)}
