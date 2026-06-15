@@ -400,8 +400,12 @@ def test_admin_logs_page_preserves_filter_controls(tmp_path: Path, monkeypatch):
         assert page.status_code == 200
         assert f'id="logs-user-id-input" name="user_id" type="hidden" value="{user_id}"' in page.text
         assert 'id="logs-user-search-input" type="search" value="render-filter-user"' in page.text
-        assert 'name="created_from" type="datetime-local" step="3600" value="2026-05-27T08:00"' in page.text
-        assert 'name="created_to" type="datetime-local" step="3600" value="2026-05-27T09:00"' in page.text
+        assert 'id="logs-created-from-input" name="created_from" type="hidden" value="2026-05-27T08:00"' in page.text
+        assert 'id="logs-created-to-input" name="created_to" type="hidden" value="2026-05-27T09:00"' in page.text
+        assert 'id="logs-time-range-toggle"' in page.text
+        assert "2026-05-27 08:00 ~ 2026-05-27 09:00" in page.text
+        assert 'id="logs-time-range-modal"' in page.text
+        assert 'data-range-preset="today"' in page.text
         assert '<option value="generate" selected>generate</option>' in page.text
         assert '<option value="success" selected>成功</option>' in page.text
 

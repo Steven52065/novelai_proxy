@@ -21,15 +21,22 @@
       </div>
     </div>
 
-    <label class="logs-filter-field">
-      开始时间
-      <input name="created_from" type="datetime-local" step="3600" value="{{ created_from }}">
-    </label>
-
-    <label class="logs-filter-field">
-      结束时间
-      <input name="created_to" type="datetime-local" step="3600" value="{{ created_to }}">
-    </label>
+    <div class="logs-filter-field logs-time-range-field">
+      <span class="logs-filter-label">创建时间范围</span>
+      <input id="logs-created-from-input" name="created_from" type="hidden" value="{{ created_from }}">
+      <input id="logs-created-to-input" name="created_to" type="hidden" value="{{ created_to }}">
+      <button id="logs-time-range-toggle" class="secondary logs-time-range-toggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="logs-time-range-modal">
+        <i data-lucide="calendar-days" style="width: 16px; height: 16px;"></i>
+        <span id="logs-time-range-label">
+          {% if created_from or created_to %}
+          {{ created_from.replace("T", " ") if created_from else "未设置" }} ~ {{ created_to.replace("T", " ") if created_to else "未设置" }}
+          {% else %}
+          全部时间
+          {% endif %}
+        </span>
+        <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
+      </button>
+    </div>
 
     <label class="logs-filter-field">
       API动作
@@ -91,6 +98,59 @@
     </div>
   </form>
 </section>
+
+<div id="logs-time-range-overlay" class="logs-time-range-overlay" hidden></div>
+<div id="logs-time-range-modal" class="logs-time-range-modal" role="dialog" aria-modal="true" aria-labelledby="logs-time-range-title" hidden>
+  <section class="panel logs-time-range-card">
+    <div class="logs-time-range-head">
+      <h2 id="logs-time-range-title">
+        <i data-lucide="calendar-days" style="width: 19px; height: 19px;"></i>
+        选择时间范围
+      </h2>
+      <button id="logs-time-range-close" class="secondary logs-time-range-close" type="button" aria-label="关闭时间范围选择器">
+        <i data-lucide="x" style="width: 17px; height: 17px;"></i>
+      </button>
+    </div>
+
+    <div class="logs-time-presets" aria-label="快捷时间范围">
+      <button class="secondary logs-time-preset" type="button" data-range-preset="today">今天</button>
+      <button class="secondary logs-time-preset" type="button" data-range-preset="yesterday">昨天</button>
+      <button class="secondary logs-time-preset" type="button" data-range-preset="last-7-days">近7天</button>
+      <button class="secondary logs-time-preset" type="button" data-range-preset="this-month">本月</button>
+    </div>
+
+    <div class="logs-time-range-grid">
+      <label>
+        开始日期
+        <input id="logs-time-from-date" type="date">
+      </label>
+      <label>
+        开始小时
+        <select id="logs-time-from-hour"></select>
+      </label>
+      <label>
+        结束日期
+        <input id="logs-time-to-date" type="date">
+      </label>
+      <label>
+        结束小时
+        <select id="logs-time-to-hour"></select>
+      </label>
+    </div>
+
+    <div class="logs-time-range-actions">
+      <button id="logs-time-range-clear" class="secondary" type="button">
+        <i data-lucide="eraser" style="width: 16px; height: 16px;"></i>
+        清空
+      </button>
+      <button id="logs-time-range-cancel" class="secondary" type="button">取消</button>
+      <button id="logs-time-range-apply" type="button">
+        <i data-lucide="check" style="width: 16px; height: 16px;"></i>
+        应用
+      </button>
+    </div>
+  </section>
+</div>
 
 <section class="panel logs-table-panel">
   <div class="table-wrap">
@@ -338,6 +398,21 @@
   const logsTable = document.querySelector(".logs-table");
   const filterForm = document.getElementById("logs-filter-form");
   const limitInput = document.getElementById("logs-limit-input");
+  const createdFromInput = document.getElementById("logs-created-from-input");
+  const createdToInput = document.getElementById("logs-created-to-input");
+  const timeRangeToggle = document.getElementById("logs-time-range-toggle");
+  const timeRangeLabel = document.getElementById("logs-time-range-label");
+  const timeRangeOverlay = document.getElementById("logs-time-range-overlay");
+  const timeRangeModal = document.getElementById("logs-time-range-modal");
+  const timeRangeClose = document.getElementById("logs-time-range-close");
+  const timeRangeCancel = document.getElementById("logs-time-range-cancel");
+  const timeRangeClear = document.getElementById("logs-time-range-clear");
+  const timeRangeApply = document.getElementById("logs-time-range-apply");
+  const timeFromDate = document.getElementById("logs-time-from-date");
+  const timeFromHour = document.getElementById("logs-time-from-hour");
+  const timeToDate = document.getElementById("logs-time-to-date");
+  const timeToHour = document.getElementById("logs-time-to-hour");
+  const timePresetButtons = Array.from(document.querySelectorAll("[data-range-preset]"));
   const logUserIdInput = document.getElementById("logs-user-id-input");
   const logUserSearchInput = document.getElementById("logs-user-search-input");
   const logUserSuggestions = document.getElementById("logs-user-suggestions");
@@ -360,6 +435,7 @@
   applyStoredLimit();
   applyStoredColumns();
   bindLimitPersistence();
+  bindTimeRangePicker();
   bindUserAutocomplete();
   bindColumnFilter();
   bindLogInteractions();
@@ -393,6 +469,177 @@
         limitInput.value = String(limit);
       });
     }
+  }
+
+  function bindTimeRangePicker() {
+    if (!createdFromInput || !createdToInput || !timeRangeToggle || !timeRangeModal || !timeRangeOverlay) {
+      return;
+    }
+    populateHourSelect(timeFromHour);
+    populateHourSelect(timeToHour);
+    syncTimePickerFromInputs();
+    updateTimeRangeLabel();
+
+    timeRangeToggle.addEventListener("click", () => {
+      openTimeRangePicker();
+    });
+    timeRangeClose?.addEventListener("click", closeTimeRangePicker);
+    timeRangeCancel?.addEventListener("click", closeTimeRangePicker);
+    timeRangeOverlay.addEventListener("click", closeTimeRangePicker);
+    timeRangeClear?.addEventListener("click", () => {
+      clearTimeRangePicker();
+      createdFromInput.value = "";
+      createdToInput.value = "";
+      updateTimeRangeLabel();
+      closeTimeRangePicker();
+    });
+    timeRangeApply?.addEventListener("click", () => {
+      if (syncInputsFromTimePicker()) {
+        closeTimeRangePicker();
+      }
+    });
+    timePresetButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        applyTimePreset(button.dataset.rangePreset || "");
+      });
+    });
+    timeFromDate?.addEventListener("change", () => {
+      if (timeFromDate.value && timeFromHour && !timeFromHour.value) {
+        timeFromHour.value = "00";
+      }
+    });
+    timeToDate?.addEventListener("change", () => {
+      if (timeToDate.value && timeToHour && !timeToHour.value) {
+        timeToHour.value = "00";
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !timeRangeModal.hidden) {
+        closeTimeRangePicker();
+      }
+    });
+  }
+
+  function populateHourSelect(select) {
+    if (!select) return;
+    const options = ['<option value="">未设置</option>'];
+    for (let hour = 0; hour < 24; hour += 1) {
+      const value = String(hour).padStart(2, "0");
+      options.push(`<option value="${value}">${value}:00</option>`);
+    }
+    select.innerHTML = options.join("");
+  }
+
+  function openTimeRangePicker() {
+    syncTimePickerFromInputs();
+    timeRangeOverlay.hidden = false;
+    timeRangeModal.hidden = false;
+    timeRangeToggle.setAttribute("aria-expanded", "true");
+    window.setTimeout(() => {
+      (timeFromDate || timeRangeApply || timeRangeModal).focus?.();
+    }, 0);
+  }
+
+  function closeTimeRangePicker() {
+    timeRangeOverlay.hidden = true;
+    timeRangeModal.hidden = true;
+    timeRangeToggle?.setAttribute("aria-expanded", "false");
+  }
+
+  function syncTimePickerFromInputs() {
+    const from = parseDatetimeLocal(createdFromInput?.value || "");
+    const to = parseDatetimeLocal(createdToInput?.value || "");
+    if (timeFromDate) timeFromDate.value = from?.date || "";
+    if (timeFromHour) timeFromHour.value = from?.hour || "";
+    if (timeToDate) timeToDate.value = to?.date || "";
+    if (timeToHour) timeToHour.value = to?.hour || "";
+  }
+
+  function syncInputsFromTimePicker() {
+    const fromValue = composeDatetimeLocal(timeFromDate?.value || "", timeFromHour?.value || "");
+    const toValue = composeDatetimeLocal(timeToDate?.value || "", timeToHour?.value || "");
+    if (fromValue && toValue && fromValue > toValue) {
+      showToast("开始时间不能晚于结束时间。");
+      return false;
+    }
+    createdFromInput.value = fromValue;
+    createdToInput.value = toValue;
+    updateTimeRangeLabel();
+    return true;
+  }
+
+  function clearTimeRangePicker() {
+    if (timeFromDate) timeFromDate.value = "";
+    if (timeFromHour) timeFromHour.value = "";
+    if (timeToDate) timeToDate.value = "";
+    if (timeToHour) timeToHour.value = "";
+  }
+
+  function applyTimePreset(preset) {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let fromDate = null;
+    let toDate = null;
+    if (preset === "today") {
+      fromDate = todayStart;
+      toDate = addDays(todayStart, 1);
+    } else if (preset === "yesterday") {
+      fromDate = addDays(todayStart, -1);
+      toDate = todayStart;
+    } else if (preset === "last-7-days") {
+      fromDate = addDays(todayStart, -6);
+      toDate = addDays(todayStart, 1);
+    } else if (preset === "this-month") {
+      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      toDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    }
+    if (!fromDate || !toDate) return;
+    if (timeFromDate) timeFromDate.value = formatLocalDate(fromDate);
+    if (timeFromHour) timeFromHour.value = "00";
+    if (timeToDate) timeToDate.value = formatLocalDate(toDate);
+    if (timeToHour) timeToHour.value = "00";
+  }
+
+  function parseDatetimeLocal(value) {
+    const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2})(?::\d{2})?/);
+    return match ? {date: match[1], hour: match[2]} : null;
+  }
+
+  function composeDatetimeLocal(dateValue, hourValue) {
+    if (!dateValue) return "";
+    const hour = /^\d{2}$/.test(hourValue) ? hourValue : "00";
+    return `${dateValue}T${hour}:00`;
+  }
+
+  function updateTimeRangeLabel() {
+    if (!timeRangeLabel) return;
+    const fromLabel = formatDatetimeLocalLabel(createdFromInput?.value || "");
+    const toLabel = formatDatetimeLocalLabel(createdToInput?.value || "");
+    if (fromLabel && toLabel) {
+      timeRangeLabel.textContent = `${fromLabel} ~ ${toLabel}`;
+    } else if (fromLabel) {
+      timeRangeLabel.textContent = `${fromLabel} 起`;
+    } else if (toLabel) {
+      timeRangeLabel.textContent = `截至 ${toLabel}`;
+    } else {
+      timeRangeLabel.textContent = "全部时间";
+    }
+  }
+
+  function formatDatetimeLocalLabel(value) {
+    const parsed = parseDatetimeLocal(value);
+    return parsed ? `${parsed.date} ${parsed.hour}:00` : "";
+  }
+
+  function formatLocalDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function addDays(date, days) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
   }
 
   function bindUserAutocomplete() {

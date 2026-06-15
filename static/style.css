@@ -971,7 +971,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 
 .logs-filter-form {
   display: grid;
-  grid-template-columns: minmax(220px, 1.3fr) repeat(4, minmax(150px, 1fr)) 140px max-content max-content;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1.2fr) repeat(2, minmax(150px, 1fr)) 140px max-content max-content;
   gap: 14px;
   align-items: end;
 }
@@ -1071,6 +1071,123 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   color: var(--text-muted);
   font-size: 13px;
   font-weight: 600;
+}
+
+.logs-time-range-field {
+  min-width: 0;
+}
+
+.logs-time-range-toggle {
+  width: 100%;
+  min-height: 44px;
+  justify-content: flex-start;
+  padding: 0 14px;
+  box-shadow: none;
+}
+
+.logs-time-range-toggle span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logs-time-range-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(3, 4, 9, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.logs-time-range-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.logs-time-range-overlay[hidden],
+.logs-time-range-modal[hidden] {
+  display: none;
+}
+
+.logs-time-range-card {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  margin: 0;
+  overflow-y: auto;
+  padding: 22px;
+}
+
+.logs-time-range-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.logs-time-range-head h2 {
+  font-size: 18px;
+}
+
+.logs-time-range-close {
+  flex: none;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: var(--border-radius-sm);
+}
+
+.logs-time-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.logs-time-preset {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.logs-time-range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: var(--border-radius-md);
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.logs-time-range-grid input,
+.logs-time-range-grid select {
+  min-height: 42px;
+}
+
+.logs-time-range-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.logs-time-range-actions button {
+  min-height: 40px;
+  padding: 8px 16px;
 }
 
 .logs-table-panel {
@@ -1971,6 +2088,29 @@ pre {
   .logs-filter-actions .button-like,
   .logs-column-filter button {
     width: 100%;
+  }
+
+  .logs-time-range-modal {
+    align-items: flex-end;
+    padding: 16px;
+  }
+
+  .logs-time-presets,
+  .logs-time-range-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .logs-time-range-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .logs-time-range-actions button {
+    width: 100%;
+  }
+
+  .logs-time-range-actions button:last-child {
+    grid-column: 1 / -1;
   }
   
   .drawer {
