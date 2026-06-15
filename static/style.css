@@ -310,6 +310,29 @@ h2 {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
+.dashboard-page {
+  background-attachment: scroll;
+}
+
+.dashboard-page .topbar,
+.dashboard-page .metrics div,
+.dashboard-page .panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.dashboard-page .metrics div,
+.dashboard-page .panel {
+  background: rgba(16, 20, 38, 0.92);
+}
+
+.dashboard-page .status-running::before {
+  animation: none;
+  opacity: 1;
+  transform: none;
+  box-shadow: none;
+}
+
 .notice {
   background: var(--info-bg);
   border: 1px solid var(--info-border);

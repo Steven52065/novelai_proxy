@@ -24,6 +24,7 @@ from .common import (
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin")
 DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
+DASHBOARD_QUEUE_DISPLAY_LIMIT = 80
 
 
 @api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
@@ -178,7 +179,11 @@ def dashboard_snapshot_payload(
         "type": "dashboard.snapshot",
         "server_time": datetime.now(DISPLAY_TIMEZONE).isoformat(),
         "stats": _dashboard_stats(request),
-        "queue": queue_status_payload(request, upstream_id=queue_upstream_id),
+        "queue": queue_status_payload(
+            request,
+            upstream_id=queue_upstream_id,
+            queued_limit=DASHBOARD_QUEUE_DISPLAY_LIMIT,
+        ),
         "upstream_weights": _upstream_weights_payload(request),
         "request_trends": _request_trend_stats(db, upstream_id=trend_upstream_id) if include_trends else None,
     }
@@ -208,11 +213,13 @@ def _upstream_weights_payload(request: Request | WebSocket) -> dict:
     return {"strategy": "unknown", "upstreams": []}
 
 
-def queue_status_payload(request: Request | WebSocket, upstream_id: str | None = None):
+def queue_status_payload(request: Request | WebSocket, upstream_id: str | None = None, queued_limit: int | None = None):
     db: Database = request.app.state.db
     snapshot = request.app.state.proxy_queue.snapshot()
     if upstream_id:
         snapshot = _filter_queue_snapshot(snapshot, upstream_id)
+    if queued_limit is not None:
+        snapshot = _limit_queue_snapshot(snapshot, queued_limit)
     request_ids = [
         item["request_id"]
         for item in (snapshot.get("running_items") or ([snapshot["running"]] if snapshot["running"] else [])) + snapshot["queued"]
@@ -224,6 +231,30 @@ def queue_status_payload(request: Request | WebSocket, upstream_id: str | None =
         snapshot["running_items"] = [_merge_queue_log_details(item, log_details) for item in snapshot["running_items"]]
     snapshot["queued"] = [_merge_queue_log_details(item, log_details) for item in snapshot["queued"]]
     return snapshot
+
+
+def _limit_queue_snapshot(snapshot: dict, queued_limit: int) -> dict:
+    limit = max(0, int(queued_limit))
+    limited = dict(snapshot)
+    queued = list(snapshot.get("queued", []))
+    total = len(queued)
+    limited["queued"] = queued[:limit]
+    limited["queued_total"] = total
+    limited["queued_hidden"] = max(0, total - len(limited["queued"]))
+    limited["queued_display_limit"] = limit
+    if "upstreams" in limited:
+        limited["upstreams"] = [_limit_nested_upstream_queue(item) for item in limited["upstreams"]]
+    return limited
+
+
+def _limit_nested_upstream_queue(upstream: dict) -> dict:
+    limited = dict(upstream)
+    queued = list(upstream.get("queued", []))
+    limited["queued"] = []
+    limited["queued_total"] = len(queued)
+    limited["queued_hidden"] = len(queued)
+    limited["queued_display_limit"] = 0
+    return limited
 
 
 def _stable_queue_state(queue: dict) -> dict:

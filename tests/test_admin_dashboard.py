@@ -67,3 +67,68 @@ def test_admin_dashboard_snapshot_api_combines_ui_data(tmp_path: Path, monkeypat
         assert "queue" in body
         assert "upstream_weights" in body
         assert body["request_trends"] is None
+
+
+def test_admin_dashboard_snapshot_limits_queue_rows(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.admin.dashboard import DASHBOARD_QUEUE_DISPLAY_LIMIT
+    from app.main import app
+
+    total_queued = DASHBOARD_QUEUE_DISPLAY_LIMIT + 5
+
+    class LargeFakeQueue:
+        def qsize(self):
+            return total_queued
+
+        def get_weights(self):
+            return {"strategy": "round_robin", "upstreams": []}
+
+        def snapshot(self):
+            queued = [
+                {
+                    "request_id": f"queued-{index}",
+                    "user_id": 1,
+                    "action": "generate",
+                    "tier": "normal",
+                    "estimated_anlas_cost": 0,
+                    "priority": 10,
+                    "position": index,
+                    "status": "queued",
+                    "queued_seconds": index,
+                }
+                for index in range(1, total_queued + 1)
+            ]
+            return {
+                "queue_size": total_queued,
+                "running": None,
+                "running_items": [],
+                "queued": queued,
+                "dispatch_queue_size": 0,
+                "upstreams": [
+                    {
+                        "id": "default",
+                        "queue_size": total_queued,
+                        "running": None,
+                        "queued": queued,
+                    }
+                ],
+            }
+
+    with TestClient(app) as client:
+        app.state.proxy_queue = LargeFakeQueue()
+
+        dashboard_resp = client.get("/admin/api/dashboard", auth=("admin", "admin123"))
+        assert dashboard_resp.status_code == 200
+        dashboard_queue = dashboard_resp.json()["queue"]
+        assert len(dashboard_queue["queued"]) == DASHBOARD_QUEUE_DISPLAY_LIMIT
+        assert dashboard_queue["queued_total"] == total_queued
+        assert dashboard_queue["queued_hidden"] == 5
+        assert dashboard_queue["queued_display_limit"] == DASHBOARD_QUEUE_DISPLAY_LIMIT
+        assert dashboard_queue["upstreams"][0]["queued"] == []
+        assert dashboard_queue["upstreams"][0]["queued_hidden"] == total_queued
+
+        full_resp = client.get("/admin/api/queue", auth=("admin", "admin123"))
+        assert full_resp.status_code == 200
+        full_queue = full_resp.json()
+        assert len(full_queue["queued"]) == total_queued
+        assert "queued_hidden" not in full_queue

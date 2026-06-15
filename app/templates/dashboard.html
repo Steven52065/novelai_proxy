@@ -516,12 +516,7 @@
   let queueClockTimer = null;
   let queueElapsedObserver = null;
   const visibleQueueElapsedNodes = new Set();
-
-  function refreshIcons() {
-    if (window.lucide && typeof window.lucide.createIcons === "function") {
-      window.lucide.createIcons();
-    }
-  }
+  const QUEUE_RENDER_LIMIT = 80;
 
   function formatSeconds(seconds) {
     const value = Number(seconds || 0);
@@ -633,13 +628,19 @@
   }
 
   function renderQueue(data) {
-    const rows = [];
+    const runningRows = [];
     if (data.running_items && data.running_items.length) {
-      rows.push(...data.running_items);
+      runningRows.push(...data.running_items);
     } else if (data.running) {
-      rows.push(data.running);
+      runningRows.push(data.running);
     }
-    rows.push(...(data.queued || []));
+    const queuedRows = data.queued || [];
+    const renderedQueuedRows = queuedRows.slice(0, QUEUE_RENDER_LIMIT);
+    const rows = [...runningRows, ...renderedQueuedRows];
+    const queuedTotal = Number(data.queued_total ?? data.queue_size ?? queuedRows.length);
+    const serverHidden = Number(data.queued_hidden ?? Math.max(0, queuedTotal - queuedRows.length));
+    const clientHidden = Math.max(0, queuedRows.length - renderedQueuedRows.length);
+    const hiddenQueuedCount = serverHidden + clientHidden;
     
     queueSize.textContent = data.queue_size || 0;
     
@@ -659,14 +660,12 @@
       const row = document.createElement("tr");
       row.className = "empty-row";
       appendCell(row, `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 24px 0; gap:8px;">
-        <i data-lucide="inbox" style="width:32px; height:32px; stroke:#64748b;"></i>
         <span class="muted">当前暂无活跃的生成请求</span>
       </div>`, "muted");
       row.firstChild.colSpan = 9;
       row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
       observeQueueElapsedNodes();
-      refreshIcons();
       return;
     }
     
@@ -716,10 +715,19 @@
       
       queueBody.appendChild(row);
     }
+
+    if (hiddenQueuedCount > 0) {
+      const row = document.createElement("tr");
+      row.className = "empty-row";
+      appendCell(row, `<div style="padding: 12px 0; font-weight:600;">
+        另有 ${hiddenQueuedCount} 个后续排队请求未展开
+      </div>`, "muted");
+      row.firstChild.colSpan = 9;
+      row.firstChild.style.textAlign = "center";
+      queueBody.appendChild(row);
+    }
     
-    // Rerender icons dynamically for dynamically generated inline icons
     observeQueueElapsedNodes();
-    refreshIcons();
     updateQueueElapsedTimes();
   }
 
@@ -749,12 +757,10 @@
       cell.style.textAlign = "center";
       cell.className = "muted";
       cell.innerHTML = `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 24px 0; gap:8px;">
-        <i data-lucide="inbox" style="width:32px; height:32px; stroke:#64748b;"></i>
         <span>暂无上游渠道数据</span>
       </div>`;
       row.appendChild(cell);
       weightsBody.appendChild(row);
-      refreshIcons();
       return;
     }
 
@@ -795,8 +801,6 @@
 
       weightsBody.appendChild(row);
     }
-
-    refreshIcons();
   }
 
   function dashboardQueryParams() {
@@ -832,7 +836,7 @@
     if (wsStatus) wsStatus.textContent = text;
     if (!wsStatusDot) return;
     const styles = {
-      connected: ["#10b981", "rgba(16, 185, 129, 0.6)", "pulse-glow 1.5s infinite alternate"],
+      connected: ["#10b981", "rgba(16, 185, 129, 0.6)", ""],
       connecting: ["#f59e0b", "rgba(245, 158, 11, 0.45)", ""],
       fallback: ["#f59e0b", "rgba(245, 158, 11, 0.45)", ""],
       error: ["#ef4444", "rgba(239, 68, 68, 0.45)", ""],
