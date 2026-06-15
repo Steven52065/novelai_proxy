@@ -1186,19 +1186,154 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   box-shadow: none;
 }
 
-.logs-time-range-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.logs-calendar-picker {
   padding: 14px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: var(--border-radius-md);
   background: rgba(15, 23, 42, 0.42);
 }
 
-.logs-time-range-grid input,
-.logs-time-range-grid select {
-  min-height: 42px;
+.logs-calendar-toolbar {
+  display: grid;
+  grid-template-columns: 36px 36px 1fr 36px 36px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.logs-calendar-nav {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: var(--border-radius-sm);
+  color: #cbd5e1;
+}
+
+.logs-calendar-title {
+  min-width: 0;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.logs-calendar-weekdays,
+.logs-calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.logs-calendar-weekdays {
+  margin-bottom: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.logs-calendar-weekdays span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+}
+
+.logs-calendar-day {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+button.logs-calendar-day:hover {
+  transform: none;
+  filter: none;
+  border-color: rgba(165, 180, 252, 0.42);
+  background: rgba(99, 102, 241, 0.14);
+  box-shadow: none;
+}
+
+.logs-calendar-day.is-empty {
+  pointer-events: none;
+}
+
+.logs-calendar-day.is-today {
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #d1fae5;
+}
+
+.logs-calendar-day.is-in-range {
+  border-radius: var(--border-radius-sm);
+  background: rgba(99, 102, 241, 0.16);
+  color: #fff;
+}
+
+.logs-calendar-day.is-selected {
+  border-color: rgba(167, 139, 250, 0.82);
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+}
+
+.logs-time-hour-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.logs-time-boundary {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.logs-time-boundary-date,
+.logs-time-boundary-hour {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.logs-time-boundary-date {
+  min-height: 32px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.logs-time-boundary-date span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logs-time-boundary-date svg,
+.logs-time-boundary-hour svg {
+  flex: none;
+  stroke: #94a3b8;
+}
+
+.logs-time-boundary-hour select {
+  min-height: 40px;
 }
 
 .logs-time-range-actions {
@@ -2119,7 +2254,7 @@ pre {
   }
 
   .logs-time-presets,
-  .logs-time-range-grid {
+  .logs-time-hour-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

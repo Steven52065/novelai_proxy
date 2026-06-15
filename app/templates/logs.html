@@ -119,23 +119,56 @@
       <button class="secondary logs-time-preset" type="button" data-range-preset="this-month">本月</button>
     </div>
 
-    <div class="logs-time-range-grid">
-      <label>
-        开始日期
-        <input id="logs-time-from-date" type="date">
-      </label>
-      <label>
-        开始小时
-        <select id="logs-time-from-hour"></select>
-      </label>
-      <label>
-        结束日期
-        <input id="logs-time-to-date" type="date">
-      </label>
-      <label>
-        结束小时
-        <select id="logs-time-to-hour"></select>
-      </label>
+    <div class="logs-calendar-picker">
+      <div class="logs-calendar-toolbar">
+        <button id="logs-calendar-prev-year" class="secondary logs-calendar-nav" type="button" aria-label="上一年">
+          <i data-lucide="chevrons-left" style="width: 17px; height: 17px;"></i>
+        </button>
+        <button id="logs-calendar-prev-month" class="secondary logs-calendar-nav" type="button" aria-label="上个月">
+          <i data-lucide="chevron-left" style="width: 17px; height: 17px;"></i>
+        </button>
+        <div id="logs-calendar-title" class="logs-calendar-title" aria-live="polite"></div>
+        <button id="logs-calendar-next-month" class="secondary logs-calendar-nav" type="button" aria-label="下个月">
+          <i data-lucide="chevron-right" style="width: 17px; height: 17px;"></i>
+        </button>
+        <button id="logs-calendar-next-year" class="secondary logs-calendar-nav" type="button" aria-label="下一年">
+          <i data-lucide="chevrons-right" style="width: 17px; height: 17px;"></i>
+        </button>
+      </div>
+
+      <div class="logs-calendar-weekdays" aria-hidden="true">
+        <span>日</span>
+        <span>一</span>
+        <span>二</span>
+        <span>三</span>
+        <span>四</span>
+        <span>五</span>
+        <span>六</span>
+      </div>
+      <div id="logs-calendar-days" class="logs-calendar-days" role="grid" aria-label="选择创建日期范围"></div>
+
+      <div class="logs-time-hour-row">
+        <div class="logs-time-boundary">
+          <div class="logs-time-boundary-date">
+            <i data-lucide="calendar-days" style="width: 15px; height: 15px;"></i>
+            <span id="logs-time-from-date-label">未选择</span>
+          </div>
+          <div class="logs-time-boundary-hour">
+            <i data-lucide="clock" style="width: 15px; height: 15px;"></i>
+            <select id="logs-time-from-hour" aria-label="起始小时"></select>
+          </div>
+        </div>
+        <div class="logs-time-boundary">
+          <div class="logs-time-boundary-date">
+            <i data-lucide="calendar-days" style="width: 15px; height: 15px;"></i>
+            <span id="logs-time-to-date-label">未选择</span>
+          </div>
+          <div class="logs-time-boundary-hour">
+            <i data-lucide="clock" style="width: 15px; height: 15px;"></i>
+            <select id="logs-time-to-hour" aria-label="截止小时"></select>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="logs-time-range-actions">
@@ -408,11 +441,17 @@
   const timeRangeCancel = document.getElementById("logs-time-range-cancel");
   const timeRangeClear = document.getElementById("logs-time-range-clear");
   const timeRangeApply = document.getElementById("logs-time-range-apply");
-  const timeFromDate = document.getElementById("logs-time-from-date");
   const timeFromHour = document.getElementById("logs-time-from-hour");
-  const timeToDate = document.getElementById("logs-time-to-date");
   const timeToHour = document.getElementById("logs-time-to-hour");
   const timePresetButtons = Array.from(document.querySelectorAll("[data-range-preset]"));
+  const calendarTitle = document.getElementById("logs-calendar-title");
+  const calendarDays = document.getElementById("logs-calendar-days");
+  const calendarPrevYear = document.getElementById("logs-calendar-prev-year");
+  const calendarPrevMonth = document.getElementById("logs-calendar-prev-month");
+  const calendarNextMonth = document.getElementById("logs-calendar-next-month");
+  const calendarNextYear = document.getElementById("logs-calendar-next-year");
+  const timeFromDateLabel = document.getElementById("logs-time-from-date-label");
+  const timeToDateLabel = document.getElementById("logs-time-to-date-label");
   const logUserIdInput = document.getElementById("logs-user-id-input");
   const logUserSearchInput = document.getElementById("logs-user-search-input");
   const logUserSuggestions = document.getElementById("logs-user-suggestions");
@@ -431,6 +470,9 @@
   let selectedLogUserName = logUserPicker?.dataset.initialUserName || "";
   let logUserSearchTimer = null;
   let logUserSearchToken = 0;
+  let calendarViewDate = startOfMonth(new Date());
+  let selectedFromDate = "";
+  let selectedToDate = "";
 
   applyStoredLimit();
   applyStoredColumns();
@@ -472,7 +514,7 @@
   }
 
   function bindTimeRangePicker() {
-    if (!createdFromInput || !createdToInput || !timeRangeToggle || !timeRangeModal || !timeRangeOverlay) {
+    if (!createdFromInput || !createdToInput || !timeRangeToggle || !timeRangeModal || !timeRangeOverlay || !calendarDays) {
       return;
     }
     populateHourSelect(timeFromHour);
@@ -503,15 +545,14 @@
         applyTimePreset(button.dataset.rangePreset || "");
       });
     });
-    timeFromDate?.addEventListener("change", () => {
-      if (timeFromDate.value && timeFromHour && !timeFromHour.value) {
-        timeFromHour.value = "00";
-      }
-    });
-    timeToDate?.addEventListener("change", () => {
-      if (timeToDate.value && timeToHour && !timeToHour.value) {
-        timeToHour.value = "00";
-      }
+    calendarPrevYear?.addEventListener("click", () => shiftCalendarView(-1, 0));
+    calendarPrevMonth?.addEventListener("click", () => shiftCalendarView(0, -1));
+    calendarNextMonth?.addEventListener("click", () => shiftCalendarView(0, 1));
+    calendarNextYear?.addEventListener("click", () => shiftCalendarView(1, 0));
+    calendarDays.addEventListener("click", (event) => {
+      const button = event.target.closest?.("[data-calendar-day]");
+      if (!button) return;
+      selectCalendarDate(button.dataset.calendarDay || "");
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !timeRangeModal.hidden) {
@@ -536,7 +577,10 @@
     timeRangeModal.hidden = false;
     timeRangeToggle.setAttribute("aria-expanded", "true");
     window.setTimeout(() => {
-      (timeFromDate || timeRangeApply || timeRangeModal).focus?.();
+      const selectedDay = calendarDays?.querySelector("[aria-pressed='true']");
+      const today = calendarDays?.querySelector(".is-today");
+      const firstDay = calendarDays?.querySelector("[data-calendar-day]");
+      (selectedDay || today || firstDay || timeRangeApply || timeRangeModal).focus?.();
     }, 0);
   }
 
@@ -549,15 +593,17 @@
   function syncTimePickerFromInputs() {
     const from = parseDatetimeLocal(createdFromInput?.value || "");
     const to = parseDatetimeLocal(createdToInput?.value || "");
-    if (timeFromDate) timeFromDate.value = from?.date || "";
+    selectedFromDate = from?.date || "";
     if (timeFromHour) timeFromHour.value = from?.hour || "";
-    if (timeToDate) timeToDate.value = to?.date || "";
+    selectedToDate = to?.date || "";
     if (timeToHour) timeToHour.value = to?.hour || "";
+    calendarViewDate = startOfMonth(parseLocalDate(selectedFromDate) || parseLocalDate(selectedToDate) || new Date());
+    renderCalendar();
   }
 
   function syncInputsFromTimePicker() {
-    const fromValue = composeDatetimeLocal(timeFromDate?.value || "", timeFromHour?.value || "");
-    const toValue = composeDatetimeLocal(timeToDate?.value || "", timeToHour?.value || "");
+    const fromValue = composeDatetimeLocal(selectedFromDate, timeFromHour?.value || "");
+    const toValue = composeDatetimeLocal(selectedToDate, timeToHour?.value || "");
     if (fromValue && toValue && fromValue > toValue) {
       showToast("开始时间不能晚于结束时间。");
       return false;
@@ -569,10 +615,11 @@
   }
 
   function clearTimeRangePicker() {
-    if (timeFromDate) timeFromDate.value = "";
+    selectedFromDate = "";
     if (timeFromHour) timeFromHour.value = "";
-    if (timeToDate) timeToDate.value = "";
+    selectedToDate = "";
     if (timeToHour) timeToHour.value = "";
+    renderCalendar();
   }
 
   function applyTimePreset(preset) {
@@ -594,10 +641,12 @@
       toDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     }
     if (!fromDate || !toDate) return;
-    if (timeFromDate) timeFromDate.value = formatLocalDate(fromDate);
+    selectedFromDate = formatLocalDate(fromDate);
     if (timeFromHour) timeFromHour.value = "00";
-    if (timeToDate) timeToDate.value = formatLocalDate(toDate);
+    selectedToDate = formatLocalDate(toDate);
     if (timeToHour) timeToHour.value = "00";
+    calendarViewDate = startOfMonth(fromDate);
+    renderCalendar();
   }
 
   function parseDatetimeLocal(value) {
@@ -636,6 +685,89 @@
     const month = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
+  }
+
+  function parseLocalDate(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  }
+
+  function startOfMonth(date) {
+    return new Date(date.getFullYear(), date.getMonth(), 1);
+  }
+
+  function shiftCalendarView(years, months) {
+    calendarViewDate = new Date(
+      calendarViewDate.getFullYear() + years,
+      calendarViewDate.getMonth() + months,
+      1,
+    );
+    renderCalendar();
+  }
+
+  function selectCalendarDate(dateValue) {
+    if (!isValidDateString(dateValue)) return;
+    if (!selectedFromDate || selectedToDate || dateValue < selectedFromDate) {
+      selectedFromDate = dateValue;
+      selectedToDate = "";
+      if (timeFromHour && !timeFromHour.value) timeFromHour.value = "00";
+      if (timeToHour) timeToHour.value = "";
+    } else {
+      selectedToDate = dateValue;
+      if (timeToHour && !timeToHour.value) timeToHour.value = "00";
+    }
+    renderCalendar();
+  }
+
+  function renderCalendar() {
+    if (!calendarDays || !calendarTitle) return;
+    const year = calendarViewDate.getFullYear();
+    const month = calendarViewDate.getMonth();
+    calendarTitle.textContent = `${year}年 ${month + 1}月`;
+
+    const firstWeekday = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const todayValue = formatLocalDate(new Date());
+    const rangeStart = selectedFromDate && selectedToDate ? selectedFromDate : "";
+    const rangeEnd = selectedFromDate && selectedToDate ? selectedToDate : "";
+    const cells = [];
+
+    for (let index = 0; index < 42; index += 1) {
+      const dayNumber = index - firstWeekday + 1;
+      if (dayNumber < 1 || dayNumber > daysInMonth) {
+        cells.push('<span class="logs-calendar-day is-empty" aria-hidden="true"></span>');
+        continue;
+      }
+
+      const dateValue = formatLocalDate(new Date(year, month, dayNumber));
+      const classes = ["logs-calendar-day"];
+      if (dateValue === todayValue) classes.push("is-today");
+      if (dateValue === selectedFromDate) classes.push("is-selected", "is-range-start");
+      if (dateValue === selectedToDate) classes.push("is-selected", "is-range-end");
+      if (rangeStart && rangeEnd && dateValue > rangeStart && dateValue < rangeEnd) {
+        classes.push("is-in-range");
+      }
+      cells.push(`
+        <button class="${classes.join(" ")}" type="button" role="gridcell" data-calendar-day="${dateValue}" aria-pressed="${dateValue === selectedFromDate || dateValue === selectedToDate ? "true" : "false"}">
+          ${dayNumber}
+        </button>
+      `);
+    }
+
+    calendarDays.innerHTML = cells.join("");
+    updateSelectedDateLabels();
+  }
+
+  function updateSelectedDateLabels() {
+    if (timeFromDateLabel) timeFromDateLabel.textContent = selectedFromDate || "未选择";
+    if (timeToDateLabel) timeToDateLabel.textContent = selectedToDate || "未选择";
+    if (timeFromHour) timeFromHour.disabled = !selectedFromDate;
+    if (timeToHour) timeToHour.disabled = !selectedToDate;
+  }
+
+  function isValidDateString(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
   }
 
   function addDays(date, days) {

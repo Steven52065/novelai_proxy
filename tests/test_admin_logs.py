@@ -405,6 +405,16 @@ def test_admin_logs_page_preserves_filter_controls(tmp_path: Path, monkeypatch):
         assert 'id="logs-time-range-toggle"' in page.text
         assert "2026-05-27 08:00 ~ 2026-05-27 09:00" in page.text
         assert 'id="logs-time-range-modal"' in page.text
+        assert 'id="logs-calendar-days"' in page.text
+        assert 'class="logs-calendar-weekdays"' in page.text
+        assert 'id="logs-time-from-hour" aria-label="起始小时"' in page.text
+        assert 'id="logs-time-to-hour" aria-label="截止小时"' in page.text
+        assert 'id="logs-time-from-date" type="date"' not in page.text
+        assert 'id="logs-time-to-date" type="date"' not in page.text
+        assert "开始日期" not in page.text
+        assert "结束日期" not in page.text
+        assert "开始小时" not in page.text
+        assert "结束小时" not in page.text
         assert 'data-range-preset="today"' in page.text
         assert '<option value="generate" selected>generate</option>' in page.text
         assert '<option value="success" selected>成功</option>' in page.text
