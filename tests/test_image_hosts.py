@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import asyncio
+import zipfile
+from io import BytesIO
+
+from PIL import Image
+
+from app.config import CatboxConfig, ImageHostingConfig
+from app.image_hosts import ImageHostingService, ImageUploadFile
+
+
+class RecordingImageHostClient:
+    provider = "catbox"
+
+    def __init__(self):
+        self.uploaded_images: list[ImageUploadFile] = []
+
+    async def upload_image(self, image: ImageUploadFile) -> str:
+        self.uploaded_images.append(image)
+        return f"https://files.catbox.moe/{image.filename}"
+
+
+def test_image_host_upload_converts_image_locally_when_enabled():
+    zip_payload = _image_zip("image.png", _png_bytes())
+    client = RecordingImageHostClient()
+    service = ImageHostingService(
+        ImageHostingConfig(
+            enabled=True,
+            local_format_conversion=True,
+            local_conversion_format="webp",
+            catbox=CatboxConfig(userhash="test-userhash"),
+        )
+    )
+    service.client = client
+
+    uploads = asyncio.run(service.upload_zip_images(zip_payload=zip_payload, request_id="convert-request"))
+
+    assert len(client.uploaded_images) == 1
+    uploaded_image = client.uploaded_images[0]
+    assert uploaded_image.filename == "image.webp"
+    assert uploaded_image.content_type == "image/webp"
+    assert Image.open(BytesIO(uploaded_image.content)).format == "WEBP"
+    assert uploads == [
+        {
+            "provider": "catbox",
+            "url": "https://files.catbox.moe/image.webp",
+            "filename": "image.webp",
+            "bytes": len(uploaded_image.content),
+            "index": 1,
+        }
+    ]
+
+    with zipfile.ZipFile(BytesIO(zip_payload)) as zip_file:
+        assert zip_file.namelist() == ["image.png"]
+
+
+def test_image_host_upload_keeps_original_image_format_by_default():
+    image_bytes = _png_bytes()
+    client = RecordingImageHostClient()
+    service = ImageHostingService(
+        ImageHostingConfig(
+            enabled=True,
+            catbox=CatboxConfig(userhash="test-userhash"),
+        )
+    )
+    service.client = client
+
+    asyncio.run(service.upload_zip_images(zip_payload=_image_zip("image.png", image_bytes), request_id="original-request"))
+
+    assert client.uploaded_images == [
+        ImageUploadFile(
+            filename="image.png",
+            content=image_bytes,
+            content_type="image/png",
+        )
+    ]
+
+
+def _png_bytes() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGBA", (2, 2), (255, 0, 0, 128)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _image_zip(filename: str, content: bytes) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as zip_file:
+        zip_file.writestr(filename, content)
+    return buffer.getvalue()

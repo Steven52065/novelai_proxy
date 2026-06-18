@@ -115,6 +115,8 @@ class ImageHostingConfig(BaseModel):
     provider: Literal["catbox"] = "catbox"
     timeout_seconds: float = Field(default=30, gt=0)
     max_pending_uploads: int = Field(default=50, ge=0)
+    local_format_conversion: bool = False
+    local_conversion_format: Literal["png", "jpeg", "webp"] = "webp"
     catbox: CatboxConfig = Field(default_factory=CatboxConfig)
 
 

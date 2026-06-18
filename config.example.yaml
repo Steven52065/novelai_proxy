@@ -159,6 +159,11 @@ image_hosting:
   timeout_seconds: 30
   # 后台待上传任务上限；达到上限时跳过本次图床上传，只保留本地输出和日志。0 表示不限制。
   max_pending_uploads: 50
+  # 是否在上传到图床前，先在本地把图片转换为 local_conversion_format。
+  # 只影响图床上传内容，不改变返回给用户的 NovelAI 原始 zip。
+  local_format_conversion: false
+  # 本地转换目标格式，可选 png、jpeg、webp。
+  local_conversion_format: webp
   catbox:
     # Catbox 官方 API 入口。
     api_url: https://catbox.moe/user/api.php

@@ -26,6 +26,8 @@ def test_self_service_config_defaults_to_disabled():
     assert config.self_service.discord.client_id == ""
     assert config.self_service.discord.default_group_id is None
     assert config.free_small_daily_limit.reset_hour_utc8 == 0
+    assert config.image_hosting.local_format_conversion is False
+    assert config.image_hosting.local_conversion_format == "webp"
 
 
 def test_free_small_daily_limit_reset_hour_validation():

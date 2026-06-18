@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 import httpx
+from PIL import Image
 
 from .config import ImageHostingConfig
 from .logging_utils import logger
@@ -18,6 +19,12 @@ IMAGE_CONTENT_TYPES = {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
     ".gif": "image/gif",
+}
+
+CONVERSION_FORMATS = {
+    "png": {"suffix": ".png", "content_type": "image/png", "pillow_format": "PNG"},
+    "jpeg": {"suffix": ".jpg", "content_type": "image/jpeg", "pillow_format": "JPEG"},
+    "webp": {"suffix": ".webp", "content_type": "image/webp", "pillow_format": "WEBP"},
 }
 
 
@@ -74,7 +81,17 @@ class ImageHostingService:
         if self.client is None:
             return []
         uploads = []
-        for index, image in enumerate(_extract_images(zip_payload), start=1):
+        for index, source_image in enumerate(_extract_images(zip_payload), start=1):
+            try:
+                image = self._prepare_upload_image(source_image)
+            except Exception:
+                logger.exception(
+                    "image local format conversion failed request_id=%s filename=%s target_format=%s",
+                    request_id,
+                    source_image.filename,
+                    self.config.local_conversion_format,
+                )
+                continue
             try:
                 url = await self.client.upload_image(image)
             except Exception:
@@ -96,6 +113,11 @@ class ImageHostingService:
             )
         return uploads
 
+    def _prepare_upload_image(self, image: ImageUploadFile) -> ImageUploadFile:
+        if not self.config.local_format_conversion:
+            return image
+        return _convert_image(image, self.config.local_conversion_format)
+
     @staticmethod
     def _build_client(config: ImageHostingConfig) -> ImageHostClient:
         if config.provider == "catbox":
@@ -109,6 +131,38 @@ class ImageHostingService:
 
 class ImageHostUploadError(Exception):
     pass
+
+
+def _convert_image(image: ImageUploadFile, target_format: str) -> ImageUploadFile:
+    target = CONVERSION_FORMATS[target_format]
+    with Image.open(BytesIO(image.content)) as source:
+        converted = _prepare_pillow_image(source, target_format)
+        output = BytesIO()
+        save_kwargs: dict[str, object] = {}
+        if target_format == "webp":
+            save_kwargs["lossless"] = True
+        elif target_format == "jpeg":
+            save_kwargs["quality"] = 95
+        converted.save(output, format=target["pillow_format"], **save_kwargs)
+
+    filename = f"{Path(image.filename).stem}{target['suffix']}"
+    return ImageUploadFile(
+        filename=filename,
+        content=output.getvalue(),
+        content_type=target["content_type"],
+    )
+
+
+def _prepare_pillow_image(image: Image.Image, target_format: str) -> Image.Image:
+    if target_format == "jpeg":
+        if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+            rgba = image.convert("RGBA")
+            background = Image.new("RGB", rgba.size, (255, 255, 255))
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            return background
+        if image.mode != "RGB":
+            return image.convert("RGB")
+    return image.copy()
 
 
 def _extract_images(zip_payload: bytes) -> list[ImageUploadFile]:
