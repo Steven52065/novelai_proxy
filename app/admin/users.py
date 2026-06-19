@@ -11,7 +11,6 @@ from ..image_format_policies import (
     DEFAULT_IMAGE_FORMAT_POLICY,
     IMAGE_FORMAT_POLICY_CHOICES,
     ImageFormatPolicy,
-    normalize_image_format_policy,
 )
 from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
 from ..templating import templates
@@ -29,6 +28,7 @@ from ..users import (
 )
 from .auth import require_admin, require_admin_or_session, require_admin_page_session
 from .common import (
+    normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
     notify_dashboard_change,
     row_to_dict,
@@ -330,7 +330,7 @@ async def create_user_form(
             free_small_daily_limit=free_small_daily_limit,
             allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
-            image_format_policy=normalize_image_format_policy(image_format_policy),
+            image_format_policy=normalize_image_format_policy_or_400(image_format_policy),
         )
     result = await create_user(
         payload,
@@ -450,7 +450,7 @@ async def update_user_form(
                 "reset_day": reset_day,
                 "allowed_endpoints": allowed_endpoints or [],
                 "allowed_upstreams": allowed_upstreams or [],
-                "image_format_policy": normalize_image_format_policy(image_format_policy),
+                "image_format_policy": normalize_image_format_policy_or_400(image_format_policy),
             }
         )
     await update_user(
@@ -540,7 +540,7 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
         free_small_daily_limit=free_small_daily_limit,
         allowed_endpoints=list(value("allowed_endpoints")),
         allowed_upstreams=list(value("allowed_upstreams")),
-        image_format_policy=normalize_image_format_policy(value("image_format_policy")),
+        image_format_policy=normalize_image_format_policy_or_400(value("image_format_policy")),
         anlas_total=int(value("anlas_total")),
         reset_period=reset_period,
         reset_day=reset_day,
@@ -594,7 +594,7 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         allowed_endpoints=list(allowed_endpoints) if allowed_endpoints is not None else None,
         allowed_upstreams=list(allowed_upstreams) if allowed_upstreams is not None else None,
         image_format_policy=(
-            normalize_image_format_policy(image_format_policy)
+            normalize_image_format_policy_or_400(image_format_policy)
             if image_format_policy is not None
             else None
         ),

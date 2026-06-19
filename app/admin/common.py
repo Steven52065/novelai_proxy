@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request
 
 from ..allowlists import ALLOWED_ENDPOINT_CHOICES, AllowedEndpoints, AllowedUpstreams
-from ..image_format_policies import image_format_policy_label, normalize_image_format_policy
+from ..image_format_policies import ImageFormatPolicy, image_format_policy_label, normalize_image_format_policy
 from ..quota_manager import normalize_reset_day
 from ..timezones import DISPLAY_TIMEZONE
 
@@ -72,6 +72,13 @@ def validate_free_small_daily_limit(enabled: bool, limit: int) -> None:
 def normalize_reset_day_or_400(reset_period: str, reset_day: int | None) -> int:
     try:
         return normalize_reset_day(reset_period, reset_day)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+
+
+def normalize_image_format_policy_or_400(value: object) -> ImageFormatPolicy:
+    try:
+        return normalize_image_format_policy(value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
 

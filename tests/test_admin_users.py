@@ -109,6 +109,81 @@ def test_admin_rejects_invalid_image_format_policy(tmp_path: Path, monkeypatch):
         assert bad_group_update.json()["message"] == "Invalid request"
 
 
+def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        bad_user_create = client.post(
+            "/admin/users",
+            data={
+                "name": "bad-web-format-user",
+                "allowed_endpoints": "generate-image",
+                "image_format_policy": "gif",
+            },
+            follow_redirects=False,
+        )
+        assert bad_user_create.status_code == 400
+        assert bad_user_create.json()["message"] == "Unknown image_format_policy: gif"
+
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "web-format-user", "tier": "normal", "anlas_total": 10},
+        ).json()["user_id"]
+        bad_user_update = client.post(
+            f"/admin/users/{user_id}",
+            data={
+                "name": "web-format-user",
+                "tier": "normal",
+                "is_active": "on",
+                "anlas_total": "10",
+                "reset_period": "month",
+                "reset_day": "1",
+                "allowed_endpoints": "generate-image",
+                "image_format_policy": "gif",
+            },
+            follow_redirects=False,
+        )
+        assert bad_user_update.status_code == 400
+        assert bad_user_update.json()["message"] == "Unknown image_format_policy: gif"
+
+        bad_group_create = client.post(
+            "/admin/user-groups",
+            data={
+                "name": "bad-web-format-group",
+                "default_allowed_endpoints": "generate-image",
+                "default_image_format_policy": "gif",
+            },
+            follow_redirects=False,
+        )
+        assert bad_group_create.status_code == 400
+        assert bad_group_create.json()["message"] == "Unknown image_format_policy: gif"
+
+        group_id = _create_group(client, name="web-format-group")
+        bad_group_update = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                "name": "web-format-group",
+                "is_active": "on",
+                "default_tier": "normal",
+                "default_free_small_only": "on",
+                "default_allowed_endpoints": "generate-image",
+                "default_anlas_total": "0",
+                "default_reset_period": "month",
+                "default_reset_day": "1",
+                "free_small_daily_limit": "0",
+                "default_image_format_policy": "gif",
+            },
+            follow_redirects=False,
+        )
+        assert bad_group_update.status_code == 400
+        assert bad_group_update.json()["message"] == "Unknown image_format_policy: gif"
+
+
 def test_admin_rejects_enabled_free_small_daily_limit_without_positive_limit(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

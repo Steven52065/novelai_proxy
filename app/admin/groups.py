@@ -35,6 +35,7 @@ from ..users import (
 )
 from .auth import require_admin, require_admin_or_session, require_admin_page_session
 from .common import (
+    normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
     notify_dashboard_change,
     row_to_dict,
@@ -291,7 +292,7 @@ async def create_user_group_form(
             free_small_daily_limit=free_small_daily_limit,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
-            default_image_format_policy=normalize_image_format_policy(default_image_format_policy),
+            default_image_format_policy=normalize_image_format_policy_or_400(default_image_format_policy),
             default_anlas_total=default_anlas_total,
             default_reset_period=default_reset_period,
             default_reset_day=default_reset_day,
@@ -377,7 +378,7 @@ async def update_user_group_form(
             free_small_daily_limit=free_small_daily_limit,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
-            default_image_format_policy=normalize_image_format_policy(default_image_format_policy),
+            default_image_format_policy=normalize_image_format_policy_or_400(default_image_format_policy),
             default_anlas_total=default_anlas_total,
             default_reset_period=default_reset_period,
             default_reset_day=default_reset_day,
