@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request
 
 from ..allowlists import ALLOWED_ENDPOINT_CHOICES, AllowedEndpoints, AllowedUpstreams
+from ..image_format_policies import image_format_policy_label, normalize_image_format_policy
 from ..quota_manager import normalize_reset_day
 from ..timezones import DISPLAY_TIMEZONE
 
@@ -22,6 +23,8 @@ def user_row_to_dict(row):
         for endpoint in data["allowed_endpoints_list"]
     ]
     data["allowed_upstreams_list"] = AllowedUpstreams.parse(data.get("allowed_upstreams")).as_list()
+    data["image_format_policy"] = normalize_image_format_policy(data.get("image_format_policy"))
+    data["image_format_policy_label"] = image_format_policy_label(data["image_format_policy"])
     return data
 
 

@@ -206,12 +206,22 @@ def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_pa
 
     user_columns = {row["name"] for row in db.query_all("PRAGMA table_info(users)")}
     assert "group_id" in user_columns
+    assert "image_format_policy" in user_columns
+    group_columns = {row["name"] for row in db.query_all("PRAGMA table_info(user_groups)")}
+    assert "default_image_format_policy" in group_columns
     db.execute(
         "INSERT INTO users(api_key_hash, name, created_at) VALUES (?, ?, ?)",
         ("legacy-hash", "legacy-user", utc_now_iso()),
     )
-    user = db.query_one("SELECT group_id FROM users WHERE api_key_hash = ?", ("legacy-hash",))
+    user = db.query_one("SELECT group_id, image_format_policy FROM users WHERE api_key_hash = ?", ("legacy-hash",))
     assert user["group_id"] is None
+    assert user["image_format_policy"] == "follow_global"
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 1, ?)",
+        ("legacy-group", utc_now_iso()),
+    )
+    group = db.query_one("SELECT default_image_format_policy FROM user_groups WHERE name = ?", ("legacy-group",))
+    assert group["default_image_format_policy"] == "follow_global"
 
     indexes = {
         row["name"]

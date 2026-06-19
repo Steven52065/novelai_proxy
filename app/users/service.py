@@ -7,6 +7,7 @@ from sqlite3 import Connection
 from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_ENDPOINTS
 from ..database import Database, utc_now_iso
 from ..domain_errors import InvalidDomainInput, UserNotFound
+from ..image_format_policies import DEFAULT_IMAGE_FORMAT_POLICY, ImageFormatPolicy, normalize_image_format_policy
 from ..quota_manager import QuotaManager
 from ..queue_tiers import TIER_NORMAL
 from ..security import generate_api_key, hash_api_key
@@ -21,6 +22,7 @@ class CreateUserInput:
     free_small_daily_limit: int = 0
     allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     allowed_upstreams: list[str] = field(default_factory=list)
+    image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
     group_id: int | None = None
     anlas_total: int = 0
     reset_period: str = "month"
@@ -37,6 +39,7 @@ class UpdateUserInput:
     free_small_daily_limit: int | None = None
     allowed_endpoints: list[str] | None = None
     allowed_upstreams: list[str] | None = None
+    image_format_policy: ImageFormatPolicy | None = None
     group_id: int | None = None
     update_group_id: bool = False
     anlas_total: int | None = None
@@ -64,9 +67,9 @@ def insert_user_record(
         INSERT INTO users (
             api_key_hash, name, tier, is_active, free_small_only,
             free_small_daily_limit_enabled, free_small_daily_limit,
-            allowed_endpoints, allowed_upstreams, group_id, created_at
+            allowed_endpoints, allowed_upstreams, image_format_policy, group_id, created_at
         )
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             hash_api_key(api_key),
@@ -77,6 +80,7 @@ def insert_user_record(
             data.free_small_daily_limit,
             AllowedEndpoints.of(data.allowed_endpoints).serialize(),
             AllowedUpstreams.of(data.allowed_upstreams).serialize(),
+            normalize_image_format_policy(data.image_format_policy),
             data.group_id,
             now,
         ),
@@ -130,6 +134,9 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
     if data.allowed_upstreams is not None:
         fields.append("allowed_upstreams = ?")
         params.append(AllowedUpstreams.of(data.allowed_upstreams).serialize())
+    if data.image_format_policy is not None:
+        fields.append("image_format_policy = ?")
+        params.append(normalize_image_format_policy(data.image_format_policy))
     if data.update_group_id:
         fields.append("group_id = ?")
         params.append(data.group_id)

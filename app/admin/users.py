@@ -7,6 +7,12 @@ from pydantic import BaseModel, Field
 from ..allowlists import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS
 from ..api_key_flash import ApiKeyFlashStore
 from ..database import Database, utc_now_iso
+from ..image_format_policies import (
+    DEFAULT_IMAGE_FORMAT_POLICY,
+    IMAGE_FORMAT_POLICY_CHOICES,
+    ImageFormatPolicy,
+    normalize_image_format_policy,
+)
 from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
 from ..templating import templates
 from ..users import (
@@ -49,6 +55,7 @@ class CreateUserRequest(BaseModel):
     free_small_daily_limit: int = Field(default=0, ge=0)
     allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     allowed_upstreams: list[str] = Field(default_factory=list)
+    image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
     anlas_total: int = Field(default=0, ge=0)
     reset_period: str = Field(default="month", pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -65,6 +72,7 @@ class UpdateUserRequest(BaseModel):
     free_small_daily_limit: int | None = Field(default=None, ge=0)
     allowed_endpoints: list[str] | None = None
     allowed_upstreams: list[str] | None = None
+    image_format_policy: ImageFormatPolicy | None = None
     anlas_total: int | None = Field(default=None, ge=0)
     reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -88,7 +96,7 @@ async def list_users(request: Request):
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
-               u.allowed_endpoints, u.allowed_upstreams, u.created_at,
+               u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -255,7 +263,7 @@ async def users_page(request: Request):
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
-               u.allowed_endpoints, u.allowed_upstreams, u.created_at,
+               u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
                COALESCE(q.used, 0) AS anlas_used,
@@ -280,6 +288,7 @@ async def users_page(request: Request):
             "groups": _groups_for_select(db, active_only=True),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
+            "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "new_api_key": new_api_key,
         },
     )
@@ -301,6 +310,7 @@ async def create_user_form(
     free_small_daily_limit: int = Form(0),
     allowed_endpoints: list[str] | None = Form(None),
     allowed_upstreams: list[str] | None = Form(None),
+    image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
     group_id: str | None = Form(None),
     use_group_defaults: str | None = Form(None),
 ):
@@ -320,6 +330,7 @@ async def create_user_form(
             free_small_daily_limit=free_small_daily_limit,
             allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
+            image_format_policy=normalize_image_format_policy(image_format_policy),
         )
     result = await create_user(
         payload,
@@ -356,7 +367,7 @@ async def user_edit_page(user_id: int, request: Request):
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
-               u.allowed_endpoints, u.allowed_upstreams, NULL AS api_key,
+               u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, NULL AS api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
         FROM users u
@@ -384,6 +395,7 @@ async def user_edit_page(user_id: int, request: Request):
             "groups": _groups_for_select(db, active_only=False),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
+            "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "new_api_key": new_api_key,
         },
     )
@@ -407,6 +419,7 @@ async def update_user_form(
     free_small_daily_limit: int = Form(0),
     allowed_endpoints: list[str] | None = Form(None),
     allowed_upstreams: list[str] | None = Form(None),
+    image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
     group_id: str | None = Form(None),
     apply_group_defaults: str | None = Form(None),
 ):
@@ -437,6 +450,7 @@ async def update_user_form(
                 "reset_day": reset_day,
                 "allowed_endpoints": allowed_endpoints or [],
                 "allowed_upstreams": allowed_upstreams or [],
+                "image_format_policy": normalize_image_format_policy(image_format_policy),
             }
         )
     await update_user(
@@ -526,6 +540,7 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
         free_small_daily_limit=free_small_daily_limit,
         allowed_endpoints=list(value("allowed_endpoints")),
         allowed_upstreams=list(value("allowed_upstreams")),
+        image_format_policy=normalize_image_format_policy(value("image_format_policy")),
         anlas_total=int(value("anlas_total")),
         reset_period=reset_period,
         reset_day=reset_day,
@@ -557,6 +572,7 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
     _validate_update_free_small_daily_limit(db, user_id, free_small_daily_limit_enabled, free_small_daily_limit)
     allowed_endpoints = optional_value("allowed_endpoints")
     allowed_upstreams = optional_value("allowed_upstreams")
+    image_format_policy = optional_value("image_format_policy")
     reset_period_value = optional_value("reset_period")
     reset_period = str(reset_period_value) if reset_period_value is not None else None
     reset_day = optional_value("reset_day")
@@ -577,6 +593,11 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         free_small_daily_limit=int(free_small_daily_limit) if free_small_daily_limit is not None else None,
         allowed_endpoints=list(allowed_endpoints) if allowed_endpoints is not None else None,
         allowed_upstreams=list(allowed_upstreams) if allowed_upstreams is not None else None,
+        image_format_policy=(
+            normalize_image_format_policy(image_format_policy)
+            if image_format_policy is not None
+            else None
+        ),
         anlas_total=optional_value("anlas_total"),
         reset_period=reset_period,
         reset_day=reset_day,

@@ -8,7 +8,7 @@ from typing import Any, NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..allowlists import AllowedEndpoints, AllowedUpstreams
@@ -23,6 +23,11 @@ from ..deps import (
     get_quota_manager,
 )
 from ..free_small_daily_limit import FreeSmallDailyLimitManager
+from ..image_format_policies import (
+    IMAGE_FORMAT_POLICY_CHOICES,
+    image_format_policy_label,
+    normalize_image_format_policy,
+)
 from ..logging_utils import json_dumps, logger
 from ..quota_manager import QuotaManager
 from ..templating import templates
@@ -152,7 +157,7 @@ async def account_page(
     user = db.query_one(
         """
         SELECT u.id, u.name, u.group_id, u.tier, u.is_active, u.free_small_only,
-               u.allowed_endpoints, u.allowed_upstreams, u.deleted_at,
+               u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, u.deleted_at,
                g.name AS group_name, g.is_active AS group_is_active,
                l.discord_username, l.discord_global_name, l.discord_avatar,
                COALESCE(q.reset_period, 'month') AS quota_reset_period,
@@ -184,12 +189,36 @@ async def account_page(
                 "day": user["quota_reset_day"],
             },
             "free_small_daily": free_small_daily,
+            "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "new_api_key": new_api_key,
         },
     )
     if has_api_key_flash:
         response.delete_cookie(API_KEY_FLASH_COOKIE)
     return response
+
+
+@router.post("/account/image-format-policy")
+async def account_update_image_format_policy(
+    request: Request,
+    image_format_policy: str = Form(...),
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    db: Database = Depends(get_db),
+):
+    _require_discord_enabled(config)
+    user_id = _current_self_service_user_id(request, config.session_secret)
+    if user_id is None:
+        return RedirectResponse("/signup", status_code=303)
+    _ensure_self_service_account_active(db, user_id)
+    try:
+        normalized = normalize_image_format_policy(image_format_policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+    db.execute(
+        "UPDATE users SET image_format_policy = ? WHERE id = ? AND deleted_at IS NULL",
+        (normalized, user_id),
+    )
+    return RedirectResponse("/account", status_code=303)
 
 
 @router.post("/account/reset-key")
@@ -242,6 +271,8 @@ def _account_user_to_dict(row) -> dict:
         "free_small_only": bool(row["free_small_only"]),
         "allowed_endpoints_list": AllowedEndpoints.parse(row["allowed_endpoints"]).as_list(),
         "allowed_upstreams_list": AllowedUpstreams.parse(row["allowed_upstreams"]).as_list(),
+        "image_format_policy": normalize_image_format_policy(row["image_format_policy"]),
+        "image_format_policy_label": image_format_policy_label(row["image_format_policy"]),
         "discord_username": row["discord_username"],
         "discord_global_name": row["discord_global_name"],
         "discord_avatar": row["discord_avatar"],

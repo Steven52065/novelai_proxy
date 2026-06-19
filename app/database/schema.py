@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS user_groups (
     free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
     default_allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
     default_allowed_upstreams TEXT,
+    default_image_format_policy TEXT NOT NULL DEFAULT 'follow_global',
     default_anlas_total INTEGER NOT NULL DEFAULT 0,
     default_reset_period TEXT NOT NULL DEFAULT 'month',
     default_reset_day INTEGER NOT NULL DEFAULT 1,
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
     free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
     allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
     allowed_upstreams TEXT,
+    image_format_policy TEXT NOT NULL DEFAULT 'follow_global',
     group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL,
     deleted_at TEXT,
     created_at TEXT NOT NULL
@@ -188,6 +190,7 @@ USERS_COLUMNS = (
     ("free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0"),
     ("allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'"),
     ("allowed_upstreams", "TEXT"),
+    ("image_format_policy", "TEXT NOT NULL DEFAULT 'follow_global'"),
     ("group_id", "INTEGER REFERENCES user_groups(id) ON DELETE SET NULL"),
     ("deleted_at", "TEXT"),
 )
@@ -195,6 +198,7 @@ USERS_COLUMNS = (
 USER_GROUPS_COLUMNS = (
     ("free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0"),
+    ("default_image_format_policy", "TEXT NOT NULL DEFAULT 'follow_global'"),
 )
 
 

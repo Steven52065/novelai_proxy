@@ -240,6 +240,15 @@
           </label>
         </div>
 
+        <label>
+          图片输出格式
+          <select name="image_format_policy">
+            {% for choice in image_format_policy_choices %}
+            <option value="{{ choice.value }}" {{ "selected" if user.image_format_policy == choice.value else "" }}>{{ choice.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
         <div style="padding: 6px 0;">
           <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许访问的接口</div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">

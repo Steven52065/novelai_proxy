@@ -60,6 +60,7 @@ def login_or_register_discord_user(
                 free_small_daily_limit=int(defaults["free_small_daily_limit"]),
                 allowed_endpoints=list(defaults["allowed_endpoints"]),
                 allowed_upstreams=list(defaults["allowed_upstreams"]),
+                image_format_policy=str(defaults["image_format_policy"]),
                 anlas_total=int(defaults["anlas_total"]),
                 reset_period=str(defaults["reset_period"]),
                 reset_day=int(defaults["reset_day"]),

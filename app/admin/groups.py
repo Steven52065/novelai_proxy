@@ -13,6 +13,13 @@ from ..allowlists import (
     AllowedUpstreams,
 )
 from ..database import Database, utc_now_iso
+from ..image_format_policies import (
+    DEFAULT_IMAGE_FORMAT_POLICY,
+    IMAGE_FORMAT_POLICY_CHOICES,
+    ImageFormatPolicy,
+    image_format_policy_label,
+    normalize_image_format_policy,
+)
 from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
 from ..templating import templates
 from ..users import (
@@ -51,6 +58,7 @@ class CreateUserGroupRequest(BaseModel):
     free_small_daily_limit: int = Field(default=0, ge=0)
     default_allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     default_allowed_upstreams: list[str] = Field(default_factory=list)
+    default_image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
     default_anlas_total: int = Field(default=0, ge=0)
     default_reset_period: str = Field(default="month", pattern="^(month|week|day|never)$")
     default_reset_day: int = Field(default=1, ge=0, le=28)
@@ -65,6 +73,7 @@ class UpdateUserGroupRequest(BaseModel):
     free_small_daily_limit: int | None = Field(default=None, ge=0)
     default_allowed_endpoints: list[str] | None = None
     default_allowed_upstreams: list[str] | None = None
+    default_image_format_policy: ImageFormatPolicy | None = None
     default_anlas_total: int | None = Field(default=None, ge=0)
     default_reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     default_reset_day: int | None = Field(default=None, ge=0, le=28)
@@ -79,6 +88,7 @@ class SyncGroupMembersRequest(BaseModel):
             "free_small_daily_limit",
             "allowed_endpoints",
             "allowed_upstreams",
+            "image_format_policy",
             "anlas_quota",
         ]
     ] = Field(default_factory=list)
@@ -114,6 +124,7 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
             free_small_daily_limit=payload.free_small_daily_limit,
             default_allowed_endpoints=payload.default_allowed_endpoints,
             default_allowed_upstreams=payload.default_allowed_upstreams,
+            default_image_format_policy=payload.default_image_format_policy,
             default_anlas_total=payload.default_anlas_total,
             default_reset_period=payload.default_reset_period,
             default_reset_day=default_reset_day,
@@ -173,6 +184,7 @@ def _build_group_update_input(
         free_small_daily_limit=payload.free_small_daily_limit,
         default_allowed_endpoints=payload.default_allowed_endpoints,
         default_allowed_upstreams=payload.default_allowed_upstreams,
+        default_image_format_policy=payload.default_image_format_policy,
         default_anlas_total=payload.default_anlas_total,
         default_reset_period=payload.default_reset_period,
         default_reset_day=default_reset_day,
@@ -248,6 +260,7 @@ async def user_groups_page(request: Request):
             "groups": [_group_row_to_dict(row) for row in list_groups(db)],
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
+            "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
         },
     )
 
@@ -263,6 +276,7 @@ async def create_user_group_form(
     free_small_daily_limit: int = Form(0),
     default_allowed_endpoints: list[str] | None = Form(None),
     default_allowed_upstreams: list[str] | None = Form(None),
+    default_image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
     default_anlas_total: int = Form(0),
     default_reset_period: str = Form("month"),
     default_reset_day: int = Form(1),
@@ -277,6 +291,7 @@ async def create_user_group_form(
             free_small_daily_limit=free_small_daily_limit,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
+            default_image_format_policy=normalize_image_format_policy(default_image_format_policy),
             default_anlas_total=default_anlas_total,
             default_reset_period=default_reset_period,
             default_reset_day=default_reset_day,
@@ -323,6 +338,7 @@ async def user_group_edit_page(group_id: int, request: Request):
             "members": members,
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
+            "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "saved": request.query_params.get("saved") == "1",
             "propagated": _parse_optional_int(request.query_params.get("propagated")),
             "propagate_scope": request.query_params.get("propagate_scope"),
@@ -342,6 +358,7 @@ async def update_user_group_form(
     free_small_daily_limit: int = Form(0),
     default_allowed_endpoints: list[str] | None = Form(None),
     default_allowed_upstreams: list[str] | None = Form(None),
+    default_image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
     default_anlas_total: int = Form(0),
     default_reset_period: str = Form("month"),
     default_reset_day: int = Form(1),
@@ -360,6 +377,7 @@ async def update_user_group_form(
             free_small_daily_limit=free_small_daily_limit,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
+            default_image_format_policy=normalize_image_format_policy(default_image_format_policy),
             default_anlas_total=default_anlas_total,
             default_reset_period=default_reset_period,
             default_reset_day=default_reset_day,
@@ -428,6 +446,8 @@ def _group_row_to_dict(row):
     data = row_to_dict(row)
     data["default_allowed_endpoints_list"] = AllowedEndpoints.parse(data.get("default_allowed_endpoints")).as_list()
     data["default_allowed_upstreams_list"] = AllowedUpstreams.parse(data.get("default_allowed_upstreams")).as_list()
+    data["default_image_format_policy"] = normalize_image_format_policy(data.get("default_image_format_policy"))
+    data["default_image_format_policy_label"] = image_format_policy_label(data["default_image_format_policy"])
     return data
 
 

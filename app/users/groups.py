@@ -8,6 +8,12 @@ import sqlite3
 from ..allowlists import AllowedEndpoints, AllowedUpstreams, DEFAULT_ALLOWED_ENDPOINTS
 from ..database import Database, utc_now_iso
 from ..domain_errors import InvalidDomainInput, UserGroupDisabled, UserGroupNotFound
+from ..image_format_policies import (
+    DEFAULT_IMAGE_FORMAT_POLICY,
+    ImageFormatPolicy,
+    image_format_policy_label,
+    normalize_image_format_policy,
+)
 from ..quota_manager import QuotaManager
 from ..queue_tiers import TIER_NORMAL
 from .service import UpdateUserInput
@@ -18,6 +24,7 @@ SYNCABLE_MEMBER_FIELDS = {
     "free_small_daily_limit",
     "allowed_endpoints",
     "allowed_upstreams",
+    "image_format_policy",
     "anlas_quota",
 }
 
@@ -33,6 +40,7 @@ MEMBER_FIELD_LABELS = {
     "free_small_daily_limit": "免费小图单日限制",
     "allowed_endpoints": "允许接口",
     "allowed_upstreams": "允许上游 Key",
+    "image_format_policy": "图片格式策略",
     "anlas_quota": "Anlas额度与重置规则",
 }
 
@@ -47,6 +55,7 @@ class UserGroupInput:
     free_small_daily_limit: int = 0
     default_allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     default_allowed_upstreams: list[str] = field(default_factory=list)
+    default_image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
     default_anlas_total: int = 0
     default_reset_period: str = "month"
     default_reset_day: int = 1
@@ -62,6 +71,7 @@ class UserGroupUpdateInput:
     free_small_daily_limit: int | None = None
     default_allowed_endpoints: list[str] | None = None
     default_allowed_upstreams: list[str] | None = None
+    default_image_format_policy: ImageFormatPolicy | None = None
     default_anlas_total: int | None = None
     default_reset_period: str | None = None
     default_reset_day: int | None = None
@@ -74,10 +84,10 @@ def create_group(db: Database, data: UserGroupInput) -> int:
         INSERT INTO user_groups (
             name, is_active, default_tier, default_free_small_only,
             free_small_daily_limit_enabled, free_small_daily_limit,
-            default_allowed_endpoints, default_allowed_upstreams, default_anlas_total,
+            default_allowed_endpoints, default_allowed_upstreams, default_image_format_policy, default_anlas_total,
             default_reset_period, default_reset_day, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data.name,
@@ -88,6 +98,7 @@ def create_group(db: Database, data: UserGroupInput) -> int:
             data.free_small_daily_limit,
             AllowedEndpoints.of(data.default_allowed_endpoints).serialize(),
             AllowedUpstreams.of(data.default_allowed_upstreams).serialize(),
+            normalize_image_format_policy(data.default_image_format_policy),
             data.default_anlas_total,
             data.default_reset_period,
             data.default_reset_day,
@@ -126,6 +137,9 @@ def update_group(db: Database, group_id: int, data: UserGroupUpdateInput) -> boo
     if data.default_allowed_upstreams is not None:
         fields.append("default_allowed_upstreams = ?")
         params.append(AllowedUpstreams.of(data.default_allowed_upstreams).serialize())
+    if data.default_image_format_policy is not None:
+        fields.append("default_image_format_policy = ?")
+        params.append(normalize_image_format_policy(data.default_image_format_policy))
     if data.default_anlas_total is not None:
         fields.append("default_anlas_total = ?")
         params.append(data.default_anlas_total)
@@ -201,6 +215,7 @@ def group_defaults(row: sqlite3.Row) -> dict[str, object]:
         "free_small_daily_limit": int(row["free_small_daily_limit"] or 0),
         "allowed_endpoints": AllowedEndpoints.parse(row["default_allowed_endpoints"]).as_list(),
         "allowed_upstreams": AllowedUpstreams.parse(row["default_allowed_upstreams"]).as_list(),
+        "image_format_policy": normalize_image_format_policy(row["default_image_format_policy"]),
         "anlas_total": int(row["default_anlas_total"]),
         "reset_period": str(row["default_reset_period"]),
         "reset_day": int(row["default_reset_day"]),
@@ -216,6 +231,7 @@ def apply_group_defaults(row: sqlite3.Row) -> UpdateUserInput:
         free_small_daily_limit=int(defaults["free_small_daily_limit"]),
         allowed_endpoints=list(defaults["allowed_endpoints"]),
         allowed_upstreams=list(defaults["allowed_upstreams"]),
+        image_format_policy=normalize_image_format_policy(defaults["image_format_policy"]),
         anlas_total=int(defaults["anlas_total"]),
         reset_period=str(defaults["reset_period"]),
         reset_day=int(defaults["reset_day"]),
@@ -261,6 +277,9 @@ def sync_group_members(
     if "allowed_upstreams" in selected:
         user_fields.append("allowed_upstreams = ?")
         params.append(AllowedUpstreams.of(defaults["allowed_upstreams"]).serialize())
+    if "image_format_policy" in selected:
+        user_fields.append("image_format_policy = ?")
+        params.append(normalize_image_format_policy(defaults["image_format_policy"]))
     if user_fields:
         params.append(group_id)
         db.execute(
@@ -374,6 +393,7 @@ def _group_member_values(row: sqlite3.Row) -> dict[str, object]:
         ),
         "allowed_endpoints": AllowedEndpoints.parse(row["default_allowed_endpoints"]).serialize(),
         "allowed_upstreams": AllowedUpstreams.parse(row["default_allowed_upstreams"]).serialize(),
+        "image_format_policy": normalize_image_format_policy(row["default_image_format_policy"]),
         "anlas_quota": (
             int(row["default_anlas_total"] or 0),
             str(row["default_reset_period"]),
@@ -414,6 +434,11 @@ def _merged_group_member_values(row: sqlite3.Row, data: UserGroupUpdateInput) ->
             if data.default_allowed_upstreams is not None
             else current["allowed_upstreams"]
         ),
+        "image_format_policy": (
+            normalize_image_format_policy(data.default_image_format_policy)
+            if data.default_image_format_policy is not None
+            else current["image_format_policy"]
+        ),
         "anlas_quota": (anlas_total, reset_period, reset_day),
     }
 
@@ -423,7 +448,7 @@ def _load_group_members_with_values(db: Database, group_id: int) -> list[tuple[i
         """
         SELECT u.id, u.tier, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
-               u.allowed_endpoints, u.allowed_upstreams,
+               u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy,
                q.total AS anlas_total, q.reset_period AS reset_period, q.reset_day AS reset_day
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
@@ -445,6 +470,7 @@ def _user_member_values(row: sqlite3.Row) -> dict[str, object]:
         ),
         "allowed_endpoints": AllowedEndpoints.parse(row["allowed_endpoints"]).serialize(),
         "allowed_upstreams": AllowedUpstreams.parse(row["allowed_upstreams"]).serialize(),
+        "image_format_policy": normalize_image_format_policy(row["image_format_policy"]),
         "anlas_quota": (
             int(row["anlas_total"] or 0),
             str(row["reset_period"] or "month"),
@@ -465,6 +491,8 @@ def _user_columns_for_field(field: str, value: object) -> dict[str, object]:
         return {"allowed_endpoints": str(value)}
     if field == "allowed_upstreams":
         return {"allowed_upstreams": value if value is None else str(value)}
+    if field == "image_format_policy":
+        return {"image_format_policy": normalize_image_format_policy(value)}
     raise ValueError(f"Unsupported member field: {field}")
 
 
@@ -476,6 +504,8 @@ def _display_member_value(field: str, value: object) -> str:
         return f"启用（每日 {limit} 张）" if enabled else "关闭"
     if field == "allowed_upstreams":
         return str(value) if value else "全部上游"
+    if field == "image_format_policy":
+        return image_format_policy_label(value)
     if field == "anlas_quota":
         total, period, day = value
         return f"总额 {total} · 周期 {period} · 重置日 {day}"

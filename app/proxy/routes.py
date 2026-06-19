@@ -28,6 +28,7 @@ from ..deps import (
     get_quota_manager,
 )
 from ..free_small_daily_limit import FreeSmallDailyLimitManager
+from ..image_format_policies import effective_image_format_config
 from ..queue_tiers import is_vip_tier
 from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
 from ..queue_manager import RoutingProxyQueue
@@ -69,7 +70,10 @@ async def generate_image(
         logger.error("generate-image payload validation failed errors=%s", str(exc))
         return JSONResponse(status_code=400, content={"message": "Invalid request"})
 
-    _apply_image_format_policy(request_payload, config.image_format)
+    _apply_image_format_policy(
+        request_payload,
+        effective_image_format_config(user.image_format_policy, config.image_format),
+    )
     try:
         estimated_cost, cost_is_certainly_free = _generate_cost_estimator.calculate(
             cost_inputs,

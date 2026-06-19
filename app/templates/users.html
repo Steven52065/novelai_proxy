@@ -116,6 +116,15 @@
         </label>
       </div>
 
+      <label>
+        图片输出格式
+        <select name="image_format_policy">
+          {% for choice in image_format_policy_choices %}
+          <option value="{{ choice.value }}" {{ "selected" if choice.value == "follow_global" else "" }}>{{ choice.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
       <div style="padding: 6px 0;">
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许访问的接口</div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
@@ -248,6 +257,9 @@
               {% for label in user.allowed_endpoint_labels %}
               <span class="badge" style="background: rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.18); color:#93c5fd;">{{ label }}</span>
               {% endfor %}
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+              <span class="badge" style="background: rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.18); color:#c4b5fd;">{{ user.image_format_policy_label }}</span>
             </div>
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
               {% if user.allowed_upstreams_list %}

@@ -12,7 +12,7 @@ import app.self_service.accounts as accounts
 from app.database import Database, utc_now_iso
 from app.quota_manager import QuotaManager
 from app.self_service.routes import API_KEY_FLASH_COOKIE
-from helpers import write_test_config
+from helpers import PAYLOAD, FakeUpstream, write_test_config
 
 
 class FakeDiscordClient:
@@ -244,6 +244,60 @@ def test_account_shows_daily_anlas_reset_without_zero_day(tmp_path: Path, monkey
         assert "第 0 天" not in text
 
 
+def test_account_updates_image_format_policy_and_generation_uses_it(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, default_anlas_total=100)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        account = client.get("/account")
+        assert account.status_code == 200
+        assert 'name="image_format_policy"' in account.text
+        assert "/account/image-format-policy" in account.text
+
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        before = dict(
+            client.app.state.db.query_one(
+                """
+                SELECT name, tier, free_small_only, allowed_endpoints, image_format_policy
+                FROM users
+                WHERE id = ?
+                """,
+                (user_id,),
+            )
+        )
+
+        update = client.post(
+            "/account/image-format-policy",
+            data={"image_format_policy": "force_png"},
+            follow_redirects=False,
+        )
+        assert update.status_code == 303
+        assert update.headers["location"] == "/account"
+
+        after = dict(
+            client.app.state.db.query_one(
+                """
+                SELECT name, tier, free_small_only, allowed_endpoints, image_format_policy
+                FROM users
+                WHERE id = ?
+                """,
+                (user_id,),
+            )
+        )
+        assert after == before | {"image_format_policy": "force_png"}
+
+        fake_upstream = FakeUpstream()
+        client.app.state.upstream = fake_upstream
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"image_format": "jpeg"}}
+        generated = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+
+        assert generated.status_code == 201
+        assert fake_upstream.last_generate_payload["parameters"]["image_format"] == "png"
+
+
 def test_discord_registration_rolls_back_user_and_quota_on_failure(tmp_path: Path, monkeypatch):
     db = Database(str(tmp_path / "rollback.db"))
     db.init_schema()
@@ -417,6 +471,7 @@ def _write_self_service_config(
     default_reset_day: int = 2,
     free_small_daily_limit_enabled: bool = False,
     free_small_daily_limit: int = 0,
+    default_image_format_policy: str = "follow_global",
 ) -> tuple[Path, int]:
     config_path = write_test_config(tmp_path)
     db = Database(str(tmp_path / "test.db"))
@@ -428,6 +483,7 @@ def _write_self_service_config(
         default_reset_day=default_reset_day,
         free_small_daily_limit_enabled=free_small_daily_limit_enabled,
         free_small_daily_limit=free_small_daily_limit,
+        default_image_format_policy=default_image_format_policy,
     )
     db.close()
     with config_path.open("a", encoding="utf-8") as f:
@@ -455,20 +511,22 @@ def _create_default_group(
     default_reset_day: int = 2,
     free_small_daily_limit_enabled: bool = False,
     free_small_daily_limit: int = 0,
+    default_image_format_policy: str = "follow_global",
 ) -> int:
     cursor = db.execute(
         """
         INSERT INTO user_groups (
             name, is_active, default_tier, default_free_small_only,
             free_small_daily_limit_enabled, free_small_daily_limit,
-            default_allowed_endpoints, default_anlas_total,
+            default_allowed_endpoints, default_image_format_policy, default_anlas_total,
             default_reset_period, default_reset_day, created_at
         )
-        VALUES ('discord-default', 1, 'vip', 0, ?, ?, 'generate-image', ?, ?, ?, ?)
+        VALUES ('discord-default', 1, 'vip', 0, ?, ?, 'generate-image', ?, ?, ?, ?, ?)
         """,
         (
             1 if free_small_daily_limit_enabled else 0,
             free_small_daily_limit,
+            default_image_format_policy,
             default_anlas_total,
             default_reset_period,
             default_reset_day,

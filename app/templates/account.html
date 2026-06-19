@@ -99,6 +99,27 @@
           </button>
         </form>
       </section>
+
+      <section class="panel" style="margin-bottom: 0;">
+        <h2 style="font-size: 18px; margin-bottom: 16px;">
+          <i data-lucide="image" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+          图片输出格式
+        </h2>
+        <form method="post" action="/account/image-format-policy" class="stack" style="gap: 14px;">
+          <label>
+            格式策略
+            <select name="image_format_policy">
+              {% for choice in image_format_policy_choices %}
+              <option value="{{ choice.value }}" {{ "selected" if user.image_format_policy == choice.value else "" }}>{{ choice.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit" style="min-height: 38px; padding: 0 16px; width: fit-content;">
+            <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+            保存
+          </button>
+        </form>
+      </section>
     </div>
 
     {% if free_small_daily.enabled %}

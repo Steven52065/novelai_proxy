@@ -76,6 +76,15 @@
       </label>
     </div>
 
+    <label>
+      默认图片输出格式
+      <select name="default_image_format_policy">
+        {% for choice in image_format_policy_choices %}
+        <option value="{{ choice.value }}" {{ "selected" if choice.value == "follow_global" else "" }}>{{ choice.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
       <div>
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
@@ -163,6 +172,7 @@
             {% if group.free_small_daily_limit_enabled %}
             <span class="badge" style="background: rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.25); color:#7dd3fc; margin-left: 4px;">每日每人 {{ group.free_small_daily_limit }} 张</span>
             {% endif %}
+            <span class="badge" style="background: rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.18); color:#c4b5fd; margin-left: 4px;">{{ group.default_image_format_policy_label }}</span>
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
               {% for endpoint in group.default_allowed_endpoints_list %}
               <span class="badge" style="background: rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.18); color:#93c5fd;">{{ endpoint_choices.get(endpoint, endpoint) }}</span>

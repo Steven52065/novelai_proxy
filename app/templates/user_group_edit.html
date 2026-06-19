@@ -106,6 +106,15 @@
           </label>
         </div>
 
+        <label>
+          默认图片输出格式
+          <select name="default_image_format_policy">
+            {% for choice in image_format_policy_choices %}
+            <option value="{{ choice.value }}" {{ "selected" if group.default_image_format_policy == choice.value else "" }}>{{ choice.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
         <div>
           <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
@@ -175,6 +184,10 @@
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="allowed_upstreams">
             允许上游
+          </label>
+          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <input name="fields" type="checkbox" value="image_format_policy">
+            图片输出格式
           </label>
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="anlas_quota">
@@ -383,6 +396,7 @@
         free_small_daily_limit: intValue("free_small_daily_limit"),
         default_allowed_endpoints: checkedValues("default_allowed_endpoints"),
         default_allowed_upstreams: checkedValues("default_allowed_upstreams"),
+        default_image_format_policy: form.elements["default_image_format_policy"].value,
         default_anlas_total: intValue("default_anlas_total"),
         default_reset_period: form.elements["default_reset_period"].value,
         default_reset_day: intValue("default_reset_day"),
