@@ -5,6 +5,7 @@ import json
 
 import pytest
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
+from novelai_python.credential import ApiCredential, JwtCredential
 
 from app.upstream import UpstreamClient
 
@@ -51,6 +52,20 @@ def _client_with_response(monkeypatch, response: FakeResponse) -> tuple[Upstream
     session = RecordingSession(response)
     monkeypatch.setattr(client, "_credential", lambda: FakeCredential(session))
     return client, session
+
+
+def test_upstream_uses_api_credential_for_pst_token():
+    credential = UpstreamClient("pst-secret-token")._credential()
+
+    assert isinstance(credential, ApiCredential)
+    assert credential.api_token.get_secret_value() == "pst-secret-token"
+
+
+def test_upstream_uses_jwt_credential_for_jwt_token():
+    credential = UpstreamClient("eyJhbGciOiJIUzI1NiJ9.token.signature")._credential()
+
+    assert isinstance(credential, JwtCredential)
+    assert credential.jwt_token.get_secret_value() == "eyJhbGciOiJIUzI1NiJ9.token.signature"
 
 
 @pytest.mark.parametrize(

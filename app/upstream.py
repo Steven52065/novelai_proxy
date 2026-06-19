@@ -6,7 +6,7 @@ import zipfile
 from typing import Any
 
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
-from novelai_python.credential import JwtCredential, SecretStr
+from novelai_python.credential import ApiCredential, JwtCredential, SecretStr
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from novelai_python.sdk.ai.generate_image.suggest_tags import SuggestTags
@@ -19,8 +19,11 @@ class UpstreamClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
 
-    def _credential(self) -> JwtCredential:
-        return JwtCredential(jwt_token=SecretStr(self.api_key))
+    def _credential(self) -> ApiCredential | JwtCredential:
+        token = self.api_key.strip()
+        if token.startswith("ey"):
+            return JwtCredential(jwt_token=SecretStr(token))
+        return ApiCredential(api_token=SecretStr(token))
 
     async def generate_image_zip(self, req: GenerateImageInfer) -> bytes:
         result = await req.request(session=self._credential())
