@@ -116,6 +116,8 @@ class ImageHostingService:
     def _prepare_upload_image(self, image: ImageUploadFile) -> ImageUploadFile:
         if not self.config.local_format_conversion:
             return image
+        if _image_matches_target_format(image, self.config.local_conversion_format):
+            return image
         return _convert_image(image, self.config.local_conversion_format)
 
     @staticmethod
@@ -151,6 +153,14 @@ def _convert_image(image: ImageUploadFile, target_format: str) -> ImageUploadFil
         content=output.getvalue(),
         content_type=target["content_type"],
     )
+
+
+def _image_matches_target_format(image: ImageUploadFile, target_format: str) -> bool:
+    target = CONVERSION_FORMATS[target_format]
+    if image.content_type != target["content_type"]:
+        return False
+    with Image.open(BytesIO(image.content)) as source:
+        return source.format == target["pillow_format"]
 
 
 def _prepare_pillow_image(image: Image.Image, target_format: str) -> Image.Image:

@@ -5,6 +5,7 @@ import zipfile
 from io import BytesIO
 
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 from app.config import CatboxConfig, ImageHostingConfig
 from app.image_hosts import ImageHostingService, ImageUploadFile
@@ -55,6 +56,39 @@ def test_image_host_upload_converts_image_locally_when_enabled():
         assert zip_file.namelist() == ["image.png"]
 
 
+def test_image_host_upload_skips_local_conversion_when_format_already_matches():
+    image_bytes = _png_bytes_with_metadata()
+    client = RecordingImageHostClient()
+    service = ImageHostingService(
+        ImageHostingConfig(
+            enabled=True,
+            local_format_conversion=True,
+            local_conversion_format="png",
+            catbox=CatboxConfig(userhash="test-userhash"),
+        )
+    )
+    service.client = client
+
+    uploads = asyncio.run(service.upload_zip_images(zip_payload=_image_zip("image.png", image_bytes), request_id="same-format-request"))
+
+    assert client.uploaded_images == [
+        ImageUploadFile(
+            filename="image.png",
+            content=image_bytes,
+            content_type="image/png",
+        )
+    ]
+    assert uploads == [
+        {
+            "provider": "catbox",
+            "url": "https://files.catbox.moe/image.png",
+            "filename": "image.png",
+            "bytes": len(image_bytes),
+            "index": 1,
+        }
+    ]
+
+
 def test_image_host_upload_keeps_original_image_format_by_default():
     image_bytes = _png_bytes()
     client = RecordingImageHostClient()
@@ -80,6 +114,14 @@ def test_image_host_upload_keeps_original_image_format_by_default():
 def _png_bytes() -> bytes:
     buffer = BytesIO()
     Image.new("RGBA", (2, 2), (255, 0, 0, 128)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _png_bytes_with_metadata() -> bytes:
+    buffer = BytesIO()
+    metadata = PngInfo()
+    metadata.add_text("novelai_proxy_test_marker", "preserve-original-bytes")
+    Image.new("RGBA", (2, 2), (255, 0, 0, 128)).save(buffer, format="PNG", pnginfo=metadata)
     return buffer.getvalue()
 
 
