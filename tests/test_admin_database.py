@@ -158,6 +158,161 @@ def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, mo
         assert "old-rejected-log" not in remaining_ids
         assert {"old-success-log", "recent-rejected-log"} <= remaining_ids
 
+
+def test_admin_database_archives_old_payloads_and_keeps_recent_hot(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    from app.timezones import DISPLAY_TIMEZONE
+
+    now = datetime.now(timezone.utc)
+    cutoff_date = (now.astimezone(DISPLAY_TIMEZONE) - timedelta(days=7)).date()
+    cutoff_local = datetime.combine(cutoff_date, datetime.min.time(), tzinfo=DISPLAY_TIMEZONE)
+    old_time = (cutoff_local - timedelta(seconds=1)).astimezone(timezone.utc).isoformat()
+    boundary_time = cutoff_local.isoformat()
+    recent_time = now.isoformat()
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-archive-user", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        for request_id, payload, created_at in (
+            ("archive-old", '{"input":"old","parameters":{"steps":1}}', old_time),
+            ("archive-boundary", '{"input":"boundary","parameters":{"steps":1}}', boundary_time),
+            ("archive-recent", '{"input":"recent","parameters":{"steps":1}}', recent_time),
+        ):
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (request_id, user_id, "generate", 0, "success", "INFO", payload, created_at),
+            )
+
+        archive = client.post(
+            "/admin/api/database/archive-payloads",
+            auth=("admin", "admin123"),
+            json={"hot_days": 7, "max_rows": 100},
+        )
+        assert archive.status_code == 200
+        assert archive.json()["archived_payloads"] == 1
+
+        rows = {
+            row["request_id"]: row
+            for row in app.state.db.query_all(
+                "SELECT request_id, request_payload FROM usage_logs WHERE request_id LIKE 'archive-%'"
+            )
+        }
+        assert rows["archive-old"]["request_payload"] is None
+        assert rows["archive-boundary"]["request_payload"] == '{"input":"boundary","parameters":{"steps":1}}'
+        assert rows["archive-recent"]["request_payload"] == '{"input":"recent","parameters":{"steps":1}}'
+
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        archived_log = next(row for row in logs if row["request_id"] == "archive-old")
+        assert archived_log["request_payload"] is None
+        assert archived_log["has_request_payload"] is True
+        assert archived_log["payload_archived"] is True
+        assert archived_log["request_payload_bytes"] > 0
+
+        payload = client.get(
+            f"/admin/api/logs/by-id/{archived_log['id']}/payload",
+            auth=("admin", "admin123"),
+        )
+        assert payload.status_code == 200
+        assert payload.json()["request_payload"]["input"] == "old"
+
+        stats = client.get("/admin/api/database/stats", auth=("admin", "admin123")).json()
+        assert stats["payload_archives"]["payload_count"] == 1
+        assert stats["payload_archives"]["archive_count"] == 1
+        assert stats["payload_archives"]["candidate_count"] == 0
+
+
+def test_admin_database_archive_splits_by_part_limits(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-archive-parts", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        for index in range(3):
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"archive-part-{index}", user_id, "generate", 0, "success", "INFO", f'{{"index":{index}}}', "2026-05-10T00:00:00+00:00"),
+            )
+
+        result = app.state.payload_archive_service.archive_due_payloads(
+            now=datetime(2026, 5, 22, 12, tzinfo=timezone.utc),
+            hot_days=7,
+            max_payloads_per_part=2,
+        )
+        assert result["archived_payloads"] == 3
+        assert result["archived_parts"] == 2
+
+        parts = app.state.db.query_all(
+            "SELECT archive_date, part_number, payload_count FROM usage_log_payload_archives ORDER BY part_number"
+        )
+        assert [row["payload_count"] for row in parts] == [2, 1]
+        assert {row["archive_date"] for row in parts} == {"2026-05-10"}
+
+
+def test_admin_database_cleanup_compacts_archived_payloads(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-archive-compact", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        for request_id, status in (("compact-delete", "failed"), ("compact-keep", "success")):
+            app.state.db.execute(
+                """
+                INSERT INTO usage_logs (
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (request_id, user_id, "generate", 0, status, "INFO", f'{{"request_id":"{request_id}"}}', "2026-05-10T00:00:00+00:00"),
+            )
+        app.state.payload_archive_service.archive_due_payloads(
+            now=datetime(2026, 5, 22, 12, tzinfo=timezone.utc),
+            hot_days=7,
+        )
+        keep_log = app.state.db.query_one("SELECT id FROM usage_logs WHERE request_id = ?", ("compact-keep",))
+        delete_log = app.state.db.query_one("SELECT id FROM usage_logs WHERE request_id = ?", ("compact-delete",))
+        archive_id = app.state.db.query_one(
+            "SELECT archive_id FROM usage_log_payload_archive_refs WHERE log_id = ?",
+            (delete_log["id"],),
+        )["archive_id"]
+
+        cleanup = client.post(
+            "/admin/api/database/cleanup-logs",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 7, "statuses": ["failed"]},
+        )
+        assert cleanup.status_code == 200
+        assert cleanup.json()["deleted_logs"] == 1
+        archive = app.state.db.query_one(
+            "SELECT payload_count FROM usage_log_payload_archives WHERE id = ?",
+            (archive_id,),
+        )
+        assert archive["payload_count"] == 1
+        assert app.state.payload_archive_service.get_payload_dict(keep_log["id"])["request_id"] == "compact-keep"
+        assert app.state.db.query_one("SELECT id FROM usage_logs WHERE id = ?", (delete_log["id"],)) is None
+
 def test_admin_database_page_and_vacuum(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -202,7 +357,13 @@ def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_pa
         row["name"]
         for row in db.query_all("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
-    assert {"user_groups", "group_rate_limit_rules", "discord_user_links"} <= tables
+    assert {
+        "user_groups",
+        "group_rate_limit_rules",
+        "discord_user_links",
+        "usage_log_payload_archives",
+        "usage_log_payload_archive_refs",
+    } <= tables
 
     user_columns = {row["name"] for row in db.query_all("PRAGMA table_info(users)")}
     assert "group_id" in user_columns
@@ -230,6 +391,10 @@ def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_pa
     assert "idx_users_group_id" in indexes
     assert "idx_group_rate_limit_rules_group_id" in indexes
     assert {"idx_usage_created_at", "idx_usage_action_created", "idx_usage_status_created"} <= indexes
+    assert "idx_usage_payload_archive_refs_archive" in {
+        row["name"]
+        for row in db.query_all("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
     db.close()
 
 

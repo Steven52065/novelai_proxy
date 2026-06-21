@@ -285,7 +285,7 @@
                 <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
                 <span>详情</span>
               </button>
-              {% if log.request_payload %}
+              {% if log.has_request_payload %}
               <button class="secondary btn-replay-log" data-log-id="{{ log.id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
                 <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
                 <span>重放</span>
@@ -313,7 +313,7 @@
                 {% endif %}
 
                 <!-- Raw JSON payload store hidden -->
-                <script type="application/json" id="raw-payload-log-{{ log.id }}">{{ log.request_payload | tojson }}</script>
+                <script type="application/json" id="raw-payload-log-{{ log.id }}" data-has-payload="{{ 'true' if log.has_request_payload else 'false' }}" data-payload-archived="{{ 'true' if log.payload_archived else 'false' }}">{{ log.request_payload | tojson }}</script>
 
                 <div>
                   <div class="payload-toolbar">
@@ -1211,20 +1211,39 @@
   }
 
   // Lazily parse and render a log's payload the first time its detail panel opens
-  function renderPayload(logId) {
+  async function ensurePayloadText(logId) {
+    const rawJsonEl = document.getElementById(`raw-payload-log-${logId}`);
+    if (!rawJsonEl) {
+      throw new Error("找不到原始数据容器。");
+    }
+    const current = rawJsonEl.textContent?.trim();
+    if (current && current !== "null") {
+      return rawJsonEl.textContent;
+    }
+    if (rawJsonEl.dataset.hasPayload !== "true") {
+      throw new Error("该日志没有可用的请求 Payload。");
+    }
+    const response = await fetch(`/admin/api/logs/by-id/${encodeURIComponent(logId)}/payload`, {
+      headers: {"Accept": "application/json"},
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.message || body.detail?.message || `Payload 加载失败：HTTP ${response.status}`);
+    }
+    rawJsonEl.textContent = body.request_payload_text || JSON.stringify(body.request_payload ?? null);
+    rawJsonEl.dataset.payloadArchived = body.payload_archived ? "true" : "false";
+    return rawJsonEl.textContent;
+  }
+
+  async function renderPayload(logId) {
     const prettyContainer = document.getElementById(`pretty-payload-log-${logId}`);
     if (!prettyContainer || prettyContainer.getAttribute("data-loaded") === "true") {
       return;
     }
 
     try {
-      const rawJsonEl = document.getElementById(`raw-payload-log-${logId}`);
-      if (!rawJsonEl) {
-        prettyContainer.textContent = "解析失败：找不到原始数据容器。";
-        return;
-      }
-
-      const rawObj = JSON.parse(rawJsonEl.textContent);
+      const payloadText = await ensurePayloadText(logId);
+      const rawObj = JSON.parse(payloadText);
       const processedObj = truncateBase64(rawObj);
 
       // Output styled HTML inside the pre block
@@ -1263,11 +1282,10 @@
 
   async function copyRawPayload(btn) {
     const logId = btn.dataset.logId;
-    const rawJsonEl = document.getElementById(`raw-payload-log-${logId}`);
-    if (!rawJsonEl) return;
 
     try {
-      await navigator.clipboard.writeText(rawJsonEl.textContent);
+      const payloadText = await ensurePayloadText(logId);
+      await navigator.clipboard.writeText(payloadText);
 
       const labelSpan = btn.querySelector('span');
       const icon = btn.querySelector('i');
@@ -1413,7 +1431,7 @@
     const finalCost = (log.final_anlas_cost === null || log.final_anlas_cost === undefined) ? "-" : log.final_anlas_cost;
     const totalDuration = renderDuration(log.total_ms_display, log.total_ms);
     const upstreamDuration = renderDuration(log.upstream_ms_display, log.upstream_ms);
-    const replayCell = log.request_payload
+    const replayCell = log.has_request_payload
       ? `<button class="secondary btn-replay-log" data-log-id="${escapeAttr(logId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
       : `<span class="muted" style="font-size: 12px;">不可重放</span>`;
     const errorHtml = log.error_message
@@ -1458,7 +1476,7 @@
               <div class="log-details-content">
                 <div id="replay-result-log-${escapeAttr(logId)}" class="replay-result" hidden></div>
                 ${errorHtml}
-                <script type="application/json" id="raw-payload-log-${escapeAttr(logId)}">${escapeScriptJson(log.request_payload)}<\/script>
+                <script type="application/json" id="raw-payload-log-${escapeAttr(logId)}" data-has-payload="${log.has_request_payload ? "true" : "false"}" data-payload-archived="${log.payload_archived ? "true" : "false"}">${escapeScriptJson(log.request_payload)}<\/script>
                 <div>
                   <div class="payload-toolbar">
                     <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">

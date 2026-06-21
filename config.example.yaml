@@ -97,6 +97,18 @@ database:
   # 运行数据库路径。默认会在项目根目录生成 novelai_proxy.db。
   # 该文件以及对应的 .db-shm / .db-wal 已被忽略，不要提交。
   path: novelai_proxy.db
+  # usage_logs.request_payload 归档配置。
+  # 默认关闭自动归档；管理后台的手动归档按钮始终可用。
+  payload_archive:
+    enabled: false
+    # 保留最近多少天的热数据。归档按 UTC+8 自然日保守计算，不处理当天或边界日部分数据。
+    hot_days: 7
+    compression: zlib
+    compression_level: 6
+    max_payloads_per_part: 1000
+    max_raw_bytes_per_part: 33554432
+    run_interval_hours: 24
+    max_rows_per_run: 10000
 
 # 免费小图每日数量限制配置。
 free_small_daily_limit:

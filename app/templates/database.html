@@ -43,6 +43,13 @@
     </span>
     <strong>{{ stats.usage_logs.payload_bytes | filesizeformat }}</strong>
   </div>
+  <div>
+    <span>
+      <i data-lucide="package-check" style="width: 16px; height: 16px; stroke: #14b8a6;"></i>
+      Payload 归档
+    </span>
+    <strong style="font-size: 28px;">{{ stats.payload_archives.compressed_display }}</strong>
+  </div>
 </section>
 
 <section class="panel">
@@ -74,7 +81,17 @@
         <tr>
           <td>含 Payload 的日志</td>
           <td class="mono">{{ stats.usage_logs.logs_with_payload }}</td>
-          <td class="muted">这些记录保留了请求参数，图片 base64 会让数据库快速膨胀。</td>
+          <td class="muted">这些记录在热字段中保留了请求参数，图片 base64 会让数据库快速膨胀。</td>
+        </tr>
+        <tr>
+          <td>归档 Payload</td>
+          <td class="mono">{{ stats.payload_archives.payload_count }} / {{ stats.payload_archives.archive_count }} 块</td>
+          <td class="muted">原始 {{ stats.payload_archives.raw_display }}，压缩后 {{ stats.payload_archives.compressed_display }}，压缩率 {{ stats.payload_archives.compression_ratio_display }}。</td>
+        </tr>
+        <tr>
+          <td>可归档候选</td>
+          <td class="mono">{{ stats.payload_archives.candidate_count }}</td>
+          <td class="muted">按当前热数据窗口 {{ stats.payload_archives.hot_days }} 天计算，自动归档：{{ "已启用" if stats.payload_archives.enabled else "未启用" }}。</td>
         </tr>
         <tr>
           <td>状态分布</td>
@@ -94,6 +111,32 @@
 </section>
 
 <section class="layout-grid">
+  <div class="panel">
+    <div class="section-head">
+      <div>
+        <h2>
+          <i data-lucide="archive" style="width: 18px; height: 18px; stroke: #14b8a6;"></i>
+          归档旧 Payload
+        </h2>
+        <p class="muted" style="margin-top: 4px;">按 UTC+8 自然日压缩旧请求参数，保留日志详情和重放能力。</p>
+      </div>
+    </div>
+    <form method="post" action="/admin/database/archive-payloads" class="form-grid" onsubmit="return confirm('确认按当前条件归档旧 Payload？归档后仍可查看和重放，但需要 VACUUM 才会释放文件空间。')">
+      <label>
+        热数据保留天数
+        <input name="hot_days" type="number" min="0" max="3650" value="{{ stats.payload_archives.hot_days }}">
+      </label>
+      <label>
+        本次最多处理行数
+        <input name="max_rows" type="number" min="1" max="1000000" value="10000">
+      </label>
+      <button type="submit">
+        <i data-lucide="archive" style="width: 16px; height: 16px;"></i>
+        立即归档
+      </button>
+    </form>
+  </div>
+
   <div class="panel">
     <div class="section-head">
       <div>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -135,6 +136,57 @@ def test_admin_replay_by_log_id_uses_exact_retry_attempt(tmp_path: Path, monkeyp
         assert body["source_request_id"] == "same-request"
         assert body["source_attempt_number"] == 1
         assert fake_upstream.last_post_binary_payload["input"] == "second attempt"
+
+
+def test_admin_replay_by_log_id_reads_archived_payload(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "replay-archived-payload", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, model, width, height, steps, n_samples,
+                estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "archived-replay-source",
+                user_id,
+                "generate",
+                "nai-diffusion-3",
+                832,
+                1216,
+                23,
+                1,
+                0,
+                "success",
+                "INFO",
+                "default",
+                '{"input":"archived replay","model":"nai-diffusion-3","parameters":{}}',
+                "2026-05-10T00:00:00+00:00",
+            ),
+        )
+        app.state.payload_archive_service.archive_due_payloads(
+            now=datetime(2026, 5, 22, 12, tzinfo=timezone.utc),
+            hot_days=7,
+        )
+        source = app.state.db.query_one("SELECT id, request_payload FROM usage_logs WHERE request_id = ?", ("archived-replay-source",))
+        assert source["request_payload"] is None
+
+        replay = client.post(f"/admin/api/logs/by-id/{source['id']}/replay", auth=("admin", "admin123"))
+
+        assert replay.status_code == 200
+        assert fake_upstream.last_post_binary_payload["input"] == "archived replay"
 
 
 def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch):

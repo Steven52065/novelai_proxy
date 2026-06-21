@@ -14,6 +14,7 @@ from novelai_python._exceptions import APIError
 
 from ..logging_utils import mark_request_total_duration
 from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
+from ..payload_archive import PayloadArchiveError, PayloadArchiveService, PayloadNotFoundError
 from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..queue_tiers import TIER_REPLAY
 from ..templating import templates
@@ -101,6 +102,28 @@ async def replay_log_by_id(log_id: int, request: Request):
     return await _replay_log_source(source, request)
 
 
+@api_router.get("/logs/by-id/{log_id}/payload", dependencies=[Depends(require_admin_or_session)])
+async def log_payload_by_id(log_id: int, request: Request):
+    payload_archive: PayloadArchiveService = request.app.state.payload_archive_service
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
+    source = usage_logs.get_by_id(log_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail={"message": "Log not found"})
+    try:
+        payload_text = payload_archive.get_payload_text(log_id)
+    except PayloadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"message": str(exc)}) from exc
+    except PayloadArchiveError as exc:
+        raise HTTPException(status_code=500, detail={"message": str(exc)}) from exc
+    return {
+        "ok": True,
+        "log_id": log_id,
+        "payload_archived": bool(source["payload_archived"]),
+        "request_payload": json_or_none(payload_text),
+        "request_payload_text": payload_text,
+    }
+
+
 @api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])
 async def replay_log_request(request_id: str, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
@@ -112,8 +135,14 @@ async def replay_log_request(request_id: str, request: Request):
 
 async def _replay_log_source(source, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
-    request_payload = json_or_none(source["request_payload"])
-    if not isinstance(request_payload, dict):
+    payload_archive: PayloadArchiveService = request.app.state.payload_archive_service
+    try:
+        request_payload = payload_archive.get_payload_dict(int(source["id"]))
+    except PayloadNotFoundError as exc:
+        raise HTTPException(status_code=400, detail={"message": "This log has no replayable request payload"}) from exc
+    except PayloadArchiveError as exc:
+        raise HTTPException(status_code=502, detail={"message": str(exc)}) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail={"message": "This log has no replayable request payload"})
 
     endpoint = replay_endpoint_for(str(source["action"]), request_payload)

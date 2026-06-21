@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..database import Database
+from ..payload_archive import PayloadArchiveService
 from ..templating import templates
 from .auth import require_admin, require_admin_page_session
 from .common import format_bytes, format_display_time, row_to_dict
@@ -29,6 +30,11 @@ class ClearPayloadsRequest(BaseModel):
     clear_image_urls: bool = False
 
 
+class ArchivePayloadsRequest(BaseModel):
+    hot_days: int | None = Field(default=None, ge=0, le=3650)
+    max_rows: int | None = Field(default=None, ge=1, le=1_000_000)
+
+
 @api_router.get("/database/stats", dependencies=[Depends(require_admin)])
 async def database_stats(request: Request):
     return _database_stats(request)
@@ -48,6 +54,11 @@ async def clear_payloads(payload: ClearPayloadsRequest, request: Request):
         clear_output_files=payload.clear_output_files,
         clear_image_urls=payload.clear_image_urls,
     )
+
+
+@api_router.post("/database/archive-payloads", dependencies=[Depends(require_admin)])
+async def archive_payloads(payload: ArchivePayloadsRequest, request: Request):
+    return _archive_payloads(request, hot_days=payload.hot_days, max_rows=payload.max_rows)
 
 
 @api_router.post("/database/vacuum", dependencies=[Depends(require_admin)])
@@ -95,6 +106,19 @@ async def clear_payloads_form(
         clear_image_urls=clear_image_urls == "on",
     )
     return RedirectResponse(f"/admin/database?message=已清空 {result['updated_logs']} 条日志的大字段", status_code=303)
+
+
+@web_router.post("/database/archive-payloads")
+async def archive_payloads_form(
+    request: Request,
+    hot_days: int | None = Form(None),
+    max_rows: int | None = Form(None),
+):
+    result = _archive_payloads(request, hot_days=hot_days, max_rows=max_rows)
+    return RedirectResponse(
+        f"/admin/database?message=已归档 {result['archived_payloads']} 条 Payload，生成 {result['archived_parts']} 个压缩块",
+        status_code=303,
+    )
 
 
 @web_router.post("/database/vacuum")
@@ -154,6 +178,7 @@ def _database_stats(request: Request) -> dict:
     freelist_count = int(free[0])
     sqlite_bytes = page_count * int(page_size[0])
     reclaimable_bytes = freelist_count * int(page_size[0])
+    archive_stats = _payload_archive_stats(request)
     return {
         "database_path": str(db_path),
         "files": db_files,
@@ -172,13 +197,28 @@ def _database_stats(request: Request) -> dict:
             "image_urls_bytes": int(usage["image_urls_bytes"] or 0),
             "payload_bytes": total_payload_bytes,
         },
+        "payload_archives": archive_stats,
         "status_counts": [row_to_dict(row) for row in status_rows],
         "largest_logs": [_usage_log_size_to_dict(row) for row in largest_logs],
     }
 
 
+def _archive_payloads(request: Request, *, hot_days: int | None, max_rows: int | None) -> dict:
+    config = request.app.state.config.database.payload_archive
+    service: PayloadArchiveService = request.app.state.payload_archive_service
+    return service.archive_due_payloads(
+        hot_days=config.hot_days if hot_days is None else hot_days,
+        compression=config.compression,
+        compression_level=config.compression_level,
+        max_payloads_per_part=config.max_payloads_per_part,
+        max_raw_bytes_per_part=config.max_raw_bytes_per_part,
+        max_rows_per_run=config.max_rows_per_run if max_rows is None else max_rows,
+    )
+
+
 def _cleanup_logs(request: Request, older_than_days: int, statuses: list[str]) -> dict:
     db: Database = request.app.state.db
+    payload_archive: PayloadArchiveService = request.app.state.payload_archive_service
     cutoff = _cutoff_time(older_than_days)
     valid_statuses = _valid_statuses(statuses)
     where = ["created_at < ?"]
@@ -186,8 +226,26 @@ def _cleanup_logs(request: Request, older_than_days: int, statuses: list[str]) -
     if valid_statuses:
         where.append(f"status IN ({','.join('?' for _ in valid_statuses)})")
         params.extend(valid_statuses)
+    archive_rows = db.query_all(
+        f"""
+        SELECT DISTINCT r.archive_id
+        FROM usage_logs l
+        JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
+        WHERE {' AND '.join(where)}
+        """,
+        tuple(params),
+    )
+    archive_ids = [int(row["archive_id"]) for row in archive_rows]
     cursor = db.execute(f"DELETE FROM usage_logs WHERE {' AND '.join(where)}", tuple(params))
-    return {"ok": True, "deleted_logs": int(cursor.rowcount), "cutoff": cutoff, "statuses": valid_statuses}
+    compact_result = payload_archive.compact_archives(archive_ids)
+    return {
+        "ok": True,
+        "deleted_logs": int(cursor.rowcount),
+        "cutoff": cutoff,
+        "statuses": valid_statuses,
+        "compacted_archives": compact_result["compacted_archives"],
+        "deleted_archives": compact_result["deleted_archives"],
+    }
 
 
 def _clear_payloads(
@@ -239,6 +297,39 @@ def _vacuum_database(request: Request) -> dict:
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     after = _database_total_size(db.path)
     return {"ok": True, "before_bytes": before, "after_bytes": after, "reclaimed_bytes": max(before - after, 0)}
+
+
+def _payload_archive_stats(request: Request) -> dict:
+    db: Database = request.app.state.db
+    config = request.app.state.config.database.payload_archive
+    service: PayloadArchiveService = request.app.state.payload_archive_service
+    row = db.query_one(
+        """
+        SELECT COUNT(*) AS archive_count,
+               COALESCE(SUM(payload_count), 0) AS payload_count,
+               COALESCE(SUM(raw_bytes), 0) AS raw_bytes,
+               COALESCE(SUM(compressed_bytes), 0) AS compressed_bytes
+        FROM usage_log_payload_archives
+        """
+    )
+    archive_count = int(row["archive_count"] or 0)
+    payload_count = int(row["payload_count"] or 0)
+    raw_bytes = int(row["raw_bytes"] or 0)
+    compressed_bytes = int(row["compressed_bytes"] or 0)
+    compression_ratio = (compressed_bytes / raw_bytes) if raw_bytes else None
+    return {
+        "enabled": bool(config.enabled),
+        "hot_days": int(config.hot_days),
+        "archive_count": archive_count,
+        "payload_count": payload_count,
+        "raw_bytes": raw_bytes,
+        "compressed_bytes": compressed_bytes,
+        "raw_display": format_bytes(raw_bytes),
+        "compressed_display": format_bytes(compressed_bytes),
+        "compression_ratio": compression_ratio,
+        "compression_ratio_display": "-" if compression_ratio is None else f"{compression_ratio:.1%}",
+        "candidate_count": service.count_archive_candidates(hot_days=config.hot_days),
+    }
 
 
 def _cutoff_time(older_than_days: int) -> str:

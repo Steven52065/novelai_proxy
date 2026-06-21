@@ -77,8 +77,20 @@ class RoutingConfig(BaseModel):
     adaptive: AdaptiveRoutingConfig = Field(default_factory=AdaptiveRoutingConfig)
 
 
+class PayloadArchiveConfig(BaseModel):
+    enabled: bool = False
+    hot_days: int = Field(default=7, ge=0, le=3650)
+    compression: Literal["zlib"] = "zlib"
+    compression_level: int = Field(default=6, ge=0, le=9)
+    max_payloads_per_part: int = Field(default=1000, ge=1)
+    max_raw_bytes_per_part: int = Field(default=33554432, ge=1024)
+    run_interval_hours: float = Field(default=24, gt=0)
+    max_rows_per_run: int = Field(default=10000, ge=1)
+
+
 class DatabaseConfig(BaseModel):
     path: str = "novelai_proxy.db"
+    payload_archive: PayloadArchiveConfig = Field(default_factory=PayloadArchiveConfig)
 
 
 class LoggingConfig(BaseModel):

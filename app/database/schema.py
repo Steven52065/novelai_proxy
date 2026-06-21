@@ -133,6 +133,33 @@ CREATE INDEX IF NOT EXISTS idx_usage_status
 CREATE INDEX IF NOT EXISTS idx_usage_request_id
     ON usage_logs(request_id);
 
+CREATE TABLE IF NOT EXISTS usage_log_payload_archives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archive_date TEXT NOT NULL,
+    part_number INTEGER NOT NULL,
+    compression TEXT NOT NULL,
+    compression_level INTEGER NOT NULL,
+    payload_count INTEGER NOT NULL,
+    raw_bytes INTEGER NOT NULL,
+    compressed_bytes INTEGER NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    payload_blob BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(archive_date, part_number)
+);
+
+CREATE TABLE IF NOT EXISTS usage_log_payload_archive_refs (
+    log_id INTEGER PRIMARY KEY REFERENCES usage_logs(id) ON DELETE CASCADE,
+    archive_id INTEGER NOT NULL REFERENCES usage_log_payload_archives(id) ON DELETE CASCADE,
+    payload_key TEXT NOT NULL,
+    payload_bytes INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_payload_archives_date
+    ON usage_log_payload_archives(archive_date, part_number);
+CREATE INDEX IF NOT EXISTS idx_usage_payload_archive_refs_archive
+    ON usage_log_payload_archive_refs(archive_id);
+
 CREATE TABLE IF NOT EXISTS dashboard_hourly_stats (
     bucket_hour TEXT NOT NULL,
     upstream_id TEXT NOT NULL,
@@ -216,6 +243,14 @@ def initialize_schema(db: Any) -> None:
         db.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id)")
         db.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_group_rate_limit_rules_group_id ON group_rate_limit_rules(group_id)"
+        )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_payload_archives_date "
+            "ON usage_log_payload_archives(archive_date, part_number)"
+        )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_payload_archive_refs_archive "
+            "ON usage_log_payload_archive_refs(archive_id)"
         )
         db._clear_stored_user_api_keys()
         db._init_dashboard_hourly_triggers()

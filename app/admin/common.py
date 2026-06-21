@@ -98,6 +98,9 @@ def usage_log_to_dict(row):
     data["request_payload"] = json_or_none(data.get("request_payload"))
     data["output_files"] = json_or_empty_list(data.get("output_files"))
     data["image_urls"] = json_or_empty_list(data.get("image_urls"))
+    data["has_request_payload"] = bool(data.get("has_request_payload"))
+    data["payload_archived"] = bool(data.get("payload_archived"))
+    data["request_payload_bytes"] = int(data.get("request_payload_bytes") or 0)
     return data
 
 

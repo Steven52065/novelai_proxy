@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 from contextlib import asynccontextmanager
 from os import environ
 from pathlib import Path
@@ -29,6 +30,7 @@ from .domain_errors import DomainError
 from .free_small_daily_limit import FreeSmallDailyLimitManager
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
+from .payload_archive import PayloadArchiveService
 from .proxy.routes import router as proxy_router
 from .proxy.service import ProxyRequestService
 from .queue_manager import RoutingProxyQueue, UpstreamQueueTarget
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI):
         reset_hour_utc8=config.free_small_daily_limit.reset_hour_utc8,
     )
     usage_logs = UsageLogRepository(db, on_change=dashboard_events.notify_nowait)
+    payload_archive_service = PayloadArchiveService(db)
     upstream_clients = _build_upstream_clients(config)
     default_upstream_id = next(iter(upstream_clients))
     upstream = upstream_clients[default_upstream_id]
@@ -93,6 +96,7 @@ async def lifespan(app: FastAPI):
     app.state.quota_manager = quota_manager
     app.state.free_small_daily_limit_manager = free_small_daily_limit_manager
     app.state.usage_logs = usage_logs
+    app.state.payload_archive_service = payload_archive_service
     app.state.rate_limiter = RateLimiter(db)
     app.state.upstream = upstream
     app.state.upstream_clients = upstream_clients
@@ -112,9 +116,18 @@ async def lifespan(app: FastAPI):
     )
 
     proxy_queue.start()
+    payload_archive_task = None
+    if config.database.payload_archive.enabled:
+        payload_archive_task = asyncio.create_task(_payload_archive_loop(payload_archive_service, config.database.payload_archive))
     try:
         yield
     finally:
+        if payload_archive_task is not None:
+            payload_archive_task.cancel()
+            try:
+                await payload_archive_task
+            except asyncio.CancelledError:
+                pass
         await proxy_queue.stop()
         db.close()
 
@@ -127,6 +140,32 @@ def _build_upstream_clients(config) -> dict[str, UpstreamClient]:
             for upstream in enabled_upstreams
         }
     return {"default": UpstreamClient(config.novelai.api_key)}
+
+
+async def _payload_archive_loop(service: PayloadArchiveService, config) -> None:
+    interval_seconds = max(float(config.run_interval_hours), 0.01) * 3600
+    while True:
+        try:
+            result = await asyncio.to_thread(
+                service.archive_due_payloads,
+                hot_days=config.hot_days,
+                compression=config.compression,
+                compression_level=config.compression_level,
+                max_payloads_per_part=config.max_payloads_per_part,
+                max_raw_bytes_per_part=config.max_raw_bytes_per_part,
+                max_rows_per_run=config.max_rows_per_run,
+            )
+            if result["archived_payloads"]:
+                logger.info(
+                    "payload archive completed payloads=%s parts=%s raw_bytes=%s compressed_bytes=%s",
+                    result["archived_payloads"],
+                    result["archived_parts"],
+                    result["raw_bytes"],
+                    result["compressed_bytes"],
+                )
+        except Exception:
+            logger.exception("payload archive task failed")
+        await asyncio.sleep(interval_seconds)
 
 
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)

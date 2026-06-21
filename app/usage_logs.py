@@ -12,6 +12,22 @@ from .logging_utils import json_dumps
 USAGE_LOG_STATUSES = ("queued", "running", "success", "failed", "rejected")
 
 
+USAGE_LOG_SELECT_COLUMNS = """
+    l.id, l.request_id, l.attempt_number, l.user_id, l.action, l.model, l.width, l.height,
+    l.steps, l.n_samples, l.estimated_anlas_cost, l.final_anlas_cost, l.queued_ms,
+    l.upstream_ms, l.total_ms, l.status, l.error_code, l.error_message, l.log_level,
+    l.upstream_id,
+    CASE WHEN r.log_id IS NULL THEN l.request_payload ELSE NULL END AS request_payload,
+    l.output_files, l.image_urls, l.is_retry_success, l.created_at, l.completed_at,
+    CASE
+        WHEN (l.request_payload IS NOT NULL AND l.request_payload != '') OR r.log_id IS NOT NULL THEN 1
+        ELSE 0
+    END AS has_request_payload,
+    CASE WHEN r.log_id IS NOT NULL THEN 1 ELSE 0 END AS payload_archived,
+    COALESCE(LENGTH(l.request_payload), r.payload_bytes, 0) AS request_payload_bytes
+"""
+
+
 @dataclass(frozen=True)
 class UsageLogCreate:
     request_id: str
@@ -258,10 +274,11 @@ class UsageLogRepository:
 
     def get_by_request_id(self, request_id: str) -> Row | None:
         return self.db.query_one(
-            """
-            SELECT *
-            FROM usage_logs
-            WHERE request_id = ?
+            f"""
+            SELECT {USAGE_LOG_SELECT_COLUMNS}
+            FROM usage_logs l
+            LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
+            WHERE l.request_id = ?
             ORDER BY attempt_number DESC, id DESC
             """,
             (request_id,),
@@ -269,10 +286,11 @@ class UsageLogRepository:
 
     def get_by_id(self, log_id: int) -> Row | None:
         return self.db.query_one(
-            """
-            SELECT *
-            FROM usage_logs
-            WHERE id = ?
+            f"""
+            SELECT {USAGE_LOG_SELECT_COLUMNS}
+            FROM usage_logs l
+            LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
+            WHERE l.id = ?
             """,
             (log_id,),
         )
@@ -324,9 +342,10 @@ class UsageLogRepository:
         params.append(fetch_limit)
         return self.db.query_all(
             f"""
-            SELECT l.*, u.name AS user_name
+            SELECT {USAGE_LOG_SELECT_COLUMNS}, u.name AS user_name
             FROM usage_logs l
             JOIN users u ON u.id = l.user_id
+            LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
             {where_sql}
             ORDER BY l.id DESC
             LIMIT ?
