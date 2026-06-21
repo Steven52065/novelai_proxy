@@ -88,8 +88,17 @@ class PayloadArchiveConfig(BaseModel):
     max_rows_per_run: int = Field(default=10000, ge=1)
 
 
+class HotPayloadConfig(BaseModel):
+    enabled: bool = False
+    compression: Literal["zlib"] = "zlib"
+    compression_level: int = Field(default=6, ge=0, le=9)
+    min_bytes: int = Field(default=4096, ge=0)
+    min_savings_ratio: float = Field(default=0.10, ge=0, le=1)
+
+
 class DatabaseConfig(BaseModel):
     path: str = "novelai_proxy.db"
+    hot_payload: HotPayloadConfig = Field(default_factory=HotPayloadConfig)
     payload_archive: PayloadArchiveConfig = Field(default_factory=PayloadArchiveConfig)
 
 

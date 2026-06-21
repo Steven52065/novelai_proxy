@@ -28,6 +28,11 @@ def test_self_service_config_defaults_to_disabled():
     assert config.free_small_daily_limit.reset_hour_utc8 == 0
     assert config.image_hosting.local_format_conversion is False
     assert config.image_hosting.local_conversion_format == "webp"
+    assert config.database.hot_payload.enabled is False
+    assert config.database.hot_payload.compression == "zlib"
+    assert config.database.hot_payload.compression_level == 6
+    assert config.database.hot_payload.min_bytes == 4096
+    assert config.database.hot_payload.min_savings_ratio == 0.10
 
 
 def test_free_small_daily_limit_reset_hour_validation():

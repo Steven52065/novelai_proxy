@@ -97,6 +97,15 @@ database:
   # 运行数据库路径。默认会在项目根目录生成 novelai_proxy.db。
   # 该文件以及对应的 .db-shm / .db-wal 已被忽略，不要提交。
   path: novelai_proxy.db
+  # 新写入 usage_logs.request_payload 的热存储压缩配置。
+  # 默认关闭；开启后会先把 JSON minify，达到阈值且 zlib 至少节省指定比例时存为 BLOB。
+  # 冷归档 payload_archive 仍是长期存储压缩机制。
+  hot_payload:
+    enabled: false
+    compression: zlib
+    compression_level: 6
+    min_bytes: 4096
+    min_savings_ratio: 0.10
   # usage_logs.request_payload 归档配置。
   # 默认关闭自动归档；管理后台的手动归档按钮始终可用。
   payload_archive:

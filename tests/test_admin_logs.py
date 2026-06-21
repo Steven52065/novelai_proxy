@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.novelai_endpoints import GENERATE_IMAGE_ENDPOINT
+from app.usage_logs import UsageLogCreate
 from helpers import PAYLOAD, FakeUpstream, write_test_config
 
 
@@ -187,6 +188,59 @@ def test_admin_replay_by_log_id_reads_archived_payload(tmp_path: Path, monkeypat
 
         assert replay.status_code == 200
         assert fake_upstream.last_post_binary_payload["input"] == "archived replay"
+
+
+def test_admin_logs_payload_detail_and_replay_read_hot_compressed_payload(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(write_test_config(tmp_path, hot_payload_enabled=True, hot_payload_min_bytes=100)),
+    )
+    from app.main import app
+
+    hot_payload = PAYLOAD | {"input": "hot compressed prompt " * 500}
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "hot-compressed-replay", "tier": "normal", "anlas_total": 100},
+        )
+        user_id = create_resp.json()["user_id"]
+        app.state.usage_logs.insert_queued(
+            UsageLogCreate(
+                request_id="hot-compressed-source",
+                user_id=user_id,
+                action="generate",
+                model="nai-diffusion-3",
+                width=832,
+                height=1216,
+                steps=23,
+                n_samples=1,
+                estimated_anlas_cost=0,
+                request_payload=hot_payload,
+            )
+        )
+        source = app.state.db.query_one("SELECT * FROM usage_logs WHERE request_id = ?", ("hot-compressed-source",))
+        assert source["request_payload"] is None
+        assert source["request_payload_encoding"] == "zlib"
+
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        log = next(row for row in logs if row["request_id"] == "hot-compressed-source")
+        assert log["request_payload"] is None
+        assert log["has_request_payload"] is True
+        assert log["payload_archived"] is False
+        assert log["request_payload_bytes"] == source["request_payload_bytes"]
+
+        payload = client.get(f"/admin/api/logs/by-id/{source['id']}/payload", auth=("admin", "admin123"))
+        assert payload.status_code == 200
+        assert payload.json()["request_payload"] == hot_payload
+
+        replay = client.post(f"/admin/api/logs/by-id/{source['id']}/replay", auth=("admin", "admin123"))
+
+        assert replay.status_code == 200
+        assert fake_upstream.last_post_binary_url == GENERATE_IMAGE_ENDPOINT
+        assert fake_upstream.last_post_binary_payload == hot_payload
 
 
 def test_admin_logs_display_created_at_in_utc_plus_8(tmp_path: Path, monkeypatch):

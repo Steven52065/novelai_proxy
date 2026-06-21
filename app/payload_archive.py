@@ -99,6 +99,10 @@ class PayloadArchiveService:
         row = self.db.query_one(
             """
             SELECT l.request_payload,
+                   l.request_payload_encoding,
+                   l.request_payload_blob,
+                   l.request_payload_bytes,
+                   l.request_payload_compressed_bytes,
                    r.payload_key,
                    a.id AS archive_id,
                    a.compression,
@@ -113,8 +117,9 @@ class PayloadArchiveService:
         )
         if row is None:
             raise PayloadNotFoundError("Log not found")
-        if row["request_payload"]:
-            return str(row["request_payload"])
+        hot_payload = self._decode_hot_payload(row)
+        if hot_payload is not None:
+            return hot_payload
         if row["archive_id"] is None:
             raise PayloadNotFoundError("This log has no request payload")
         payloads = self._decode_archive_payloads(row)
@@ -164,8 +169,10 @@ class PayloadArchiveService:
             FROM usage_logs l
             LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
             WHERE l.created_at < ?
-              AND l.request_payload IS NOT NULL
-              AND l.request_payload != ''
+              AND (
+                  (l.request_payload IS NOT NULL AND l.request_payload != '')
+                  OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
+              )
               AND r.log_id IS NULL
             """,
             (cutoff,),
@@ -184,12 +191,15 @@ class PayloadArchiveService:
     def _load_candidates(self, cutoff: str, max_rows: int) -> list[ArchiveCandidate]:
         rows = self.db.query_all(
             """
-            SELECT l.id, l.created_at, l.request_payload
+            SELECT l.id, l.created_at, l.request_payload, l.request_payload_encoding,
+                   l.request_payload_blob, l.request_payload_bytes, l.request_payload_compressed_bytes
             FROM usage_logs l
             LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
             WHERE l.created_at < ?
-              AND l.request_payload IS NOT NULL
-              AND l.request_payload != ''
+              AND (
+                  (l.request_payload IS NOT NULL AND l.request_payload != '')
+                  OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
+              )
               AND r.log_id IS NULL
             ORDER BY l.created_at ASC, l.id ASC
             LIMIT ?
@@ -202,7 +212,9 @@ class PayloadArchiveService:
             if archive_date is None:
                 logger.warning("skip payload archive candidate with invalid created_at log_id=%s", row["id"])
                 continue
-            payload = str(row["request_payload"])
+            payload = self._decode_hot_payload(row)
+            if payload is None:
+                continue
             candidates.append(
                 ArchiveCandidate(
                     log_id=int(row["id"]),
@@ -253,12 +265,15 @@ class PayloadArchiveService:
         with self.db.transaction() as conn:
             rows = conn.execute(
                 f"""
-                SELECT l.id, l.request_payload
+                SELECT l.id, l.request_payload, l.request_payload_encoding,
+                       l.request_payload_blob, l.request_payload_bytes, l.request_payload_compressed_bytes
                 FROM usage_logs l
                 LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
                 WHERE l.id IN ({placeholders})
-                  AND l.request_payload IS NOT NULL
-                  AND l.request_payload != ''
+                  AND (
+                      (l.request_payload IS NOT NULL AND l.request_payload != '')
+                      OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
+                  )
                   AND r.log_id IS NULL
                 ORDER BY l.created_at ASC, l.id ASC
                 """,
@@ -268,8 +283,16 @@ class PayloadArchiveService:
                 return {"archive_id": 0, "payload_count": 0, "raw_bytes": 0, "compressed_bytes": 0}
 
             source_by_id = {candidate.log_id: candidate for candidate in part}
-            archive_date = source_by_id[int(rows[0]["id"])].archive_date
-            payloads = {str(row["id"]): str(row["request_payload"]) for row in rows}
+            decoded_rows: list[tuple[int, str]] = []
+            for row in rows:
+                payload = self._decode_hot_payload(row)
+                if payload is not None:
+                    decoded_rows.append((int(row["id"]), payload))
+            if not decoded_rows:
+                return {"archive_id": 0, "payload_count": 0, "raw_bytes": 0, "compressed_bytes": 0}
+
+            archive_date = source_by_id[decoded_rows[0][0]].archive_date
+            payloads = {str(log_id): payload for log_id, payload in decoded_rows}
             raw = json_dumps({"version": 1, "payloads": payloads}).encode("utf-8")
             compressed = zlib.compress(raw, settings.compression_level)
             checksum = hashlib.sha256(raw).hexdigest()
@@ -302,8 +325,8 @@ class PayloadArchiveService:
             )
             archive_id = int(cursor.lastrowid)
             ref_rows = [
-                (int(row["id"]), archive_id, str(row["id"]), len(str(row["request_payload"]).encode("utf-8")))
-                for row in rows
+                (log_id, archive_id, str(log_id), len(payload.encode("utf-8")))
+                for log_id, payload in decoded_rows
             ]
             conn.executemany(
                 """
@@ -312,10 +335,18 @@ class PayloadArchiveService:
                 """,
                 ref_rows,
             )
-            row_ids = tuple(int(row["id"]) for row in rows)
+            row_ids = tuple(log_id for log_id, _payload in decoded_rows)
             row_placeholders = ",".join("?" for _ in row_ids)
             conn.execute(
-                f"UPDATE usage_logs SET request_payload = NULL WHERE id IN ({row_placeholders})",
+                f"""
+                UPDATE usage_logs
+                SET request_payload = NULL,
+                    request_payload_encoding = 'json',
+                    request_payload_blob = NULL,
+                    request_payload_bytes = 0,
+                    request_payload_compressed_bytes = 0
+                WHERE id IN ({row_placeholders})
+                """,
                 row_ids,
             )
             return {
@@ -370,6 +401,34 @@ class PayloadArchiveService:
                 (len(kept), len(raw), len(compressed), hashlib.sha256(raw).hexdigest(), compressed, archive_id),
             )
             return {"compacted": 1, "deleted": 0, "raw_bytes": len(raw), "compressed_bytes": len(compressed)}
+
+    def _decode_hot_payload(self, row: Row) -> str | None:
+        encoding = str(row["request_payload_encoding"] or "json")
+        request_payload = row["request_payload"]
+        blob = row["request_payload_blob"]
+        has_text = request_payload is not None and str(request_payload) != ""
+        has_blob = blob is not None and len(bytes(blob)) > 0
+
+        if encoding == "json":
+            if has_text:
+                return str(request_payload)
+            if has_blob:
+                raise PayloadArchiveError("Hot payload blob is marked as json")
+            return None
+        if encoding == "zlib":
+            if has_text:
+                raise PayloadArchiveError("Hot payload has zlib encoding but text storage is populated")
+            if not has_blob:
+                return None
+            try:
+                raw = zlib.decompress(bytes(blob))
+            except zlib.error as exc:
+                raise PayloadArchiveError("Hot payload blob cannot be decompressed") from exc
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise PayloadArchiveError("Hot payload blob is not valid UTF-8") from exc
+        raise PayloadArchiveError(f"Unsupported hot payload encoding: {encoding}")
 
     def _decode_archive_payloads(self, archive: Row) -> dict[str, Any]:
         if archive["compression"] != "zlib":

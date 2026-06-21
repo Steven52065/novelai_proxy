@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.config import AppConfig
 from app.database import Database
 from app.database import utc_now_iso, validate_discord_self_service_config
+from app.usage_logs import UsageLogCreate
 from helpers import write_test_config
 
 
@@ -174,6 +175,75 @@ def test_admin_database_clear_payloads_purges_archived_payloads(tmp_path: Path, 
         assert log["has_request_payload"] is False
         assert log["payload_archived"] is False
         assert log["request_payload_bytes"] == 0
+
+
+def test_admin_database_stats_and_clear_payloads_handle_hot_compressed_payloads(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(write_test_config(tmp_path, hot_payload_enabled=True, hot_payload_min_bytes=100)),
+    )
+    from app.main import app
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    large_payload = {
+        "input": "hot database cleanup " * 600,
+        "model": "nai-diffusion-3",
+        "parameters": {"width": 512, "height": 768, "steps": 1, "n_samples": 1},
+    }
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-hot-payload-clear", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        app.state.usage_logs.insert_queued(
+            UsageLogCreate(
+                request_id="old-hot-compressed-payload",
+                user_id=user_id,
+                action="generate",
+                estimated_anlas_cost=0,
+                request_payload=large_payload,
+            )
+        )
+        app.state.db.execute(
+            "UPDATE usage_logs SET created_at = ? WHERE request_id = ?",
+            (old_time, "old-hot-compressed-payload"),
+        )
+        source = app.state.db.query_one(
+            "SELECT * FROM usage_logs WHERE request_id = ?",
+            ("old-hot-compressed-payload",),
+        )
+        assert source["request_payload_encoding"] == "zlib"
+
+        stats = client.get("/admin/api/database/stats", auth=("admin", "admin123")).json()
+        assert stats["usage_logs"]["logs_with_payload"] == 1
+        assert stats["usage_logs"]["request_payload_bytes"] == source["request_payload_bytes"]
+        assert stats["usage_logs"]["request_payload_compressed_bytes"] == source["request_payload_compressed_bytes"]
+        assert stats["largest_logs"][0]["request_payload_bytes"] == source["request_payload_bytes"]
+
+        clear_resp = client.post(
+            "/admin/api/database/clear-payloads",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 7, "min_payload_kb": 1},
+        )
+        assert clear_resp.status_code == 200
+        assert clear_resp.json()["updated_logs"] == 1
+
+        cleared = app.state.db.query_one(
+            "SELECT * FROM usage_logs WHERE request_id = ?",
+            ("old-hot-compressed-payload",),
+        )
+        assert cleared["request_payload"] is None
+        assert cleared["request_payload_encoding"] == "json"
+        assert cleared["request_payload_blob"] is None
+        assert cleared["request_payload_bytes"] == 0
+        assert cleared["request_payload_compressed_bytes"] == 0
+        after_payload = client.get(
+            f"/admin/api/logs/by-id/{cleared['id']}/payload",
+            auth=("admin", "admin123"),
+        )
+        assert after_payload.status_code == 404
 
 
 def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, monkeypatch):
@@ -614,4 +684,11 @@ def test_usage_logs_unique_constraint_migration_allows_retry_attempts(tmp_path: 
         for row in db.query_all("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'usage_logs'")
     }
     assert {"idx_usage_created_at", "idx_usage_action_created", "idx_usage_status_created"} <= indexes
+    columns = {row["name"] for row in db.query_all("PRAGMA table_info(usage_logs)")}
+    assert {
+        "request_payload_encoding",
+        "request_payload_blob",
+        "request_payload_bytes",
+        "request_payload_compressed_bytes",
+    } <= columns
     db.close()

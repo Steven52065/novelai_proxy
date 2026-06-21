@@ -18,6 +18,30 @@ api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 
 
+REQUEST_PAYLOAD_ORIGINAL_BYTES_SQL = """
+CASE
+    WHEN r.log_id IS NOT NULL THEN r.payload_bytes
+    WHEN l.request_payload_bytes > 0 THEN l.request_payload_bytes
+    WHEN l.request_payload IS NOT NULL THEN LENGTH(l.request_payload)
+    ELSE 0
+END
+"""
+REQUEST_PAYLOAD_HOT_COMPRESSED_BYTES_SQL = """
+CASE
+    WHEN l.request_payload_blob IS NOT NULL THEN LENGTH(l.request_payload_blob)
+    ELSE 0
+END
+"""
+HAS_REQUEST_PAYLOAD_SQL = """
+CASE
+    WHEN (l.request_payload IS NOT NULL AND l.request_payload != '')
+      OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
+      OR r.log_id IS NOT NULL THEN 1
+    ELSE 0
+END
+"""
+
+
 class CleanupLogsRequest(BaseModel):
     older_than_days: int = Field(default=30, ge=0, le=3650)
     statuses: list[str] = Field(default_factory=list)
@@ -137,13 +161,15 @@ def _database_stats(request: Request) -> dict:
     free = db.query_one("PRAGMA freelist_count")
     page_size = db.query_one("PRAGMA page_size")
     usage = db.query_one(
-        """
+        f"""
         SELECT COUNT(*) AS total_logs,
-               COALESCE(SUM(LENGTH(request_payload)), 0) AS request_payload_bytes,
-               COALESCE(SUM(LENGTH(output_files)), 0) AS output_files_bytes,
-               COALESCE(SUM(LENGTH(image_urls)), 0) AS image_urls_bytes,
-               SUM(CASE WHEN request_payload IS NOT NULL AND request_payload != '' THEN 1 ELSE 0 END) AS logs_with_payload
-        FROM usage_logs
+               COALESCE(SUM({REQUEST_PAYLOAD_ORIGINAL_BYTES_SQL}), 0) AS request_payload_bytes,
+               COALESCE(SUM({REQUEST_PAYLOAD_HOT_COMPRESSED_BYTES_SQL}), 0) AS request_payload_compressed_bytes,
+               COALESCE(SUM(LENGTH(l.output_files)), 0) AS output_files_bytes,
+               COALESCE(SUM(LENGTH(l.image_urls)), 0) AS image_urls_bytes,
+               COALESCE(SUM({HAS_REQUEST_PAYLOAD_SQL}), 0) AS logs_with_payload
+        FROM usage_logs l
+        LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
         """
     )
     status_rows = db.query_all(
@@ -155,13 +181,15 @@ def _database_stats(request: Request) -> dict:
         """
     )
     largest_logs = db.query_all(
-        """
+        f"""
         SELECT l.id, l.request_id, l.action, l.status, l.created_at, u.name AS user_name,
-               COALESCE(LENGTH(l.request_payload), 0) AS request_payload_bytes,
+               {REQUEST_PAYLOAD_ORIGINAL_BYTES_SQL} AS request_payload_bytes,
+               {REQUEST_PAYLOAD_HOT_COMPRESSED_BYTES_SQL} AS request_payload_compressed_bytes,
                COALESCE(LENGTH(l.output_files), 0) AS output_files_bytes,
                COALESCE(LENGTH(l.image_urls), 0) AS image_urls_bytes
         FROM usage_logs l
         JOIN users u ON u.id = l.user_id
+        LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
         ORDER BY request_payload_bytes DESC, output_files_bytes DESC, image_urls_bytes DESC
         LIMIT 10
         """
@@ -193,6 +221,8 @@ def _database_stats(request: Request) -> dict:
             "total": int(usage["total_logs"] or 0),
             "logs_with_payload": int(usage["logs_with_payload"] or 0),
             "request_payload_bytes": int(usage["request_payload_bytes"] or 0),
+            "request_payload_compressed_bytes": int(usage["request_payload_compressed_bytes"] or 0),
+            "hot_payload_compressed_bytes": int(usage["request_payload_compressed_bytes"] or 0),
             "output_files_bytes": int(usage["output_files_bytes"] or 0),
             "image_urls_bytes": int(usage["image_urls_bytes"] or 0),
             "payload_bytes": total_payload_bytes,
@@ -262,12 +292,18 @@ def _clear_payloads(
     payload_archive: PayloadArchiveService = request.app.state.payload_archive_service
     cutoff = _cutoff_time(older_than_days)
     min_payload_bytes = min_payload_kb * 1024
-    set_clause = "request_payload = NULL"
+    set_clause = (
+        "request_payload = NULL, "
+        "request_payload_encoding = 'json', "
+        "request_payload_blob = NULL, "
+        "request_payload_bytes = 0, "
+        "request_payload_compressed_bytes = 0"
+    )
     if clear_output_files:
         set_clause += ", output_files = NULL"
     if clear_image_urls:
         set_clause += ", image_urls = NULL"
-    size_terms = ["COALESCE(LENGTH(l.request_payload), r.payload_bytes, 0)"]
+    size_terms = [REQUEST_PAYLOAD_ORIGINAL_BYTES_SQL]
     if clear_output_files:
         size_terms.append("COALESCE(LENGTH(l.output_files), 0)")
     if clear_image_urls:

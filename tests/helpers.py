@@ -157,6 +157,9 @@ def write_test_config(
     upstream_interval_max_seconds: float | None = None,
     upstream_error_extra_delay_seconds: float = 0,
     upstream_execution_timeout_seconds: float = 60,
+    hot_payload_enabled: bool = False,
+    hot_payload_min_bytes: int = 4096,
+    hot_payload_min_savings_ratio: float = 0.10,
 ) -> Path:
     if upstream_interval_max_seconds is None:
         upstream_interval_max_seconds = upstream_interval_min_seconds
@@ -181,6 +184,12 @@ novelai:
   account_tier: 3
 database:
   path: "{db_path.as_posix()}"
+  hot_payload:
+    enabled: {str(hot_payload_enabled).lower()}
+    compression: zlib
+    compression_level: 6
+    min_bytes: {hot_payload_min_bytes}
+    min_savings_ratio: {hot_payload_min_savings_ratio}
 logging:
   level: DEBUG
   directory: "{(tmp_path / "logs").as_posix()}"

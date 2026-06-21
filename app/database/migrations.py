@@ -79,6 +79,10 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
             log_level TEXT NOT NULL DEFAULT 'INFO',
             upstream_id TEXT,
             request_payload TEXT,
+            request_payload_encoding TEXT NOT NULL DEFAULT 'json',
+            request_payload_blob BLOB,
+            request_payload_bytes INTEGER NOT NULL DEFAULT 0,
+            request_payload_compressed_bytes INTEGER NOT NULL DEFAULT 0,
             output_files TEXT,
             image_urls TEXT,
             is_retry_success INTEGER NOT NULL DEFAULT 0,
@@ -90,13 +94,23 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
         INSERT INTO usage_logs_new (
             id, request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
             estimated_anlas_cost, final_anlas_cost, queued_ms, upstream_ms, total_ms, status, error_code, error_message,
-            log_level, upstream_id, request_payload, output_files, image_urls, is_retry_success,
+            log_level, upstream_id, request_payload, request_payload_encoding, request_payload_blob,
+            request_payload_bytes, request_payload_compressed_bytes, output_files, image_urls, is_retry_success,
             created_at, completed_at
         )
         SELECT
             id, request_id, 0, user_id, action, model, width, height, steps, n_samples,
             estimated_anlas_cost, final_anlas_cost, queued_ms, upstream_ms, total_ms, status, error_code, error_message,
-            log_level, upstream_id, request_payload, output_files, image_urls, is_retry_success,
+            log_level, upstream_id, request_payload,
+            COALESCE(NULLIF(request_payload_encoding, ''), 'json'),
+            request_payload_blob,
+            CASE
+                WHEN request_payload_bytes > 0 THEN request_payload_bytes
+                WHEN request_payload IS NOT NULL AND request_payload != '' THEN LENGTH(request_payload)
+                ELSE 0
+            END,
+            COALESCE(request_payload_compressed_bytes, 0),
+            output_files, image_urls, is_retry_success,
             created_at, completed_at
         FROM usage_logs;
 

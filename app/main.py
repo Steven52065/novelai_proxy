@@ -56,7 +56,11 @@ async def lifespan(app: FastAPI):
         db,
         reset_hour_utc8=config.free_small_daily_limit.reset_hour_utc8,
     )
-    usage_logs = UsageLogRepository(db, on_change=dashboard_events.notify_nowait)
+    usage_logs = UsageLogRepository(
+        db,
+        on_change=dashboard_events.notify_nowait,
+        hot_payload_config=config.database.hot_payload,
+    )
     payload_archive_service = PayloadArchiveService(db)
     upstream_clients = _build_upstream_clients(config)
     default_upstream_id = next(iter(upstream_clients))

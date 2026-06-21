@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import zlib
 from dataclasses import dataclass
 from sqlite3 import Row
 from collections.abc import Callable
 from typing import Any
 
+from .config import HotPayloadConfig
 from .database import Database, utc_now_iso
 from .logging_utils import json_dumps
 
@@ -17,14 +20,24 @@ USAGE_LOG_SELECT_COLUMNS = """
     l.steps, l.n_samples, l.estimated_anlas_cost, l.final_anlas_cost, l.queued_ms,
     l.upstream_ms, l.total_ms, l.status, l.error_code, l.error_message, l.log_level,
     l.upstream_id,
-    CASE WHEN r.log_id IS NULL THEN l.request_payload ELSE NULL END AS request_payload,
+    CASE
+        WHEN r.log_id IS NULL AND l.request_payload_encoding = 'json' THEN l.request_payload
+        ELSE NULL
+    END AS request_payload,
     l.output_files, l.image_urls, l.is_retry_success, l.created_at, l.completed_at,
     CASE
-        WHEN (l.request_payload IS NOT NULL AND l.request_payload != '') OR r.log_id IS NOT NULL THEN 1
+        WHEN (l.request_payload IS NOT NULL AND l.request_payload != '')
+          OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
+          OR r.log_id IS NOT NULL THEN 1
         ELSE 0
     END AS has_request_payload,
     CASE WHEN r.log_id IS NOT NULL THEN 1 ELSE 0 END AS payload_archived,
-    COALESCE(LENGTH(l.request_payload), r.payload_bytes, 0) AS request_payload_bytes
+    CASE
+        WHEN r.log_id IS NOT NULL THEN r.payload_bytes
+        WHEN l.request_payload_bytes > 0 THEN l.request_payload_bytes
+        WHEN l.request_payload IS NOT NULL THEN LENGTH(l.request_payload)
+        ELSE 0
+    END AS request_payload_bytes
 """
 
 
@@ -46,21 +59,39 @@ class UsageLogCreate:
     upstream_id: str | None = None
 
 
+@dataclass(frozen=True)
+class EncodedPayload:
+    request_payload: str | None
+    encoding: str
+    blob: bytes | None
+    original_bytes: int
+    compressed_bytes: int
+
+
 class UsageLogRepository:
     """Centralizes usage_logs writes so status transitions stay consistent."""
 
-    def __init__(self, db: Database, on_change: Callable[[], None] | None = None):
+    def __init__(
+        self,
+        db: Database,
+        on_change: Callable[[], None] | None = None,
+        hot_payload_config: HotPayloadConfig | None = None,
+    ):
         self.db = db
         self._on_change = on_change
+        self.hot_payload_config = hot_payload_config or HotPayloadConfig()
 
     def insert_queued(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
+        payload = self._encode_payload(log.request_payload)
         self.db.execute(
             """
             INSERT INTO usage_logs (
                 request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id, request_payload, created_at
+                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id,
+                request_payload, request_payload_encoding, request_payload_blob, request_payload_bytes,
+                request_payload_compressed_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -77,20 +108,27 @@ class UsageLogRepository:
                 log.error_message,
                 log.log_level,
                 log.upstream_id,
-                self._payload_json(log.request_payload),
+                payload.request_payload,
+                payload.encoding,
+                payload.blob,
+                payload.original_bytes,
+                payload.compressed_bytes,
                 utc_now_iso(),
             ),
         )
         self._notify_change()
 
     def insert_rejected(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
+        payload = self._encode_payload(log.request_payload)
         self.db.execute(
             """
             INSERT INTO usage_logs (
                 request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id, request_payload, created_at
+                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id,
+                request_payload, request_payload_encoding, request_payload_blob, request_payload_bytes,
+                request_payload_compressed_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -107,7 +145,11 @@ class UsageLogRepository:
                 log.error_message,
                 log.log_level,
                 log.upstream_id,
-                self._payload_json(log.request_payload),
+                payload.request_payload,
+                payload.encoding,
+                payload.blob,
+                payload.original_bytes,
+                payload.compressed_bytes,
                 utc_now_iso(),
             ),
         )
@@ -260,11 +302,15 @@ class UsageLogRepository:
             """
             INSERT INTO usage_logs (
                 request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+                estimated_anlas_cost, status, log_level, upstream_id, request_payload,
+                request_payload_encoding, request_payload_blob, request_payload_bytes,
+                request_payload_compressed_bytes, created_at
             )
             SELECT
                 request_id, ?, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, 'running', 'INFO', ?, request_payload, ?
+                estimated_anlas_cost, 'running', 'INFO', ?, request_payload,
+                request_payload_encoding, request_payload_blob, request_payload_bytes,
+                request_payload_compressed_bytes, ?
             FROM usage_logs
             WHERE request_id = ? AND attempt_number = 0
             """,
@@ -353,9 +399,52 @@ class UsageLogRepository:
             tuple(params),
         )
 
+    def _encode_payload(self, payload: dict[str, Any] | None) -> EncodedPayload:
+        if payload is None:
+            return EncodedPayload(
+                request_payload=None,
+                encoding="json",
+                blob=None,
+                original_bytes=0,
+                compressed_bytes=0,
+            )
+
+        payload_json = self._payload_json(payload)
+        raw = payload_json.encode("utf-8")
+        config = self.hot_payload_config
+        if (
+            config.enabled
+            and config.compression == "zlib"
+            and len(raw) >= int(config.min_bytes)
+        ):
+            compressed = zlib.compress(raw, int(config.compression_level))
+            saved = len(raw) - len(compressed)
+            if saved >= len(raw) * float(config.min_savings_ratio):
+                return EncodedPayload(
+                    request_payload=None,
+                    encoding="zlib",
+                    blob=compressed,
+                    original_bytes=len(raw),
+                    compressed_bytes=len(compressed),
+                )
+
+        return EncodedPayload(
+            request_payload=payload_json,
+            encoding="json",
+            blob=None,
+            original_bytes=len(raw),
+            compressed_bytes=0,
+        )
+
     @staticmethod
-    def _payload_json(payload: dict[str, Any] | None) -> str | None:
-        return None if payload is None else json_dumps(payload)
+    def _payload_json(payload: dict[str, Any]) -> str:
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
 
     def _notify_change(self) -> None:
         if self._on_change is not None:
