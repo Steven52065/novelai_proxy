@@ -113,6 +113,69 @@ def test_admin_database_management_clears_large_payloads(tmp_path: Path, monkeyp
         assert image_url_row["output_files"] == "[]"
         assert image_url_row["image_urls"] is None
 
+
+def test_admin_database_clear_payloads_purges_archived_payloads(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    large_payload = '{"input":"' + ("a" * 2048) + '","parameters":{"steps":1}}'
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-clear-archived", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("clear-archived-payload", user_id, "generate", 0, "success", "INFO", large_payload, old_time),
+        )
+
+        archive_result = app.state.payload_archive_service.archive_due_payloads(
+            now=datetime.now(timezone.utc),
+            hot_days=7,
+        )
+        assert archive_result["archived_payloads"] == 1
+        source = app.state.db.query_one(
+            "SELECT id, request_payload FROM usage_logs WHERE request_id = ?",
+            ("clear-archived-payload",),
+        )
+        assert source["request_payload"] is None
+        before_payload = client.get(
+            f"/admin/api/logs/by-id/{source['id']}/payload",
+            auth=("admin", "admin123"),
+        )
+        assert before_payload.status_code == 200
+
+        clear_resp = client.post(
+            "/admin/api/database/clear-payloads",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 7, "min_payload_kb": 1},
+        )
+        assert clear_resp.status_code == 200
+        assert clear_resp.json()["updated_logs"] == 1
+        assert clear_resp.json()["purged_archived_payloads"] == 1
+        assert clear_resp.json()["deleted_archives"] == 1
+
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archive_refs")["count"] == 0
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archives")["count"] == 0
+        after_payload = client.get(
+            f"/admin/api/logs/by-id/{source['id']}/payload",
+            auth=("admin", "admin123"),
+        )
+        assert after_payload.status_code == 404
+        log = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"][0]
+        assert log["has_request_payload"] is False
+        assert log["payload_archived"] is False
+        assert log["request_payload_bytes"] == 0
+
+
 def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -157,6 +220,62 @@ def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, mo
         }
         assert "old-rejected-log" not in remaining_ids
         assert {"old-success-log", "recent-rejected-log"} <= remaining_ids
+
+
+def test_admin_database_cleanup_prevents_archive_insert_between_scan_and_delete(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-cleanup-race", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cleanup-archive-race",
+                user_id,
+                "generate",
+                0,
+                "failed",
+                "INFO",
+                '{"input":"cleanup race","parameters":{"steps":1}}',
+                old_time,
+            ),
+        )
+
+        original_query_all = app.state.db.query_all
+
+        def query_all_with_archive_race(sql, params=()):
+            rows = original_query_all(sql, params)
+            if "SELECT DISTINCT r.archive_id" in sql and "usage_log_payload_archive_refs" in sql:
+                app.state.payload_archive_service.archive_due_payloads(
+                    now=datetime.now(timezone.utc),
+                    hot_days=7,
+                )
+            return rows
+
+        monkeypatch.setattr(app.state.db, "query_all", query_all_with_archive_race)
+
+        cleanup_resp = client.post(
+            "/admin/api/database/cleanup-logs",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 30, "statuses": ["failed"]},
+        )
+        assert cleanup_resp.status_code == 200
+        assert cleanup_resp.json()["deleted_logs"] == 1
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_logs")["count"] == 0
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archive_refs")["count"] == 0
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archives")["count"] == 0
 
 
 def test_admin_database_archives_old_payloads_and_keeps_recent_hot(tmp_path: Path, monkeypatch):

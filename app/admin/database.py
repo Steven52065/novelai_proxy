@@ -226,21 +226,23 @@ def _cleanup_logs(request: Request, older_than_days: int, statuses: list[str]) -
     if valid_statuses:
         where.append(f"status IN ({','.join('?' for _ in valid_statuses)})")
         params.extend(valid_statuses)
-    archive_rows = db.query_all(
-        f"""
-        SELECT DISTINCT r.archive_id
-        FROM usage_logs l
-        JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
-        WHERE {' AND '.join(where)}
-        """,
-        tuple(params),
-    )
-    archive_ids = [int(row["archive_id"]) for row in archive_rows]
-    cursor = db.execute(f"DELETE FROM usage_logs WHERE {' AND '.join(where)}", tuple(params))
+    with db.transaction() as conn:
+        archive_rows = conn.execute(
+            f"""
+            SELECT DISTINCT r.archive_id
+            FROM usage_logs l
+            JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
+            WHERE {' AND '.join(where)}
+            """,
+            tuple(params),
+        ).fetchall()
+        archive_ids = [int(row["archive_id"]) for row in archive_rows]
+        cursor = conn.execute(f"DELETE FROM usage_logs WHERE {' AND '.join(where)}", tuple(params))
+        deleted_logs = int(cursor.rowcount)
     compact_result = payload_archive.compact_archives(archive_ids)
     return {
         "ok": True,
-        "deleted_logs": int(cursor.rowcount),
+        "deleted_logs": deleted_logs,
         "cutoff": cutoff,
         "statuses": valid_statuses,
         "compacted_archives": compact_result["compacted_archives"],
@@ -257,6 +259,7 @@ def _clear_payloads(
     clear_image_urls: bool,
 ) -> dict:
     db: Database = request.app.state.db
+    payload_archive: PayloadArchiveService = request.app.state.payload_archive_service
     cutoff = _cutoff_time(older_than_days)
     min_payload_bytes = min_payload_kb * 1024
     set_clause = "request_payload = NULL"
@@ -264,28 +267,76 @@ def _clear_payloads(
         set_clause += ", output_files = NULL"
     if clear_image_urls:
         set_clause += ", image_urls = NULL"
-    size_terms = ["COALESCE(LENGTH(request_payload), 0)"]
+    size_terms = ["COALESCE(LENGTH(l.request_payload), r.payload_bytes, 0)"]
     if clear_output_files:
-        size_terms.append("COALESCE(LENGTH(output_files), 0)")
+        size_terms.append("COALESCE(LENGTH(l.output_files), 0)")
     if clear_image_urls:
-        size_terms.append("COALESCE(LENGTH(image_urls), 0)")
+        size_terms.append("COALESCE(LENGTH(l.image_urls), 0)")
     size_filter = " + ".join(size_terms)
-    cursor = db.execute(
-        f"""
-        UPDATE usage_logs
-        SET {set_clause}
-        WHERE created_at < ?
-          AND ({size_filter}) >= ?
-        """,
-        (cutoff, min_payload_bytes),
-    )
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS temp_payload_clear_targets (
+                log_id INTEGER PRIMARY KEY
+            )
+            """
+        )
+        conn.execute("DELETE FROM temp_payload_clear_targets")
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO temp_payload_clear_targets (log_id)
+            SELECT l.id
+            FROM usage_logs l
+            LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
+            WHERE l.created_at < ?
+              AND ({size_filter}) >= ?
+            """,
+            (cutoff, min_payload_bytes),
+        )
+        target_row = conn.execute("SELECT COUNT(*) AS count FROM temp_payload_clear_targets").fetchone()
+        updated_logs = int(target_row["count"] or 0)
+        archived_row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM usage_log_payload_archive_refs r
+            JOIN temp_payload_clear_targets t ON t.log_id = r.log_id
+            """
+        ).fetchone()
+        purged_archived_payloads = int(archived_row["count"] or 0)
+        archive_rows = conn.execute(
+            """
+            SELECT DISTINCT r.archive_id
+            FROM usage_log_payload_archive_refs r
+            JOIN temp_payload_clear_targets t ON t.log_id = r.log_id
+            """
+        ).fetchall()
+        archive_ids = [int(row["archive_id"]) for row in archive_rows]
+        if updated_logs:
+            conn.execute(
+                f"""
+                UPDATE usage_logs
+                SET {set_clause}
+                WHERE id IN (SELECT log_id FROM temp_payload_clear_targets)
+                """
+            )
+            conn.execute(
+                """
+                DELETE FROM usage_log_payload_archive_refs
+                WHERE log_id IN (SELECT log_id FROM temp_payload_clear_targets)
+                """
+            )
+        conn.execute("DELETE FROM temp_payload_clear_targets")
+    compact_result = payload_archive.compact_archives(archive_ids)
     return {
         "ok": True,
-        "updated_logs": int(cursor.rowcount),
+        "updated_logs": updated_logs,
         "cutoff": cutoff,
         "min_payload_bytes": min_payload_bytes,
         "clear_output_files": clear_output_files,
         "clear_image_urls": clear_image_urls,
+        "purged_archived_payloads": purged_archived_payloads,
+        "compacted_archives": compact_result["compacted_archives"],
+        "deleted_archives": compact_result["deleted_archives"],
     }
 
 
