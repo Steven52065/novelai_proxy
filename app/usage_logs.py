@@ -35,7 +35,7 @@ USAGE_LOG_SELECT_COLUMNS = """
     CASE
         WHEN r.log_id IS NOT NULL THEN r.payload_bytes
         WHEN l.request_payload_bytes > 0 THEN l.request_payload_bytes
-        WHEN l.request_payload IS NOT NULL THEN LENGTH(l.request_payload)
+        WHEN l.request_payload IS NOT NULL THEN LENGTH(CAST(l.request_payload AS BLOB))
         ELSE 0
     END AS request_payload_bytes
 """

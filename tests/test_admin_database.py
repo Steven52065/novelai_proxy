@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.config import AppConfig
 from app.database import Database
 from app.database import utc_now_iso, validate_discord_self_service_config
+from app.payload_archive import PayloadArchiveService
 from app.usage_logs import UsageLogCreate
 from helpers import write_test_config
 
@@ -246,6 +248,65 @@ def test_admin_database_stats_and_clear_payloads_handle_hot_compressed_payloads(
         assert after_payload.status_code == 404
 
 
+def test_admin_database_clear_payloads_counts_legacy_text_payload_bytes(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    legacy_payload = '{"input":"' + ("中文提示词" * 80) + '","parameters":{"steps":1}}'
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-legacy-nonascii-payload", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        app.state.db.execute(
+            """
+            INSERT INTO usage_logs (
+                request_id, user_id, action, estimated_anlas_cost, status, log_level,
+                request_payload, request_payload_bytes, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old-legacy-nonascii-payload",
+                user_id,
+                "generate",
+                0,
+                "success",
+                "INFO",
+                legacy_payload,
+                0,
+                old_time,
+            ),
+        )
+
+        expected_bytes = len(legacy_payload.encode("utf-8"))
+        assert expected_bytes >= 1024
+        assert len(legacy_payload) < 1024
+
+        stats = client.get("/admin/api/database/stats", auth=("admin", "admin123"))
+        assert stats.status_code == 200
+        assert stats.json()["usage_logs"]["request_payload_bytes"] == expected_bytes
+
+        log = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"][0]
+        assert log["request_payload_bytes"] == expected_bytes
+
+        clear_resp = client.post(
+            "/admin/api/database/clear-payloads",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 7, "min_payload_kb": 1},
+        )
+        assert clear_resp.status_code == 200
+        assert clear_resp.json()["updated_logs"] == 1
+        cleared = app.state.db.query_one(
+            "SELECT request_payload FROM usage_logs WHERE request_id = ?",
+            ("old-legacy-nonascii-payload",),
+        )
+        assert cleared["request_payload"] is None
+
+
 def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -323,29 +384,58 @@ def test_admin_database_cleanup_prevents_archive_insert_between_scan_and_delete(
             ),
         )
 
-        original_query_all = app.state.db.query_all
+        competing_db = Database(str(app.state.db.path))
+        competing_db.conn.execute("PRAGMA busy_timeout = 1")
+        competing_archive = PayloadArchiveService(competing_db)
+        archive_race_errors: list[str] = []
+        original_transaction = app.state.db.transaction
 
-        def query_all_with_archive_race(sql, params=()):
-            rows = original_query_all(sql, params)
-            if "SELECT DISTINCT r.archive_id" in sql and "usage_log_payload_archive_refs" in sql:
-                app.state.payload_archive_service.archive_due_payloads(
-                    now=datetime.now(timezone.utc),
-                    hot_days=7,
-                )
-            return rows
+        class ArchiveRaceConnection:
+            def __init__(self, conn):
+                self._conn = conn
+                self._triggered = False
 
-        monkeypatch.setattr(app.state.db, "query_all", query_all_with_archive_race)
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
 
-        cleanup_resp = client.post(
-            "/admin/api/database/cleanup-logs",
-            auth=("admin", "admin123"),
-            json={"older_than_days": 30, "statuses": ["failed"]},
-        )
-        assert cleanup_resp.status_code == 200
-        assert cleanup_resp.json()["deleted_logs"] == 1
-        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_logs")["count"] == 0
-        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archive_refs")["count"] == 0
-        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archives")["count"] == 0
+            def execute(self, sql, params=()):
+                cursor = self._conn.execute(sql, params)
+                if (
+                    not self._triggered
+                    and "SELECT DISTINCT r.archive_id" in sql
+                    and "usage_log_payload_archive_refs" in sql
+                ):
+                    self._triggered = True
+                    try:
+                        competing_archive.archive_due_payloads(
+                            now=datetime.now(timezone.utc),
+                            hot_days=7,
+                        )
+                    except sqlite3.OperationalError as exc:
+                        archive_race_errors.append(str(exc))
+                return cursor
+
+        @contextmanager
+        def transaction_with_archive_race(*args, **kwargs):
+            with original_transaction(*args, **kwargs) as conn:
+                yield ArchiveRaceConnection(conn)
+
+        monkeypatch.setattr(app.state.db, "transaction", transaction_with_archive_race)
+
+        try:
+            cleanup_resp = client.post(
+                "/admin/api/database/cleanup-logs",
+                auth=("admin", "admin123"),
+                json={"older_than_days": 30, "statuses": ["failed"]},
+            )
+            assert cleanup_resp.status_code == 200
+            assert any("locked" in error.lower() for error in archive_race_errors)
+            assert cleanup_resp.json()["deleted_logs"] == 1
+            assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_logs")["count"] == 0
+            assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archive_refs")["count"] == 0
+            assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archives")["count"] == 0
+        finally:
+            competing_db.close()
 
 
 def test_admin_database_archives_old_payloads_and_keeps_recent_hot(tmp_path: Path, monkeypatch):

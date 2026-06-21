@@ -106,7 +106,7 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
             request_payload_blob,
             CASE
                 WHEN request_payload_bytes > 0 THEN request_payload_bytes
-                WHEN request_payload IS NOT NULL AND request_payload != '' THEN LENGTH(request_payload)
+                WHEN request_payload IS NOT NULL AND request_payload != '' THEN LENGTH(CAST(request_payload AS BLOB))
                 ELSE 0
             END,
             COALESCE(request_payload_compressed_bytes, 0),
