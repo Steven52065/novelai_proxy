@@ -378,12 +378,7 @@ def _clear_payloads(
 
 def _vacuum_database(request: Request) -> dict:
     db: Database = request.app.state.db
-    before = _database_total_size(db.path)
-    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    db.execute("VACUUM")
-    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    after = _database_total_size(db.path)
-    return {"ok": True, "before_bytes": before, "after_bytes": after, "reclaimed_bytes": max(before - after, 0)}
+    return db.vacuum()
 
 
 def _payload_archive_stats(request: Request) -> dict:
@@ -447,10 +442,6 @@ def _database_file_sizes(path: Path) -> dict[str, dict]:
         }
         for key, file_path in files.items()
     }
-
-
-def _database_total_size(path: Path) -> int:
-    return sum(file_info["bytes"] for file_info in _database_file_sizes(path).values())
 
 
 def _usage_log_size_to_dict(row):

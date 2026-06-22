@@ -61,9 +61,29 @@ class Database:
         with self._lock:
             return self.conn.execute(sql, params).fetchall()
 
+    def vacuum(self) -> dict[str, int | bool]:
+        with self._lock:
+            before = self._total_file_size()
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.conn.execute("VACUUM")
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            after = self._total_file_size()
+            return {
+                "ok": True,
+                "before_bytes": before,
+                "after_bytes": after,
+                "reclaimed_bytes": max(before - after, 0),
+            }
+
     def close(self) -> None:
         with self._lock:
             self.conn.close()
+
+    def _total_file_size(self) -> int:
+        return sum(
+            file_path.stat().st_size if file_path.exists() else 0
+            for file_path in (self.path, Path(f"{self.path}-wal"), Path(f"{self.path}-shm"))
+        )
 
     def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
         add_column_if_missing(self.conn, table, column, definition)

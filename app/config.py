@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 RESERVED_UPSTREAM_IDS = {"__all__"}
@@ -96,8 +96,29 @@ class HotPayloadConfig(BaseModel):
     min_savings_ratio: float = Field(default=0.10, ge=0, le=1)
 
 
+class AutoVacuumConfig(BaseModel):
+    enabled: bool = True
+    run_time_utc8: str = "04:00"
+
+    @field_validator("run_time_utc8")
+    @classmethod
+    def validate_run_time_utc8(cls, value: str) -> str:
+        parts = value.split(":")
+        if len(parts) != 2:
+            raise ValueError("database.auto_vacuum.run_time_utc8 must use HH:MM format")
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError as exc:
+            raise ValueError("database.auto_vacuum.run_time_utc8 must use HH:MM format") from exc
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            raise ValueError("database.auto_vacuum.run_time_utc8 must be a valid UTC+8 time")
+        return f"{hour:02d}:{minute:02d}"
+
+
 class DatabaseConfig(BaseModel):
     path: str = "novelai_proxy.db"
+    auto_vacuum: AutoVacuumConfig = Field(default_factory=AutoVacuumConfig)
     hot_payload: HotPayloadConfig = Field(default_factory=HotPayloadConfig)
     payload_archive: PayloadArchiveConfig = Field(default_factory=PayloadArchiveConfig)
 

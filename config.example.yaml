@@ -97,6 +97,12 @@ database:
   # 运行数据库路径。默认会在项目根目录生成 novelai_proxy.db。
   # 该文件以及对应的 .db-shm / .db-wal 已被忽略，不要提交。
   path: novelai_proxy.db
+  # 自动 VACUUM 配置。执行前后会截断 WAL 文件，实际释放磁盘空间。
+  auto_vacuum:
+    # 默认开启；如果希望只通过管理后台手动执行，可改为 false。
+    enabled: true
+    # 每日执行时间，按固定 UTC+8 时区计算，格式 HH:MM。
+    run_time_utc8: "04:00"
   # 新写入 usage_logs.request_payload 的热存储压缩配置。
   # 默认关闭；开启后会先把 JSON minify，达到阈值且 zlib 至少节省指定比例时存为 BLOB。
   # 冷归档 payload_archive 仍是长期存储压缩机制。

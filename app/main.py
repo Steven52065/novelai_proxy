@@ -26,6 +26,7 @@ from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
 from .database import Database, validate_discord_self_service_config
+from .database_maintenance import auto_vacuum_loop
 from .domain_errors import DomainError
 from .free_small_daily_limit import FreeSmallDailyLimitManager
 from .image_hosts import ImageHostingService
@@ -120,16 +121,19 @@ async def lifespan(app: FastAPI):
     )
 
     proxy_queue.start()
-    payload_archive_task = None
+    background_tasks: list[asyncio.Task] = []
     if config.database.payload_archive.enabled:
-        payload_archive_task = asyncio.create_task(_payload_archive_loop(payload_archive_service, config.database.payload_archive))
+        background_tasks.append(asyncio.create_task(_payload_archive_loop(payload_archive_service, config.database.payload_archive)))
+    if config.database.auto_vacuum.enabled:
+        background_tasks.append(asyncio.create_task(auto_vacuum_loop(db, config.database.auto_vacuum)))
     try:
         yield
     finally:
-        if payload_archive_task is not None:
-            payload_archive_task.cancel()
+        for task in background_tasks:
+            task.cancel()
+        for task in background_tasks:
             try:
-                await payload_archive_task
+                await task
             except asyncio.CancelledError:
                 pass
         await proxy_queue.stop()
