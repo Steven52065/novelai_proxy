@@ -333,6 +333,68 @@ h2 {
   box-shadow: none;
 }
 
+.queue-table {
+  table-layout: fixed;
+}
+
+.queue-table th:nth-child(1),
+.queue-table td:nth-child(1) {
+  width: 58px;
+  text-align: center;
+}
+
+.queue-table th:nth-child(2),
+.queue-table td:nth-child(2) {
+  width: 94px;
+}
+
+.queue-table th:nth-child(5),
+.queue-table td:nth-child(5) {
+  width: 260px;
+}
+
+.queue-table .queue-status-icon {
+  min-width: 24px;
+  width: 24px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  font-size: 0;
+}
+
+.queue-table .queue-status-icon::before {
+  flex: none;
+}
+
+.queue-spec {
+  position: relative;
+  min-width: 0;
+}
+
+.queue-spec-full {
+  display: inline-flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.queue-spec-toggle,
+.queue-spec-popover {
+  display: none;
+}
+
+.queue-spec-popover {
+  z-index: 40;
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--border-radius-md);
+  background: rgba(10, 12, 26, 0.98);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  color: var(--text-main);
+}
+
 .notice {
   background: var(--info-bg);
   border: 1px solid var(--info-border);
@@ -2898,6 +2960,122 @@ pre {
   .user_group_edit-page code,
   .users-page code {
     white-space: normal;
+  }
+
+  .queue-table th,
+  .queue-table td {
+    padding: 8px 4px;
+    font-size: 11px;
+  }
+
+  .queue-table th:nth-child(1),
+  .queue-table td:nth-child(1) {
+    width: 34px;
+  }
+
+  .queue-table th:nth-child(2),
+  .queue-table td:nth-child(2) {
+    width: 48px;
+  }
+
+  .queue-table th:nth-child(4),
+  .queue-table td:nth-child(4) {
+    width: 58px;
+  }
+
+  .queue-table th:nth-child(5),
+  .queue-table td:nth-child(5) {
+    width: 44px;
+    text-align: center;
+  }
+
+  .queue-table th:nth-child(6),
+  .queue-table td:nth-child(6),
+  .queue-table th:nth-child(7),
+  .queue-table td:nth-child(7),
+  .queue-table th:nth-child(8),
+  .queue-table td:nth-child(8) {
+    width: 52px;
+  }
+
+  .queue-table th:nth-child(1),
+  .queue-table th:nth-child(5),
+  .queue-table th:nth-child(6),
+  .queue-table th:nth-child(7),
+  .queue-table th:nth-child(8) {
+    font-size: 0;
+  }
+
+  .queue-table th:nth-child(1)::after {
+    content: "状态";
+    font-size: 9px;
+  }
+
+  .queue-table th:nth-child(5)::after {
+    content: "规格";
+    font-size: 9px;
+  }
+
+  .queue-table th:nth-child(6)::after {
+    content: "Anlas";
+    font-size: 9px;
+  }
+
+  .queue-table th:nth-child(7)::after {
+    content: "等待";
+    font-size: 9px;
+  }
+
+  .queue-table th:nth-child(8)::after {
+    content: "上游";
+    font-size: 9px;
+  }
+
+  .queue-table .queue-status-icon {
+    min-width: 22px;
+    width: 22px;
+    min-height: 22px;
+  }
+
+  .queue-spec-full {
+    display: none;
+  }
+
+  .queue-spec-toggle {
+    display: inline-flex;
+    width: 32px;
+    min-width: 32px;
+    height: 30px;
+    min-height: 30px;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    border-radius: var(--border-radius-sm);
+    background: var(--secondary-bg);
+    box-shadow: none;
+    font-size: 0;
+  }
+
+  .queue-spec-toggle:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .queue-spec-toggle svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .queue-spec.open .queue-spec-popover {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    display: block;
+    max-height: min(360px, calc(100vh - 48px));
+    overflow-y: auto;
+    text-align: left;
+    transform: translate(-50%, -50%);
   }
   
   .key-row {

@@ -123,7 +123,7 @@
   </div>
 
   <div class="table-wrap" style="margin-top: 20px;">
-    <table>
+    <table class="queue-table">
       <thead>
         <tr>
           <th>状态</th>
@@ -134,11 +134,10 @@
           <th>消耗 Anlas</th>
           <th>已等待时间</th>
           <th>上游</th>
-          <th>请求唯一 ID</th>
         </tr>
       </thead>
       <tbody id="queue-body">
-        <tr class="empty-row"><td colspan="9" class="muted" style="text-align: center; padding: 32px 0;">正在加载队列数据...</td></tr>
+        <tr class="empty-row"><td colspan="8" class="muted" style="text-align: center; padding: 32px 0;">正在加载队列数据...</td></tr>
       </tbody>
     </table>
   </div>
@@ -598,11 +597,6 @@
     syncQueueClock();
   }
 
-  function requestLabel(requestId) {
-    if (!requestId) return "-";
-    return requestId.length > 16 ? `${requestId.slice(0, 16)}...` : requestId;
-  }
-
   function specLabel(item) {
     const parts = [];
     if (item.model) {
@@ -618,6 +612,19 @@
       parts.push(`<span style="color:#e2e8f0; font-weight:500;">${item.n_samples}张</span>`);
     }
     return parts.length > 0 ? parts.join(" <span style='color:rgba(255,255,255,0.15)'>/</span> ") : "-";
+  }
+
+  function specCellHtml(item) {
+    const label = specLabel(item);
+    if (label === "-") return `<span class="muted">-</span>`;
+    return `<div class="queue-spec">
+      <div class="queue-spec-full">${label}</div>
+      <button type="button" class="queue-spec-toggle" aria-expanded="false">
+        <i data-lucide="info" aria-hidden="true"></i>
+        <span>规格</span>
+      </button>
+      <div class="queue-spec-popover" role="dialog" aria-hidden="true">${label}</div>
+    </div>`;
   }
 
   function appendCell(row, htmlContent, className) {
@@ -662,7 +669,7 @@
       appendCell(row, `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 24px 0; gap:8px;">
         <span class="muted">当前暂无活跃的生成请求</span>
       </div>`, "muted");
-      row.firstChild.colSpan = 9;
+      row.firstChild.colSpan = 8;
       row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
       observeQueueElapsedNodes();
@@ -674,8 +681,8 @@
       
       // Status pill with custom glow
       const statusHtml = item.status === "running" 
-        ? `<span class="status-pill status-running">执行中</span>`
-        : `<span class="status-pill">排队中</span>`;
+        ? `<span class="status-pill status-running queue-status-icon" title="执行中" aria-label="执行中"></span>`
+        : `<span class="status-pill queue-status-icon" title="排队中" aria-label="排队中"></span>`;
       appendCell(row, statusHtml);
       
       // Position
@@ -695,7 +702,7 @@
       appendCell(row, actionHtml);
       
       // Spec Label
-      appendCell(row, specLabel(item));
+      appendCell(row, specCellHtml(item));
       
       // Anlas cost
       const anlas = Number(item.estimated_anlas_cost || 0);
@@ -709,10 +716,7 @@
 
       // Upstream
       appendCell(row, item.upstream_id ? `<code>${item.upstream_id}</code>` : `<span class="muted">调度中</span>`, "mono");
-      
-      // Request ID
-      appendCell(row, `<code>${requestLabel(item.request_id)}</code>`, "mono");
-      
+
       queueBody.appendChild(row);
     }
 
@@ -722,13 +726,14 @@
       appendCell(row, `<div style="padding: 12px 0; font-weight:600;">
         另有 ${hiddenQueuedCount} 个后续排队请求未展开
       </div>`, "muted");
-      row.firstChild.colSpan = 9;
+      row.firstChild.colSpan = 8;
       row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
     }
     
     observeQueueElapsedNodes();
     updateQueueElapsedTimes();
+    lucide.createIcons();
   }
 
   // ---- Upstream weights rendering ----
@@ -917,6 +922,32 @@
   }
 
   upstreamFilter.addEventListener("change", reconnectDashboardSocket);
+
+  queueBody.addEventListener("click", (event) => {
+    const toggle = event.target.closest(".queue-spec-toggle");
+    if (!toggle) return;
+    const spec = toggle.closest(".queue-spec");
+    const popover = spec?.querySelector(".queue-spec-popover");
+    if (!spec || !popover) return;
+    for (const other of queueBody.querySelectorAll(".queue-spec.open")) {
+      if (other === spec) continue;
+      other.classList.remove("open");
+      other.querySelector(".queue-spec-toggle")?.setAttribute("aria-expanded", "false");
+      other.querySelector(".queue-spec-popover")?.setAttribute("aria-hidden", "true");
+    }
+    const isOpen = spec.classList.toggle("open");
+    toggle.setAttribute("aria-expanded", String(isOpen));
+    popover.setAttribute("aria-hidden", String(!isOpen));
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest(".queue-spec")) return;
+    for (const spec of queueBody.querySelectorAll(".queue-spec.open")) {
+      spec.classList.remove("open");
+      spec.querySelector(".queue-spec-toggle")?.setAttribute("aria-expanded", "false");
+      spec.querySelector(".queue-spec-popover")?.setAttribute("aria-hidden", "true");
+    }
+  });
 
   try {
     renderQueue(JSON.parse(initialQueue.textContent));
