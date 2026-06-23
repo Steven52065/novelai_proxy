@@ -448,6 +448,8 @@
     "created_at",
     "actions",
   ];
+  const mobileBaseLogColumns = ["request_id", "user", "action", "status", "actions"];
+  const mobileLogsMedia = window.matchMedia ? window.matchMedia("(max-width: 768px)") : null;
   const logColumnWidths = {
     request_id: 76,
     log_level: 82,
@@ -515,6 +517,7 @@
   bindTimeRangePicker();
   bindUserAutocomplete();
   bindColumnFilter();
+  bindResponsiveColumnSync();
   bindLogInteractions();
   setupInfiniteScroll();
 
@@ -1011,7 +1014,8 @@
   }
 
   function applyVisibleColumns(selectedColumns) {
-    const selected = new Set(selectedColumns);
+    const effectiveColumns = effectiveVisibleColumns(selectedColumns);
+    const selected = new Set(effectiveColumns);
     logColumns.forEach((column) => {
       document.querySelectorAll(`[data-log-column="${column}"]`).forEach((cell) => {
         cell.hidden = !selected.has(column);
@@ -1021,9 +1025,39 @@
       cell.colSpan = Math.max(1, selected.size);
     });
     if (logsTable) {
-      const selectedWidth = selectedColumns.reduce((sum, column) => sum + (logColumnWidths[column] || 96), 0);
+      const selectedWidth = effectiveColumns.reduce((sum, column) => sum + (logColumnWidths[column] || 96), 0);
       logsTable.style.minWidth = `${Math.max(520, selectedWidth)}px`;
     }
+  }
+
+  function effectiveVisibleColumns(selectedColumns) {
+    const selected = Array.isArray(selectedColumns)
+      ? selectedColumns.filter((column) => logColumns.includes(column))
+      : [];
+    if (!isMobileLogsLayout()) {
+      return selected.length ? selected : [...logColumns];
+    }
+    return mobileBaseLogColumns.filter((column) => logColumns.includes(column));
+  }
+
+  function isMobileLogsLayout() {
+    if (mobileLogsMedia) {
+      return mobileLogsMedia.matches;
+    }
+    return window.innerWidth <= 768;
+  }
+
+  function bindResponsiveColumnSync() {
+    const reapply = () => applyVisibleColumns(readStoredColumns());
+    if (mobileLogsMedia?.addEventListener) {
+      mobileLogsMedia.addEventListener("change", reapply);
+      return;
+    }
+    if (mobileLogsMedia?.addListener) {
+      mobileLogsMedia.addListener(reapply);
+      return;
+    }
+    window.addEventListener("resize", reapply);
   }
 
   // Event delegation keeps interactions working for both server-rendered rows
