@@ -158,6 +158,8 @@ class RoutingProxyQueue:
             if upstream_snapshot["running"] is not None:
                 upstream_snapshot["running"].pop("sequence", None)
                 flattened_running.append(upstream_snapshot["running"])
+            for item in upstream_snapshot["queued"]:
+                item["upstream_position"] = item["position"]
             flattened_queued.extend(upstream_snapshot["queued"])
             upstream_snapshot["queued"] = [without_sequence(item) for item in upstream_snapshot["queued"]]
             upstream_snapshots.append(upstream_snapshot)

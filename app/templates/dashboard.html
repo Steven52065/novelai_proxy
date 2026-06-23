@@ -686,9 +686,12 @@
       appendCell(row, statusHtml);
       
       // Position
-      const posHtml = item.status === "running" 
-        ? `<span class="muted">-</span>` 
-        : `<span class="badge badge-normal" style="background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.3); color:#f59e0b;"># ${item.position || 1}</span>`;
+      const position = item.upstream_position ?? null;
+      const posHtml = item.status === "running"
+        ? `<span class="muted">-</span>`
+        : position === null
+          ? `<span class="muted">调度中</span>`
+          : `<span class="badge badge-normal" style="background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.3); color:#f59e0b;"># ${position}</span>`;
       appendCell(row, posHtml);
       
       // User name

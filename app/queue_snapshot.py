@@ -22,6 +22,7 @@ class QueueItemSnapshot(TypedDict, total=False):
     priority: int
     sequence: int
     position: int
+    upstream_position: int
     status: QueueSnapshotStatus
     queued_seconds: int
     running_seconds: int

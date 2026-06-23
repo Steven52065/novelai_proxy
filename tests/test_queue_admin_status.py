@@ -96,9 +96,11 @@ def test_queue_snapshot_orders_queued_items_by_actual_dispatch_sequence(tmp_path
             queue = client.get("/admin/api/queue", auth=("admin", "admin123")).json()
             queued_names = [item["user_name"] for item in queue["queued"]]
             queued_positions = [item["position"] for item in queue["queued"]]
+            upstream_positions = [item["upstream_position"] for item in queue["queued"]]
 
             assert queued_names == ["queued-a", "queued-b"]
             assert queued_positions == [1, 2]
+            assert upstream_positions == [1, 1]
             assert all("sequence" not in item for item in queue["queued"])
 
             release_a.set()
