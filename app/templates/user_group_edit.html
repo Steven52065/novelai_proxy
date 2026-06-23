@@ -51,7 +51,7 @@
 
       <form id="group-settings-form" method="post" action="/admin/user-groups/{{ group.id }}" class="stack">
         <input type="hidden" name="propagate_scope" value="unmodified">
-        <div style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
+        <div class="responsive-grid" style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
           <label>
             组名称
             <input name="name" value="{{ group.name }}" required>
@@ -65,7 +65,7 @@
           </label>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+        <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
           <label>
             默认Anlas额度总额
             <input name="default_anlas_total" type="number" min="0" value="{{ group.default_anlas_total }}">
@@ -84,7 +84,7 @@
           </label>
         </div>
 
-        <div style="display: flex; gap: 20px; padding: 6px 0;">
+        <div class="responsive-actions" style="display: flex; gap: 20px; padding: 6px 0;">
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="is_active" type="checkbox" {{ "checked" if group.is_active else "" }}>
             启用用户组
@@ -95,7 +95,7 @@
           </label>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
+        <div class="responsive-grid" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="free_small_daily_limit_enabled" type="checkbox" {{ "checked" if group.free_small_daily_limit_enabled else "" }}>
             启用组内用户每日免费小图限制
@@ -117,7 +117,7 @@
 
         <div>
           <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+          <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
             {% for endpoint, label in endpoint_choices.items() %}
             <label class="check" style="color: #cbd5e1; font-weight: 500;">
               <input name="default_allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint in group.default_allowed_endpoints_list else "" }}>
@@ -129,7 +129,7 @@
 
         <div>
           <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许上游 Key</div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+          <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
             {% for upstream_id in upstream_choices %}
             <label class="check" style="color: #cbd5e1; font-weight: 500;">
               <input name="default_allowed_upstreams" type="checkbox" value="{{ upstream_id }}" {{ "checked" if upstream_id in group.default_allowed_upstreams_list else "" }}>
@@ -141,7 +141,7 @@
         </div>
       </form>
 
-      <div style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
+      <div class="responsive-actions" style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
         <button type="submit" form="group-settings-form" style="min-height: 42px; padding: 0 24px;">
           <i data-lucide="save" style="width: 16px; height: 16px;"></i>
           保存默认配置
@@ -164,7 +164,7 @@
       </h2>
       <form method="post" action="/admin/user-groups/{{ group.id }}/sync-members" class="stack">
         <p class="muted" style="font-size: 12px; margin: 0;">把当前组默认配置强制覆盖到全部成员的所选字段。保存默认配置时也会弹窗按需覆盖，此处用于事后手动补齐。</p>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="fields" type="checkbox" value="tier">
             默认等级
@@ -206,7 +206,7 @@
         <i data-lucide="gauge" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
         组共享限流
       </h2>
-      <form method="post" action="/admin/user-groups/{{ group.id }}/rate-limit-rules" class="inline-form" style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: var(--border-radius-md); border:1px solid rgba(255,255,255,0.04); margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 12px; align-items: end;">
+      <form method="post" action="/admin/user-groups/{{ group.id }}/rate-limit-rules" class="inline-form responsive-grid" style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: var(--border-radius-md); border:1px solid rgba(255,255,255,0.04); margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 12px; align-items: end;">
         <label style="gap: 4px;">
           周期
           <select name="period" style="min-height: 38px;">
@@ -357,7 +357,7 @@
         <span>仅保存组配置<br><span class="muted" style="font-size: 12px; font-weight: 400;">不修改任何成员，组配置只对之后新建的成员生效。</span></span>
       </label>
     </div>
-    <div style="display: flex; gap: 12px; justify-content: flex-end;">
+    <div class="responsive-actions" style="display: flex; gap: 12px; justify-content: flex-end;">
       <button type="button" class="secondary" id="propagate-cancel" style="min-height: 40px; padding: 0 18px;">取消</button>
       <button type="button" id="propagate-confirm" style="min-height: 40px; padding: 0 22px;">
         <i data-lucide="save" style="width: 16px; height: 16px;"></i>

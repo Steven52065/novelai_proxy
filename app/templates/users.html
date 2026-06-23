@@ -66,7 +66,7 @@
         </label>
       </div>
       
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
         <label>
           用户等级
           <select name="tier">
@@ -81,7 +81,7 @@
         </label>
       </div>
 
-      <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
+      <div class="responsive-grid" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px;">
         <label>
           Anlas额度重置周期
           <select name="reset_period">
@@ -105,7 +105,7 @@
         </label>
       </div>
 
-      <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
+      <div class="responsive-grid" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
         <label class="check" style="color: #cbd5e1; font-weight: 500;">
           <input name="free_small_daily_limit_enabled" type="checkbox">
           启用免费小图单日数量限制
@@ -127,7 +127,7 @@
 
       <div style="padding: 6px 0;">
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许访问的接口</div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
           {% for endpoint, label in endpoint_choices.items() %}
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint == "generate-image" else "" }}>
@@ -139,7 +139,7 @@
 
       <div style="padding: 6px 0;">
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">允许使用的上游 Key</div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
           {% for upstream_id in upstream_choices %}
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="allowed_upstreams" type="checkbox" value="{{ upstream_id }}">
@@ -212,6 +212,19 @@
           <td style="font-weight: 600; color: #64748b;">#{{ user.id }}</td>
           <td>
             <div style="font-weight: 700; color: #fff;">{{ user.name }}</div>
+            <div class="mobile-only user-mobile-group">
+              {% if user.group_id %}
+              <a href="/admin/user-groups/{{ user.group_id }}" style="font-weight: 700;">
+                <i data-lucide="users-round" style="width: 12px; height: 12px;"></i>
+                #{{ user.group_id }} {{ user.group_name or "未命名用户组" }}
+              </a>
+              {% if not user.group_is_active %}
+              <span class="badge badge-inactive">已禁用</span>
+              {% endif %}
+              {% else %}
+              <span class="muted">未分组</span>
+              {% endif %}
+            </div>
           </td>
           <td>
             {% if user.group_id %}
@@ -232,6 +245,13 @@
             {% else %}
             <span class="badge badge-normal">Normal</span>
             {% endif %}
+            <div class="mobile-only user-mobile-status">
+              {% if user.is_active %}
+              <span class="badge badge-active">启用中</span>
+              {% else %}
+              <span class="badge badge-inactive">已禁用</span>
+              {% endif %}
+            </div>
           </td>
           <td>
             {% if user.is_active %}
@@ -278,6 +298,13 @@
             <span style="color: #fde047;">{{ user.anlas_reserved }}</span> 
             <span style="color: rgba(255,255,255,0.2);">/</span> 
             <span style="color: #34d399; font-weight: 700;">{{ user.anlas_total }}</span>
+            <div class="mobile-only user-mobile-reset">
+              {% if user.reset_period != 'never' %}
+              {{ user.reset_period }} / {{ user.reset_day }}
+              {% else %}
+              never
+              {% endif %}
+            </div>
             {% else %}
             <span class="muted" style="font-size: 12px;">未配置Anlas额度</span>
             {% endif %}

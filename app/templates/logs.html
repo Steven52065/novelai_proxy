@@ -312,6 +312,41 @@
                 </div>
                 {% endif %}
 
+                <div class="log-mobile-meta" aria-label="日志详情摘要">
+                  <div>
+                    <span>记录级别</span>
+                    <strong>{{ log.log_level or "INFO" }}</strong>
+                  </div>
+                  <div>
+                    <span>上游</span>
+                    <strong>{{ log.upstream_id or "-" }}</strong>
+                  </div>
+                  <div>
+                    <span>模型</span>
+                    <strong>{{ log.model or "-" }}</strong>
+                  </div>
+                  <div>
+                    <span>尺寸</span>
+                    <strong>{% if log.width and log.height %}{{ log.width }}x{{ log.height }}{% else %}-{% endif %}</strong>
+                  </div>
+                  <div>
+                    <span>Anlas</span>
+                    <strong>{{ log.estimated_anlas_cost }} / {{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</strong>
+                  </div>
+                  <div>
+                    <span>总时长</span>
+                    <strong>{{ log.total_ms_display if log.total_ms is not none else "-" }}</strong>
+                  </div>
+                  <div>
+                    <span>上游时长</span>
+                    <strong>{{ log.upstream_ms_display if log.upstream_ms is not none else "-" }}</strong>
+                  </div>
+                  <div>
+                    <span>创建时间</span>
+                    <strong>{{ log.created_at_display }}</strong>
+                  </div>
+                </div>
+
                 <!-- Raw JSON payload store hidden -->
                 <script type="application/json" id="raw-payload-log-{{ log.id }}" data-has-payload="{{ 'true' if log.has_request_payload else 'false' }}" data-payload-archived="{{ 'true' if log.payload_archived else 'false' }}">{{ log.request_payload | tojson }}</script>
 
@@ -1476,6 +1511,7 @@
               <div class="log-details-content">
                 <div id="replay-result-log-${escapeAttr(logId)}" class="replay-result" hidden></div>
                 ${errorHtml}
+                ${renderMobileMeta(log, logLevel, finalCost)}
                 <script type="application/json" id="raw-payload-log-${escapeAttr(logId)}" data-has-payload="${log.has_request_payload ? "true" : "false"}" data-payload-archived="${log.payload_archived ? "true" : "false"}">${escapeScriptJson(log.request_payload)}<\/script>
                 <div>
                   <div class="payload-toolbar">
@@ -1527,6 +1563,28 @@
       return `<span class="status-pill" style="color: var(--info); background: var(--info-bg); border-color: var(--info-border);">运行中</span>`;
     }
     return `<span class="status-pill">${escapeHtml(status)}</span>`;
+  }
+
+  function renderMobileMeta(log, logLevel, finalCost) {
+    const sizeLabel = (log.width && log.height) ? `${log.width}x${log.height}` : "-";
+    const totalLabel = log.total_ms_display || formatDurationMs(log.total_ms);
+    const upstreamLabel = log.upstream_ms_display || formatDurationMs(log.upstream_ms);
+    const items = [
+      ["记录级别", logLevel || "INFO"],
+      ["上游", log.upstream_id || "-"],
+      ["模型", log.model || "-"],
+      ["尺寸", sizeLabel],
+      ["Anlas", `${log.estimated_anlas_cost ?? 0} / ${finalCost}`],
+      ["总时长", totalLabel],
+      ["上游时长", upstreamLabel],
+      ["创建时间", log.created_at_display || "-"],
+    ];
+    return `<div class="log-mobile-meta" aria-label="日志详情摘要">${items.map(([label, value]) => `
+                  <div>
+                    <span>${escapeHtml(label)}</span>
+                    <strong>${escapeHtml(value)}</strong>
+                  </div>`).join("")}
+                </div>`;
   }
 
   function renderDuration(display, value) {

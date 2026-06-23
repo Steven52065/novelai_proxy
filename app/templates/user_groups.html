@@ -18,7 +18,7 @@
   </div>
 
   <form method="post" action="/admin/user-groups" class="stack">
-    <div style="display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px;">
+    <div class="responsive-grid" style="display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px;">
       <label>
         组名称
         <input name="name" required placeholder="例如：Discord 默认组">
@@ -36,7 +36,7 @@
       </label>
     </div>
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+    <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
       <label>
         重置周期
         <select name="default_reset_period">
@@ -58,14 +58,14 @@
       </div>
     </div>
 
-    <div style="display: flex; gap: 20px; padding: 6px 0;">
+    <div class="responsive-actions" style="display: flex; gap: 20px; padding: 6px 0;">
       <label class="check" style="color: #cbd5e1; font-weight: 500;">
         <input name="default_free_small_only" type="checkbox" checked>
         默认仅允许免费小图
       </label>
     </div>
 
-    <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
+    <div class="responsive-grid" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
       <label class="check" style="color: #cbd5e1; font-weight: 500;">
         <input name="free_small_daily_limit_enabled" type="checkbox">
         启用组内用户每日免费小图限制
@@ -85,10 +85,10 @@
       </select>
     </label>
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+    <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
       <div>
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
           {% for endpoint, label in endpoint_choices.items() %}
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="default_allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint == "generate-image" else "" }}>
@@ -99,7 +99,7 @@
       </div>
       <div>
         <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许上游 Key</div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
           {% for upstream_id in upstream_choices %}
           <label class="check" style="color: #cbd5e1; font-weight: 500;">
             <input name="default_allowed_upstreams" type="checkbox" value="{{ upstream_id }}">
