@@ -2309,8 +2309,8 @@ pre {
 .icon-22 { width: 22px; height: 22px; stroke: #a5b4fc; }
 .icon-28 { width: 28px; height: 28px; stroke: #a5b4fc; }
 .btn-mt-sm { margin-top: 10px; }
-.btn-block-link { display: block; }
-.btn-block-link .btn-block { width: 100%; }
+.btn-block-link { display: flex; justify-content: center; }
+.btn-block-link .btn-block { width: auto; min-width: 260px; }
 .login-hero {
   display: flex;
   flex-direction: column;
