@@ -2903,6 +2903,16 @@ pre {
     font-size: 12px;
   }
   .logs-table thead { display: none; }
+  .logs-page .logs-table [data-log-column="log_level"],
+  .logs-page .logs-table [data-log-column="upstream"],
+  .logs-page .logs-table [data-log-column="model"],
+  .logs-page .logs-table [data-log-column="size"],
+  .logs-page .logs-table [data-log-column="anlas"],
+  .logs-page .logs-table [data-log-column="total_ms"],
+  .logs-page .logs-table [data-log-column="upstream_ms"],
+  .logs-page .logs-table [data-log-column="created_at"] {
+    display: none !important;
+  }
   .logs-table,
   .logs-table tbody,
   .logs-table tr,
@@ -2952,7 +2962,7 @@ pre {
     letter-spacing: 0.3px;
     text-align: left;
   }
-  /* 列名标签（与 data-log-column 一一对应；JS 通过 cell.hidden 控制显隐，隐藏列不渲染） */
+  /* 列名标签（与 data-log-column 一一对应；隐藏列由 CSS 控制） */
   .logs-table td[data-log-column="request_id"]::before { content: "ID"; }
   .logs-table td[data-log-column="log_level"]::before { content: "级别"; }
   .logs-table td[data-log-column="user"]::before { content: "用户"; }

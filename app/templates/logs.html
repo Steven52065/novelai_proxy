@@ -1,4 +1,81 @@
 {% extends "base.html" %}
+{% block head_extra %}
+<script>
+(() => {
+  const storageKey = "novelai_proxy_logs_visible_columns";
+  const columns = [
+    "request_id",
+    "log_level",
+    "user",
+    "action",
+    "upstream",
+    "model",
+    "size",
+    "anlas",
+    "status",
+    "total_ms",
+    "upstream_ms",
+    "created_at",
+    "actions",
+  ];
+  const columnWidths = {
+    request_id: 76,
+    log_level: 82,
+    user: 96,
+    action: 104,
+    upstream: 112,
+    model: 94,
+    size: 104,
+    anlas: 92,
+    status: 90,
+    total_ms: 78,
+    upstream_ms: 78,
+    created_at: 122,
+    actions: 100,
+  };
+
+  function readStoredColumns() {
+    let raw = null;
+    try {
+      raw = window.localStorage.getItem(storageKey);
+    } catch (err) {
+      return [...columns];
+    }
+    if (!raw) return [...columns];
+    try {
+      const parsed = JSON.parse(raw);
+      const selected = Array.isArray(parsed)
+        ? parsed.filter((column) => columns.includes(column))
+        : [];
+      return selected.length > 0 ? selected : [...columns];
+    } catch (err) {
+      return [...columns];
+    }
+  }
+
+  function buildVisibilityCss(selectedColumns) {
+    const selected = new Set(selectedColumns);
+    const hiddenColumns = columns.filter((column) => !selected.has(column));
+    if (hiddenColumns.length === 0) {
+      return "";
+    }
+    const selectedWidth = selectedColumns.reduce((sum, column) => sum + (columnWidths[column] || 96), 0);
+    const rules = hiddenColumns.map(
+      (column) => `  .logs-page [data-log-column="${column}"] { display: none !important; }`
+    );
+    rules.push(`  .logs-page .logs-table { min-width: ${Math.max(520, selectedWidth)}px; }`);
+    return `@media (min-width: 769px) {\n${rules.join("\n")}\n}`;
+  }
+
+  const css = buildVisibilityCss(readStoredColumns());
+  if (!css) return;
+  const style = document.createElement("style");
+  style.id = "logs-column-visibility-style";
+  style.textContent = css;
+  document.head.appendChild(style);
+})();
+</script>
+{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>
@@ -394,6 +471,7 @@
 (() => {
   const logsLimitStorageKey = "novelai_proxy_logs_limit";
   const logsColumnStorageKey = "novelai_proxy_logs_visible_columns";
+  const logsColumnVisibilityStyleId = "logs-column-visibility-style";
   const logColumns = [
     "request_id",
     "log_level",
@@ -426,7 +504,6 @@
     created_at: 122,
     actions: 100,
   };
-  const logsTable = document.querySelector(".logs-table");
   const filterForm = document.getElementById("logs-filter-form");
   const limitInput = document.getElementById("logs-limit-input");
   const createdFromInput = document.getElementById("logs-created-from-input");
@@ -975,28 +1052,61 @@
   }
 
   function applyVisibleColumns(selectedColumns) {
-    const effectiveColumns = effectiveVisibleColumns(selectedColumns);
-    const selected = new Set(effectiveColumns);
-    logColumns.forEach((column) => {
-      document.querySelectorAll(`[data-log-column="${column}"]`).forEach((cell) => {
-        cell.hidden = !selected.has(column);
-      });
-    });
-    document.querySelectorAll("[data-log-colspan]").forEach((cell) => {
-      cell.colSpan = Math.max(1, selected.size);
-    });
-    if (logsTable) {
-      const selectedWidth = effectiveColumns.reduce((sum, column) => sum + (logColumnWidths[column] || 96), 0);
-      logsTable.style.minWidth = `${Math.max(520, selectedWidth)}px`;
+    applyColumnVisibilityCss(selectedColumns);
+    syncLogColspans(selectedColumns);
+  }
+
+  function applyColumnVisibilityCss(selectedColumns) {
+    const style = ensureColumnVisibilityStyle();
+    const css = buildColumnVisibilityCss(selectedColumns);
+    if (style.textContent !== css) {
+      style.textContent = css;
     }
   }
 
-  function effectiveVisibleColumns(selectedColumns) {
+  function ensureColumnVisibilityStyle() {
+    let style = document.getElementById(logsColumnVisibilityStyleId);
+    if (!style) {
+      style = document.createElement("style");
+      style.id = logsColumnVisibilityStyleId;
+      document.head.appendChild(style);
+    }
+    return style;
+  }
+
+  function buildColumnVisibilityCss(selectedColumns) {
+    const selectedColumnsNormalized = normalizeSelectedColumns(selectedColumns);
+    const selected = new Set(selectedColumnsNormalized);
+    const hiddenColumns = logColumns.filter((column) => !selected.has(column));
+    if (hiddenColumns.length === 0) {
+      return "";
+    }
+    const selectedWidth = selectedColumnsNormalized.reduce((sum, column) => sum + (logColumnWidths[column] || 96), 0);
+    const rules = hiddenColumns.map(
+      (column) => `  .logs-page [data-log-column="${column}"] { display: none !important; }`
+    );
+    rules.push(`  .logs-page .logs-table { min-width: ${Math.max(520, selectedWidth)}px; }`);
+    return `@media (min-width: 769px) {\n${rules.join("\n")}\n}`;
+  }
+
+  function syncLogColspans(selectedColumns) {
+    const effectiveColumns = effectiveVisibleColumns(selectedColumns);
+    document.querySelectorAll("[data-log-colspan]").forEach((cell) => {
+      cell.colSpan = Math.max(1, effectiveColumns.length);
+    });
+  }
+
+  function normalizeSelectedColumns(selectedColumns) {
     const selected = Array.isArray(selectedColumns)
       ? selectedColumns.filter((column) => logColumns.includes(column))
       : [];
+    return selected.length ? selected : [...logColumns];
+  }
+
+  function effectiveVisibleColumns(selectedColumns) {
+    const selected = normalizeSelectedColumns(selectedColumns);
     if (!isMobileLogsLayout()) {
-      return selected.length ? selected : [...logColumns];
+      return selected;
     }
     return mobileBaseLogColumns.filter((column) => logColumns.includes(column));
   }
@@ -1009,7 +1119,7 @@
   }
 
   function bindResponsiveColumnSync() {
-    const reapply = () => applyVisibleColumns(readStoredColumns());
+    const reapply = () => syncLogColspans(readStoredColumns());
     if (mobileLogsMedia?.addEventListener) {
       mobileLogsMedia.addEventListener("change", reapply);
       return;
