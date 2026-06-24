@@ -126,7 +126,6 @@
     <table class="queue-table">
       <thead>
         <tr>
-          <th>状态</th>
           <th>排队位置</th>
           <th>发起用户</th>
           <th>API动作</th>
@@ -137,7 +136,7 @@
         </tr>
       </thead>
       <tbody id="queue-body">
-        <tr class="empty-row"><td colspan="8" class="muted cell-centered padded-cell">正在加载队列数据...</td></tr>
+        <tr class="empty-row"><td colspan="7" class="muted cell-centered padded-cell">正在加载队列数据...</td></tr>
       </tbody>
     </table>
   </div>
@@ -670,7 +669,7 @@
       appendCell(row, `<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 24px 0; gap:8px;">
         <span class="muted">当前暂无活跃的生成请求</span>
       </div>`, "muted");
-      row.firstChild.colSpan = 8;
+      row.firstChild.colSpan = 7;
       row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
       observeQueueElapsedNodes();
@@ -680,17 +679,11 @@
     for (const item of rows) {
       const row = document.createElement("tr");
       if (item.status === "running") row.classList.add("is-running");
-      
-      // Status pill with custom glow
-      const statusHtml = item.status === "running"
-        ? `<span class="status-pill status-running queue-status-icon" title="执行中" aria-label="执行中"></span>`
-        : `<span class="status-pill queue-status-icon" title="排队中" aria-label="排队中"></span>`;
-      appendCell(row, statusHtml, "", "状态");
 
       // Position
       const position = item.upstream_position ?? null;
       const posHtml = item.status === "running"
-        ? `<span class="muted">-</span>`
+        ? `<span class="status-pill status-running queue-status-icon" title="执行中" aria-label="执行中"></span>`
         : position === null
           ? `<span class="muted">调度中</span>`
           : `<span class="badge badge-normal" style="background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.3); color:#f59e0b;"># ${position}</span>`;
@@ -731,7 +724,7 @@
       appendCell(row, `<div style="padding: 12px 0; font-weight:600;">
         另有 ${hiddenQueuedCount} 个后续排队请求未展开
       </div>`, "muted");
-      row.firstChild.colSpan = 8;
+      row.firstChild.colSpan = 7;
       row.firstChild.style.textAlign = "center";
       queueBody.appendChild(row);
     }
