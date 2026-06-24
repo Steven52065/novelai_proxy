@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head">
   <h1>
-    <i data-lucide="database" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    <i data-lucide="database" class="h1-icon"></i>
     数据库管理
   </h1>
 </div>
@@ -17,38 +17,38 @@
 <section class="metrics">
   <div>
     <span>
-      <i data-lucide="hard-drive" style="width: 16px; height: 16px; stroke: #6366f1;"></i>
+      <i data-lucide="hard-drive" class="metric-icon metric-icon-1"></i>
       数据库文件
     </span>
     <strong>{{ stats.files.main.display }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="files" style="width: 16px; height: 16px; stroke: #3b82f6;"></i>
+      <i data-lucide="files" class="metric-icon metric-icon-2"></i>
       WAL / SHM
     </span>
-    <strong style="font-size: 28px;">{{ stats.files.wal.display }} / {{ stats.files.shm.display }}</strong>
+    <strong class="metric-strong-sm">{{ stats.files.wal.display }} / {{ stats.files.shm.display }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="history" style="width: 16px; height: 16px; stroke: #10b981;"></i>
+      <i data-lucide="history" class="metric-icon metric-icon-3"></i>
       日志总数
     </span>
     <strong>{{ stats.usage_logs.total }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="archive" style="width: 16px; height: 16px; stroke: #f59e0b;"></i>
+      <i data-lucide="archive" class="metric-icon metric-icon-4"></i>
       大字段占用
     </span>
     <strong>{{ stats.usage_logs.payload_bytes | filesizeformat }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="package-check" style="width: 16px; height: 16px; stroke: #14b8a6;"></i>
+      <i data-lucide="package-check" class="metric-icon metric-icon-5"></i>
       Payload 归档
     </span>
-    <strong style="font-size: 28px;">{{ stats.payload_archives.compressed_display }}</strong>
+    <strong class="metric-strong-sm">{{ stats.payload_archives.compressed_display }}</strong>
   </div>
 </section>
 
@@ -56,15 +56,15 @@
   <div class="section-head">
     <div>
       <h2>
-        <i data-lucide="chart-no-axes-combined" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        <i data-lucide="chart-no-axes-combined" class="h2-icon"></i>
         数据概览
       </h2>
-      <p class="muted" style="margin-top: 4px;">数据库路径：<code>{{ stats.database_path }}</code></p>
+      <p class="muted section-subtitle">数据库路径：<code>{{ stats.database_path }}</code></p>
     </div>
   </div>
 
   <div class="table-wrap">
-    <table>
+    <table class="responsive-card-table">
       <thead>
         <tr>
           <th>项目</th>
@@ -74,28 +74,28 @@
       </thead>
       <tbody>
         <tr>
-          <td>可回收空间</td>
-          <td class="mono">{{ stats.reclaimable_bytes | filesizeformat }}</td>
-          <td class="muted">删除或清空字段后，通常需要执行 VACUUM 才会还给文件系统。</td>
+          <td data-label="项目">可回收空间</td>
+          <td data-label="数值" class="mono">{{ stats.reclaimable_bytes | filesizeformat }}</td>
+          <td data-label="说明" class="muted">删除或清空字段后，通常需要执行 VACUUM 才会还给文件系统。</td>
         </tr>
         <tr>
-          <td>含 Payload 的日志</td>
-          <td class="mono">{{ stats.usage_logs.logs_with_payload }}</td>
-          <td class="muted">这些记录在热字段中保留了请求参数，图片 base64 会让数据库快速膨胀。</td>
+          <td data-label="项目">含 Payload 的日志</td>
+          <td data-label="数值" class="mono">{{ stats.usage_logs.logs_with_payload }}</td>
+          <td data-label="说明" class="muted">这些记录在热字段中保留了请求参数，图片 base64 会让数据库快速膨胀。</td>
         </tr>
         <tr>
-          <td>归档 Payload</td>
-          <td class="mono">{{ stats.payload_archives.payload_count }} / {{ stats.payload_archives.archive_count }} 块</td>
-          <td class="muted">原始 {{ stats.payload_archives.raw_display }}，压缩后 {{ stats.payload_archives.compressed_display }}，压缩率 {{ stats.payload_archives.compression_ratio_display }}。</td>
+          <td data-label="项目">归档 Payload</td>
+          <td data-label="数值" class="mono">{{ stats.payload_archives.payload_count }} / {{ stats.payload_archives.archive_count }} 块</td>
+          <td data-label="说明" class="muted">原始 {{ stats.payload_archives.raw_display }}，压缩后 {{ stats.payload_archives.compressed_display }}，压缩率 {{ stats.payload_archives.compression_ratio_display }}。</td>
         </tr>
         <tr>
-          <td>可归档候选</td>
-          <td class="mono">{{ stats.payload_archives.candidate_count }}</td>
-          <td class="muted">按当前热数据窗口 {{ stats.payload_archives.hot_days }} 天计算，自动归档：{{ "已启用" if stats.payload_archives.enabled else "未启用" }}。</td>
+          <td data-label="项目">可归档候选</td>
+          <td data-label="数值" class="mono">{{ stats.payload_archives.candidate_count }}</td>
+          <td data-label="说明" class="muted">按当前热数据窗口 {{ stats.payload_archives.hot_days }} 天计算，自动归档：{{ "已启用" if stats.payload_archives.enabled else "未启用" }}。</td>
         </tr>
         <tr>
-          <td>状态分布</td>
-          <td colspan="2">
+          <td data-label="项目">状态分布</td>
+          <td data-label="数值" colspan="2">
             <div class="actions">
               {% for item in stats.status_counts %}
               <span class="badge badge-normal">{{ item.status }}: {{ item.count }}</span>
@@ -115,10 +115,10 @@
     <div class="section-head">
       <div>
         <h2>
-          <i data-lucide="archive" style="width: 18px; height: 18px; stroke: #14b8a6;"></i>
+          <i data-lucide="archive" class="h2-icon h2-icon-cyan"></i>
           归档旧 Payload
         </h2>
-        <p class="muted" style="margin-top: 4px;">按 UTC+8 自然日压缩旧请求参数，保留日志详情和重放能力。</p>
+        <p class="muted section-subtitle">按 UTC+8 自然日压缩旧请求参数，保留日志详情和重放能力。</p>
       </div>
     </div>
     <form method="post" action="/admin/database/archive-payloads" class="form-grid" onsubmit="return confirm('确认按当前条件归档旧 Payload？归档后仍可查看和重放，但需要 VACUUM 才会释放文件空间。')">
@@ -131,7 +131,7 @@
         <input name="max_rows" type="number" min="1" max="1000000" value="10000">
       </label>
       <button type="submit">
-        <i data-lucide="archive" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="archive" class="btn-icon"></i>
         立即归档
       </button>
     </form>
@@ -141,10 +141,10 @@
     <div class="section-head">
       <div>
         <h2>
-          <i data-lucide="eraser" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+          <i data-lucide="eraser" class="h2-icon"></i>
           清空大 Payload
         </h2>
-        <p class="muted" style="margin-top: 4px;">保留日志、Anlas额度和限流统计，只清空占空间的请求参数字段。</p>
+        <p class="muted section-subtitle">保留日志、Anlas额度和限流统计，只清空占空间的请求参数字段。</p>
       </div>
     </div>
     <form method="post" action="/admin/database/clear-payloads" class="form-grid" onsubmit="return confirm('确认清空符合条件日志的 Payload 字段？该操作不可恢复。')">
@@ -165,7 +165,7 @@
         同时清空图床 URL
       </label>
       <button type="submit">
-        <i data-lucide="eraser" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="eraser" class="btn-icon"></i>
         清空大字段
       </button>
     </form>
@@ -175,10 +175,10 @@
     <div class="section-head">
       <div>
         <h2>
-          <i data-lucide="trash-2" style="width: 18px; height: 18px; stroke: #f87171;"></i>
+          <i data-lucide="trash-2" class="h2-icon h2-icon-danger"></i>
           删除旧日志
         </h2>
-        <p class="muted" style="margin-top: 4px;">整条删除日志记录，会影响按日志统计的历史请求数。</p>
+        <p class="muted section-subtitle">整条删除日志记录，会影响按日志统计的历史请求数。</p>
       </div>
     </div>
     <form method="post" action="/admin/database/cleanup-logs" class="stack" onsubmit="return confirm('确认删除符合条件的日志记录？该操作不可恢复。')">
@@ -188,10 +188,10 @@
           <input name="older_than_days" type="number" min="0" max="3650" value="30">
         </label>
         <div>
-          <span style="display: block; font-size: 13px; font-weight: 600; color: #cbd5e1; margin-bottom: 8px;">限定状态</span>
+          <span class="field-block-label">限定状态</span>
           <div class="actions">
             {% for status in status_choices %}
-            <label class="check" style="min-height: 32px;">
+            <label class="check check-sm-h">
               <input type="checkbox" name="statuses" value="{{ status }}">
               {{ status }}
             </label>
@@ -200,7 +200,7 @@
         </div>
       </div>
       <button class="danger" type="submit">
-        <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="trash-2" class="btn-icon"></i>
         删除旧日志
       </button>
     </form>
@@ -211,14 +211,14 @@
   <div class="section-head">
     <div>
       <h2>
-        <i data-lucide="minimize-2" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        <i data-lucide="minimize-2" class="h2-icon"></i>
         压缩数据库文件
       </h2>
-      <p class="muted" style="margin-top: 4px;">清理数据后执行 VACUUM，并截断 WAL 文件，实际释放磁盘空间。</p>
+      <p class="muted section-subtitle">清理数据后执行 VACUUM，并截断 WAL 文件，实际释放磁盘空间。</p>
     </div>
     <form method="post" action="/admin/database/vacuum" onsubmit="return confirm('确认执行 VACUUM？执行期间数据库会短暂独占写入。')">
       <button type="submit">
-        <i data-lucide="minimize-2" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="minimize-2" class="btn-icon"></i>
         立即压缩
       </button>
     </form>
@@ -229,14 +229,14 @@
   <div class="section-head">
     <div>
       <h2>
-        <i data-lucide="list-filter" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+        <i data-lucide="list-filter" class="h2-icon"></i>
         最大日志记录
       </h2>
-      <p class="muted" style="margin-top: 4px;">按请求 Payload、输出路径和图床 URL 字段大小排序。</p>
+      <p class="muted section-subtitle">按请求 Payload、输出路径和图床 URL 字段大小排序。</p>
     </div>
   </div>
   <div class="table-wrap">
-    <table>
+    <table class="responsive-card-table">
       <thead>
         <tr>
           <th>请求 ID</th>
@@ -252,19 +252,19 @@
       <tbody>
         {% for log in stats.largest_logs %}
         <tr>
-          <td><code>{{ log.request_id[:12] }}</code></td>
-          <td>{{ log.user_name }}</td>
-          <td>{{ log.action }}</td>
-          <td><span class="status-pill">{{ log.status }}</span></td>
-          <td class="mono">{{ log.request_payload_display }}</td>
-          <td class="mono">{{ log.output_files_display }}</td>
-          <td class="mono">{{ log.image_urls_display }}</td>
-          <td class="muted">{{ log.created_at_display }}</td>
+          <td data-label="请求 ID"><code>{{ log.request_id[:12] }}</code></td>
+          <td data-label="用户">{{ log.user_name }}</td>
+          <td data-label="动作">{{ log.action }}</td>
+          <td data-label="状态"><span class="status-pill">{{ log.status }}</span></td>
+          <td data-label="Payload" class="mono">{{ log.request_payload_display }}</td>
+          <td data-label="输出路径" class="mono">{{ log.output_files_display }}</td>
+          <td data-label="图床 URL" class="mono">{{ log.image_urls_display }}</td>
+          <td data-label="创建时间" class="muted">{{ log.created_at_display }}</td>
         </tr>
         {% else %}
         <tr class="empty-row">
-          <td colspan="8" style="text-align: center; padding: 32px 0;">
-            <span class="muted">暂无日志记录</span>
+          <td colspan="8" class="muted cell-centered padded-cell">
+            <span>暂无日志记录</span>
           </td>
         </tr>
         {% endfor %}

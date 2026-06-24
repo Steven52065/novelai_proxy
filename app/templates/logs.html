@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head">
   <h1>
-    <i data-lucide="history" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    <i data-lucide="history" class="h1-icon"></i>
     使用日志审计
   </h1>
 </div>
@@ -14,7 +14,7 @@
       <div class="logs-user-picker" data-initial-user-name="{{ selected_user.name if selected_user else '' }}">
         <input id="logs-user-id-input" name="user_id" type="hidden" value="{{ selected_user_id if selected_user_id is not none else '' }}">
         <div class="user-search logs-user-search">
-          <i data-lucide="search" style="width: 16px; height: 16px;"></i>
+          <i data-lucide="search" class="user-search-icon"></i>
           <input id="logs-user-search-input" type="search" value="{{ selected_user.name if selected_user else '' }}" placeholder="搜索备注名" autocomplete="off" aria-label="筛选发起用户" aria-controls="logs-user-suggestions">
         </div>
         <div id="logs-user-suggestions" class="logs-user-suggestions" role="listbox" hidden></div>
@@ -26,7 +26,7 @@
       <input id="logs-created-from-input" name="created_from" type="hidden" value="{{ created_from }}">
       <input id="logs-created-to-input" name="created_to" type="hidden" value="{{ created_to }}">
       <button id="logs-time-range-toggle" class="secondary logs-time-range-toggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="logs-time-range-modal">
-        <i data-lucide="calendar-days" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="calendar-days" class="btn-icon"></i>
         <span id="logs-time-range-label">
           {% if created_from or created_to %}
           {{ created_from.replace("T", " ") if created_from else "未设置" }} ~ {{ created_to.replace("T", " ") if created_to else "未设置" }}
@@ -34,7 +34,7 @@
           全部时间
           {% endif %}
         </span>
-        <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="chevron-down" class="btn-icon"></i>
       </button>
     </div>
 
@@ -65,19 +65,19 @@
 
     <div class="logs-filter-actions">
       <button type="submit">
-        <i data-lucide="search" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="search" class="btn-icon"></i>
         执行筛选
       </button>
 
       <a class="button-like secondary" href="/admin/logs">
-        <i data-lucide="rotate-ccw" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="rotate-ccw" class="btn-icon"></i>
         重置
       </a>
     </div>
 
     <div class="logs-column-filter">
-      <button id="logs-column-filter-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="logs-column-filter-menu" style="min-height: 44px; padding: 0 16px;">
-        <i data-lucide="columns-3" style="width: 16px; height: 16px;"></i>
+      <button id="logs-column-filter-toggle" class="secondary logs-column-filter-toggle" type="button" aria-expanded="false" aria-controls="logs-column-filter-menu">
+        <i data-lucide="columns-3" class="btn-icon"></i>
         筛选列
       </button>
       <div id="logs-column-filter-menu" class="logs-column-filter-menu" hidden>
@@ -104,11 +104,11 @@
   <section class="panel logs-time-range-card">
     <div class="logs-time-range-head">
       <h2 id="logs-time-range-title">
-        <i data-lucide="calendar-days" style="width: 19px; height: 19px;"></i>
+        <i data-lucide="calendar-days" class="icon-19"></i>
         选择时间范围
       </h2>
       <button id="logs-time-range-close" class="secondary logs-time-range-close" type="button" aria-label="关闭时间范围选择器">
-        <i data-lucide="x" style="width: 17px; height: 17px;"></i>
+        <i data-lucide="x" class="icon-17"></i>
       </button>
     </div>
 
@@ -122,17 +122,17 @@
     <div class="logs-calendar-picker">
       <div class="logs-calendar-toolbar">
         <button id="logs-calendar-prev-year" class="secondary logs-calendar-nav" type="button" aria-label="上一年">
-          <i data-lucide="chevrons-left" style="width: 17px; height: 17px;"></i>
+          <i data-lucide="chevrons-left" class="icon-17"></i>
         </button>
         <button id="logs-calendar-prev-month" class="secondary logs-calendar-nav" type="button" aria-label="上个月">
-          <i data-lucide="chevron-left" style="width: 17px; height: 17px;"></i>
+          <i data-lucide="chevron-left" class="icon-17"></i>
         </button>
         <div id="logs-calendar-title" class="logs-calendar-title" aria-live="polite"></div>
         <button id="logs-calendar-next-month" class="secondary logs-calendar-nav" type="button" aria-label="下个月">
-          <i data-lucide="chevron-right" style="width: 17px; height: 17px;"></i>
+          <i data-lucide="chevron-right" class="icon-17"></i>
         </button>
         <button id="logs-calendar-next-year" class="secondary logs-calendar-nav" type="button" aria-label="下一年">
-          <i data-lucide="chevrons-right" style="width: 17px; height: 17px;"></i>
+          <i data-lucide="chevrons-right" class="icon-17"></i>
         </button>
       </div>
 
@@ -150,21 +150,21 @@
       <div class="logs-time-hour-row">
         <div class="logs-time-boundary">
           <div class="logs-time-boundary-date">
-            <i data-lucide="calendar-days" style="width: 15px; height: 15px;"></i>
+            <i data-lucide="calendar-days" class="icon-15"></i>
             <span id="logs-time-from-date-label">未选择</span>
           </div>
           <div class="logs-time-boundary-hour">
-            <i data-lucide="clock" style="width: 15px; height: 15px;"></i>
+            <i data-lucide="clock" class="icon-15"></i>
             <select id="logs-time-from-hour" aria-label="起始小时"></select>
           </div>
         </div>
         <div class="logs-time-boundary">
           <div class="logs-time-boundary-date">
-            <i data-lucide="calendar-days" style="width: 15px; height: 15px;"></i>
+            <i data-lucide="calendar-days" class="icon-15"></i>
             <span id="logs-time-to-date-label">未选择</span>
           </div>
           <div class="logs-time-boundary-hour">
-            <i data-lucide="clock" style="width: 15px; height: 15px;"></i>
+            <i data-lucide="clock" class="icon-15"></i>
             <select id="logs-time-to-hour" aria-label="截止小时"></select>
           </div>
         </div>
@@ -173,12 +173,12 @@
 
     <div class="logs-time-range-actions">
       <button id="logs-time-range-clear" class="secondary" type="button">
-        <i data-lucide="eraser" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="eraser" class="btn-icon"></i>
         清空
       </button>
       <button id="logs-time-range-cancel" class="secondary" type="button">取消</button>
       <button id="logs-time-range-apply" type="button">
-        <i data-lucide="check" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="check" class="btn-icon"></i>
         应用
       </button>
     </div>
@@ -208,9 +208,9 @@
       <tbody id="logs-table-body" data-next-before-id="{{ next_before_id if next_before_id is not none else '' }}" data-has-more="{{ 'true' if has_more else 'false' }}" data-selected-user-id="{{ selected_user_id if selected_user_id is not none else '' }}">
         {% if not logs %}
         <tr class="empty-row">
-          <td data-log-colspan colspan="13" style="text-align: center; padding: 48px 0;">
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
-              <i data-lucide="info" style="width:32px; height:32px; stroke:#64748b;"></i>
+          <td data-log-colspan colspan="13" class="cell-centered empty-pad-lg">
+            <div class="empty-stack">
+              <i data-lucide="info" class="empty-icon"></i>
               <span class="muted">当前没有任何符合条件的日志记录</span>
             </div>
           </td>
@@ -218,14 +218,14 @@
         {% endif %}
 
         {% for log in logs %}
-        <tr class="log-row" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};{% if log.is_retry_success %} background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);{% endif %}">
-          <td data-log-column="request_id" class="mono" style="font-weight: 600; color: #a5b4fc;">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span style="margin-left: 4px; font-size: 10px; color: #fbbf24; vertical-align: middle;" title="重试后成功">⟳</span>{% endif %}</td>
+        <tr class="log-row {{ 'is-retry' if log.is_retry_success else '' }} is-{{ log.status }}" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};{% if log.is_retry_success %} background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);{% endif %}">
+          <td data-log-column="request_id" class="mono cell-request-id">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span class="retry-mark" title="重试后成功">⟳</span>{% endif %}</td>
           <td data-log-column="log_level">
             <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
           </td>
-          <td data-log-column="user" style="font-weight: 700; color: #fff;">{{ log.user_name }}</td>
+          <td data-log-column="user" class="cell-user">{{ log.user_name }}</td>
           <td data-log-column="action">
-            <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">{{ log.action }}</span>
+            <span class="badge badge-action">{{ log.action }}</span>
           </td>
           <td data-log-column="upstream" class="mono">
             {% if log.upstream_id %}
@@ -236,7 +236,7 @@
           </td>
           <td data-log-column="model">
             {% if log.model %}
-            <span class="badge badge-normal" style="font-size: 11px;">{{ log.model }}</span>
+            <span class="badge badge-normal badge-sm">{{ log.model }}</span>
             {% else %}
             <span class="muted">-</span>
             {% endif %}
@@ -249,17 +249,17 @@
             {% endif %}
           </td>
           <td data-log-column="anlas" class="mono">
-            <span style="color: #94a3b8;">{{ log.estimated_anlas_cost }}</span>
-            <span style="color: rgba(255,255,255,0.15)">/</span>
-            <span style="color: #34d399; font-weight: 700;">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
+            <span class="anlas-sep">{{ log.estimated_anlas_cost }}</span>
+            <span class="anlas-slash">/</span>
+            <span class="anlas-total">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
           </td>
           <td data-log-column="status">
             {% if log.status == 'success' %}
-            <span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">{% if log.is_retry_success %}<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>重试成功{% else %}成功{% endif %}</span>
+            <span class="status-pill status-success">{% if log.is_retry_success %}<span class="retry-mark-inline" title="重试后成功">⟳</span>重试成功{% else %}成功{% endif %}</span>
             {% elif log.status == 'failed' %}
             <span class="status-pill status-error">失败</span>
             {% elif log.status == 'running' %}
-            <span class="status-pill" style="color: var(--info); background: var(--info-bg); border-color: var(--info-border);">运行中</span>
+            <span class="status-pill status-info">运行中</span>
             {% else %}
             <span class="status-pill">{{ log.status }}</span>
             {% endif %}
@@ -278,20 +278,20 @@
             <span class="muted">-</span>
             {% endif %}
           </td>
-          <td data-log-column="created_at" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
+          <td data-log-column="created_at" class="cell-created" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
           <td data-log-column="actions">
             <div class="log-actions">
-              <button class="secondary log-toggle-btn" data-log-id="{{ log.id }}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
-                <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
+              <button class="secondary log-toggle-btn log-btn-sm" data-log-id="{{ log.id }}" type="button" aria-expanded="false">
+                <span class="chevron"><i data-lucide="chevron-right" class="icon-13"></i></span>
                 <span>详情</span>
               </button>
               {% if log.has_request_payload %}
-              <button class="secondary btn-replay-log" data-log-id="{{ log.id }}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
-                <i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i>
+              <button class="secondary btn-replay-log log-btn-sm" data-log-id="{{ log.id }}" type="button">
+                <i data-lucide="repeat-2" class="icon-13"></i>
                 <span>重放</span>
               </button>
               {% else %}
-              <span class="muted" style="font-size: 12px;">不可重放</span>
+              <span class="muted muted-sm">不可重放</span>
               {% endif %}
             </div>
           </td>
@@ -303,10 +303,10 @@
                 <div id="replay-result-log-{{ log.id }}" class="replay-result" hidden></div>
 
                 {% if log.error_message %}
-                <div class="error" style="margin-bottom: 0;">
-                  <div style="display: flex; align-items: center; gap: 8px;">
-                    <i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i>
-                    <strong style="color:#f87171;">错误 {{ log.error_code }}：</strong>
+                <div class="error error-flush">
+                  <div class="error-row">
+                    <i data-lucide="alert-octagon" class="btn-icon-lg"></i>
+                    <strong class="error-code">错误 {{ log.error_code }}：</strong>
                     <span>{{ log.error_message }}</span>
                   </div>
                 </div>
@@ -352,22 +352,20 @@
 
                 <div>
                   <div class="payload-toolbar">
-                    <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
-                      <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
+                    <span class="detail-label-inline">
+                      <i data-lucide="braces" class="icon-edit"></i>
                       请求与响应 Payload 数据 (含智能安全截断)
                     </span>
-                    <button class="secondary btn-copy-raw-payload" data-log-id="{{ log.id }}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
-                      <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                    <button class="secondary btn-copy-raw-payload payload-copy-btn" data-log-id="{{ log.id }}" type="button">
+                      <i data-lucide="copy" class="icon-12"></i>
                       <span>复制完整 JSON</span>
                     </button>
                   </div>
-                  <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+                  <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload pretty-payload-initial">点击展开展开后载入数据...</pre>
                 </div>
 
                 <div>
-                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
-                    图床图片：
-                  </span>
+                  <span class="detail-label">图床图片：</span>
                   {% if log.image_urls %}
                   <div class="hosted-image-gallery">
                     {% for image in log.image_urls %}
@@ -376,42 +374,40 @@
                     <div class="hosted-image-card">
                       <img class="hosted-image-preview" alt="{{ image_name }}" data-image-url="{{ image_url }}" title="点击放大查看">
                       <span>
-                        <i data-lucide="image" style="width: 13px; height: 13px;"></i>
+                        <i data-lucide="image" class="icon-sm"></i>
                         {{ image.provider if image is mapping and image.provider else "image-host" }}
                       </span>
                       <div class="hosted-image-url">
                         <code>{{ image_url }}</code>
                         <button class="hosted-image-copy" type="button" data-image-url="{{ image_url }}" title="复制图片链接" aria-label="复制图片链接">
-                          <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
+                          <i data-lucide="copy" class="icon-sm"></i>
                         </button>
                       </div>
                     </div>
                     {% endfor %}
                   </div>
                   {% else %}
-                  <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
-                    <i data-lucide="info" style="width: 14px; height: 14px;"></i>
+                  <p class="muted empty-hint">
+                    <i data-lucide="info" class="icon-edit"></i>
                     未上传到图床
                   </p>
                   {% endif %}
                 </div>
 
                 <div>
-                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
-                    本地生成的图片输出路径：
-                  </span>
+                  <span class="detail-label">本地生成的图片输出路径：</span>
                   {% if log.output_files %}
                   <ul class="file-list">
                     {% for path in log.output_files %}
-                    <li style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
-                      <i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i>
+                    <li class="file-item">
+                      <i data-lucide="image" class="icon-edit icon-success"></i>
                       <code>{{ path }}</code>
                     </li>
                     {% endfor %}
                   </ul>
                   {% else %}
-                  <p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
-                    <i data-lucide="info" style="width: 14px; height: 14px;"></i>
+                  <p class="muted empty-hint">
+                    <i data-lucide="info" class="icon-edit"></i>
                     未留存本地文件 (例如小图直传或非生图请求)
                   </p>
                   {% endif %}
@@ -1265,7 +1261,7 @@
         : `${kbSize} KB`;
 
       html += `\n<div class="base64-truncated">
-  <i data-lucide="image-off" style="width: 14px; height: 14px; vertical-align: middle;"></i>
+  <i data-lucide="image-off" class="icon-edit"></i>
   <span>[超长 Base64 图像数据 | 大小: ${previewLabel}]</span>
   <div class="base64-actions">
     <button class="base64-btn copy-b64-btn" data-cache-key="${cacheKey}" type="button">复制完整数据</button>
@@ -1440,7 +1436,7 @@
     container.hidden = false;
     container.innerHTML = `
       <div class="replay-status replay-status-${type}">
-        <i data-lucide="${type === "error" ? "alert-circle" : "loader-circle"}" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="${type === "error" ? "alert-circle" : "loader-circle"}" class="btn-icon"></i>
         <span>${escapeHtml(message)}</span>
       </div>
     `;
@@ -1464,7 +1460,7 @@
     container.innerHTML = `
       <div class="replay-head">
         <span>
-          <i data-lucide="image" style="width: 15px; height: 15px;"></i>
+          <i data-lucide="image" class="icon-15"></i>
           重放结果
         </span>
         <code>${escapeHtml(body.replay_request_id || "")}</code>
@@ -1489,10 +1485,11 @@
     const status = String(log.status ?? "");
     const logLevel = log.log_level || "INFO";
     const isRetrySuccess = log.is_retry_success ? true : false;
-    const retryIcon = isRetrySuccess ? `<span style="margin-left: 4px; font-size: 10px; color: #fbbf24; vertical-align: middle;" title="重试后成功">⟳</span>` : "";
+    const retryIcon = isRetrySuccess ? `<span class="retry-mark" title="重试后成功">⟳</span>` : "";
+    const rowClass = isRetrySuccess ? ` is-retry` : "";
     const rowStyle = isRetrySuccess ? ` background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);` : "";
     const model = log.model
-      ? `<span class="badge badge-normal" style="font-size: 11px;">${escapeHtml(log.model)}</span>`
+      ? `<span class="badge badge-normal badge-sm">${escapeHtml(log.model)}</span>`
       : `<span class="muted">-</span>`;
     const size = (log.width && log.height)
       ? `<code>${escapeHtml(log.width)}x${escapeHtml(log.height)}</code>`
@@ -1501,38 +1498,38 @@
     const totalDuration = renderDuration(log.total_ms_display, log.total_ms);
     const upstreamDuration = renderDuration(log.upstream_ms_display, log.upstream_ms);
     const replayCell = log.has_request_payload
-      ? `<button class="secondary btn-replay-log" data-log-id="${escapeAttr(logId)}" type="button" style="min-height: 32px; padding: 6px 12px; font-size: 12px;"><i data-lucide="repeat-2" style="width: 13px; height: 13px;"></i><span>重放</span></button>`
-      : `<span class="muted" style="font-size: 12px;">不可重放</span>`;
+      ? `<button class="secondary btn-replay-log log-btn-sm" data-log-id="${escapeAttr(logId)}" type="button"><i data-lucide="repeat-2" class="icon-13"></i><span>重放</span></button>`
+      : `<span class="muted muted-sm">不可重放</span>`;
     const errorHtml = log.error_message
-      ? `<div class="error" style="margin-bottom: 0;"><div style="display: flex; align-items: center; gap: 8px;"><i data-lucide="alert-octagon" style="width: 18px; height: 18px;"></i><strong style="color:#f87171;">错误 ${escapeHtml(log.error_code ?? "")}：</strong><span>${escapeHtml(log.error_message)}</span></div></div>`
+      ? `<div class="error error-flush"><div class="error-row"><i data-lucide="alert-octagon" class="btn-icon-lg"></i><strong class="error-code">错误 ${escapeHtml(log.error_code ?? "")}：</strong><span>${escapeHtml(log.error_message)}</span></div></div>`
       : "";
 
     return `
-        <tr class="log-row" style="border-left: 4px solid ${borderColorFor(status)};${rowStyle}">
-          <td data-log-column="request_id" class="mono" style="font-weight: 600; color: #a5b4fc;">${escapeHtml(requestId.slice(0, 8))}${retryIcon}</td>
+        <tr class="log-row is-${escapeAttr(status)}${rowClass}" style="border-left: 4px solid ${borderColorFor(status)};${rowStyle}">
+          <td data-log-column="request_id" class="mono cell-request-id">${escapeHtml(requestId.slice(0, 8))}${retryIcon}</td>
           <td data-log-column="log_level">
             <span class="level level-${escapeAttr(String(logLevel).toLowerCase())}">${escapeHtml(logLevel)}</span>
           </td>
-          <td data-log-column="user" style="font-weight: 700; color: #fff;">${escapeHtml(log.user_name ?? "")}</td>
+          <td data-log-column="user" class="cell-user">${escapeHtml(log.user_name ?? "")}</td>
           <td data-log-column="action">
-            <span class="badge" style="background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.2); color:#c084fc;">${escapeHtml(log.action ?? "")}</span>
+            <span class="badge badge-action">${escapeHtml(log.action ?? "")}</span>
           </td>
           <td data-log-column="upstream" class="mono">${log.upstream_id ? `<code>${escapeHtml(log.upstream_id)}</code>` : `<span class="muted">-</span>`}</td>
           <td data-log-column="model">${model}</td>
           <td data-log-column="size" class="mono">${size}</td>
           <td data-log-column="anlas" class="mono">
-            <span style="color: #94a3b8;">${escapeHtml(log.estimated_anlas_cost ?? 0)}</span>
-            <span style="color: rgba(255,255,255,0.15)">/</span>
-            <span style="color: #34d399; font-weight: 700;">${escapeHtml(finalCost)}</span>
+            <span class="anlas-sep">${escapeHtml(log.estimated_anlas_cost ?? 0)}</span>
+            <span class="anlas-slash">/</span>
+            <span class="anlas-total">${escapeHtml(finalCost)}</span>
           </td>
           <td data-log-column="status">${renderStatusPill(status, isRetrySuccess)}</td>
           <td data-log-column="total_ms" class="mono">${totalDuration}</td>
           <td data-log-column="upstream_ms" class="mono">${upstreamDuration}</td>
-          <td data-log-column="created_at" style="font-size: 13px; color: var(--text-muted);" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
+          <td data-log-column="created_at" class="cell-created" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
           <td data-log-column="actions">
             <div class="log-actions">
-              <button class="secondary log-toggle-btn" data-log-id="${escapeAttr(logId)}" type="button" aria-expanded="false" style="min-height: 32px; padding: 6px 12px; font-size: 12px;">
-                <span class="chevron"><i data-lucide="chevron-right" style="width: 13px; height: 13px;"></i></span>
+              <button class="secondary log-toggle-btn log-btn-sm" data-log-id="${escapeAttr(logId)}" type="button" aria-expanded="false">
+                <span class="chevron"><i data-lucide="chevron-right" class="icon-13"></i></span>
                 <span>详情</span>
               </button>
               ${replayCell}
@@ -1549,27 +1546,23 @@
                 <script type="application/json" id="raw-payload-log-${escapeAttr(logId)}" data-has-payload="${log.has_request_payload ? "true" : "false"}" data-payload-archived="${log.payload_archived ? "true" : "false"}">${escapeScriptJson(log.request_payload)}<\/script>
                 <div>
                   <div class="payload-toolbar">
-                    <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: inline-flex; align-items: center; gap: 4px;">
-                      <i data-lucide="braces" style="width: 14px; height: 14px;"></i>
+                    <span class="detail-label-inline">
+                      <i data-lucide="braces" class="icon-edit"></i>
                       请求与响应 Payload 数据 (含智能安全截断)
                     </span>
-                    <button class="secondary btn-copy-raw-payload" data-log-id="${escapeAttr(logId)}" type="button" style="min-height: 28px; padding: 4px 10px; font-size: 11px;">
-                      <i data-lucide="copy" style="width: 12px; height: 12px;"></i>
+                    <button class="secondary btn-copy-raw-payload payload-copy-btn" data-log-id="${escapeAttr(logId)}" type="button">
+                      <i data-lucide="copy" class="icon-12"></i>
                       <span>复制完整 JSON</span>
                     </button>
                   </div>
-                  <pre id="pretty-payload-log-${escapeAttr(logId)}" class="pretty-payload" style="margin: 0; min-height: 80px;">点击展开展开后载入数据...</pre>
+                  <pre id="pretty-payload-log-${escapeAttr(logId)}" class="pretty-payload pretty-payload-initial">点击展开展开后载入数据...</pre>
                 </div>
                 <div>
-                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
-                    图床图片：
-                  </span>
+                  <span class="detail-label">图床图片：</span>
                   ${renderHostedImages(log.image_urls)}
                 </div>
                 <div>
-                  <span style="font-size: 13px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
-                    本地生成的图片输出路径：
-                  </span>
+                  <span class="detail-label">本地生成的图片输出路径：</span>
                   ${renderOutputFiles(log.output_files)}
                 </div>
               </div>
@@ -1586,15 +1579,15 @@
   }
 
   function renderStatusPill(status, isRetrySuccess = false) {
-    const retryIcon = isRetrySuccess ? `<span style="color: #fbbf24; margin-right: 4px;" title="重试后成功">⟳</span>` : "";
+    const retryIcon = isRetrySuccess ? `<span class="retry-mark-inline" title="重试后成功">⟳</span>` : "";
     if (status === "success") {
-      return `<span class="status-pill status-running" style="color: var(--success); background: var(--success-bg); border-color: var(--success-border);">${retryIcon}${isRetrySuccess ? "重试成功" : "成功"}</span>`;
+      return `<span class="status-pill status-success">${retryIcon}${isRetrySuccess ? "重试成功" : "成功"}</span>`;
     }
     if (status === "failed") {
       return `<span class="status-pill status-error">失败</span>`;
     }
     if (status === "running") {
-      return `<span class="status-pill" style="color: var(--info); background: var(--info-bg); border-color: var(--info-border);">运行中</span>`;
+      return `<span class="status-pill status-info">运行中</span>`;
     }
     return `<span class="status-pill">${escapeHtml(status)}</span>`;
   }
@@ -1644,7 +1637,7 @@
 
   function renderHostedImages(images) {
     if (!Array.isArray(images) || images.length === 0) {
-      return `<p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;"><i data-lucide="info" style="width: 14px; height: 14px;"></i>未上传到图床</p>`;
+      return `<p class="muted empty-hint"><i data-lucide="info" class="icon-edit"></i>未上传到图床</p>`;
     }
     const cards = images.map((image) => {
       const imageUrl = typeof image === "string" ? image : (image?.url ?? "");
@@ -1654,13 +1647,13 @@
                     <div class="hosted-image-card">
                       <img class="hosted-image-preview" alt="${escapeAttr(imageName)}" data-image-url="${escapeAttr(imageUrl)}" title="点击放大查看">
                       <span>
-                        <i data-lucide="image" style="width: 13px; height: 13px;"></i>
+                        <i data-lucide="image" class="icon-sm"></i>
                         ${escapeHtml(provider)}
                       </span>
                       <div class="hosted-image-url">
                         <code>${escapeHtml(imageUrl)}</code>
                         <button class="hosted-image-copy" type="button" data-image-url="${escapeAttr(imageUrl)}" title="复制图片链接" aria-label="复制图片链接">
-                          <i data-lucide="copy" style="width: 13px; height: 13px;"></i>
+                          <i data-lucide="copy" class="icon-sm"></i>
                         </button>
                       </div>
                     </div>`;
@@ -1670,9 +1663,9 @@
 
   function renderOutputFiles(files) {
     if (!Array.isArray(files) || files.length === 0) {
-      return `<p class="muted" style="font-size: 13px; display: inline-flex; align-items: center; gap: 6px;"><i data-lucide="info" style="width: 14px; height: 14px;"></i>未留存本地文件 (例如小图直传或非生图请求)</p>`;
+      return `<p class="muted empty-hint"><i data-lucide="info" class="icon-edit"></i>未留存本地文件 (例如小图直传或非生图请求)</p>`;
     }
-    return `<ul class="file-list">${files.map((path) => `<li style="display: flex; align-items: center; gap: 8px; font-size: 13px;"><i data-lucide="image" style="width: 14px; height: 14px; color: var(--success);"></i><code>${escapeHtml(path)}</code></li>`).join("")}</ul>`;
+    return `<ul class="file-list">${files.map((path) => `<li class="file-item"><i data-lucide="image" class="icon-edit icon-success"></i><code>${escapeHtml(path)}</code></li>`).join("")}</ul>`;
   }
 
   function escapeHtml(value) {

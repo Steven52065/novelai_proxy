@@ -2,40 +2,40 @@
 {% block content %}
 <div class="page-head">
   <h1>
-    <i data-lucide="layout-dashboard" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    <i data-lucide="layout-dashboard" class="h1-icon"></i>
     系统仪表盘
   </h1>
-  <div style="display: flex; align-items: center; gap: 8px;">
-    <span id="dashboard-ws-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 99px; background: #f59e0b; box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);"></span>
-    <span class="muted" id="dashboard-ws-status" style="font-size: 13px; font-weight: 500;">WS 连接中...</span>
+  <div class="ws-status">
+    <span id="dashboard-ws-dot" class="ws-dot"></span>
+    <span class="muted" id="dashboard-ws-status">WS 连接中...</span>
   </div>
 </div>
 
 <section class="metrics">
   <div>
     <span>
-      <i data-lucide="users" style="width: 16px; height: 16px; stroke: #6366f1;"></i>
+      <i data-lucide="users" class="metric-icon metric-icon-1"></i>
       用户总数
     </span>
     <strong id="stat-total-users">{{ stats.total_users }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="activity" style="width: 16px; height: 16px; stroke: #3b82f6;"></i>
+      <i data-lucide="activity" class="metric-icon metric-icon-2"></i>
       今日生成请求
     </span>
     <strong id="stat-today-requests">{{ stats.today_requests }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="coins" style="width: 16px; height: 16px; stroke: #10b981;"></i>
+      <i data-lucide="coins" class="metric-icon metric-icon-3"></i>
       累计消耗 Anlas
     </span>
     <strong id="stat-total-anlas">{{ stats.total_anlas }}</strong>
   </div>
   <div>
     <span>
-      <i data-lucide="layers" style="width: 16px; height: 16px; stroke: #f59e0b;"></i>
+      <i data-lucide="layers" class="metric-icon metric-icon-4"></i>
       当前排队队列
     </span>
     <strong id="queue-size">{{ stats.queue_size }}</strong>
@@ -45,11 +45,11 @@
 <section class="panel">
   <div class="section-head dashboard-chart-head">
     <div>
-      <h2 style="font-size: 18px; font-weight: 700;">
-        <i data-lucide="chart-line" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+      <h2 class="h2-sm">
+        <i data-lucide="chart-line" class="h2-icon"></i>
         请求数量趋势
       </h2>
-      <p class="muted" style="margin-top: 4px;">统计全部代理请求、上游失败请求、中转拒绝请求和重试后成功请求</p>
+      <p class="muted section-subtitle">统计全部代理请求、上游失败请求、中转拒绝请求和重试后成功请求</p>
     </div>
     <div class="dashboard-controls">
       <label class="inline-filter">
@@ -100,13 +100,13 @@
 </section>
 
 <section class="panel">
-  <div class="section-head" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
+  <div class="section-head section-head-flush">
     <div>
-      <h2 style="font-size: 18px; font-weight: 700;">
-        <i data-lucide="list-ordered" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+      <h2 class="h2-sm">
+        <i data-lucide="list-ordered" class="h2-icon"></i>
         生成队列状态
       </h2>
-      <p class="muted" style="margin-top: 4px;">当前上游并发处理队列，数据变化时实时推送，空闲时仅保持心跳</p>
+      <p class="muted section-subtitle">当前上游并发处理队列，数据变化时实时推送，空闲时仅保持心跳</p>
     </div>
     <div class="dashboard-controls">
       <label class="inline-filter">
@@ -122,7 +122,7 @@
     </div>
   </div>
 
-  <div class="table-wrap" style="margin-top: 20px;">
+  <div class="table-wrap table-wrap-spaced">
     <table class="queue-table">
       <thead>
         <tr>
@@ -137,27 +137,27 @@
         </tr>
       </thead>
       <tbody id="queue-body">
-        <tr class="empty-row"><td colspan="8" class="muted" style="text-align: center; padding: 32px 0;">正在加载队列数据...</td></tr>
+        <tr class="empty-row"><td colspan="8" class="muted cell-centered padded-cell">正在加载队列数据...</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
 <section class="panel">
-  <div class="section-head" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
+  <div class="section-head section-head-flush">
     <div>
-      <h2 style="font-size: 18px; font-weight: 700;">
-        <i data-lucide="sliders-horizontal" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+      <h2 class="h2-sm">
+        <i data-lucide="sliders-horizontal" class="h2-icon"></i>
         上游渠道权重
       </h2>
-      <p class="muted" style="margin-top: 4px;">自适应分流权重与上游状态，数据变化时实时推送，空闲时仅保持心跳</p>
+      <p class="muted section-subtitle">自适应分流权重与上游状态，数据变化时实时推送，空闲时仅保持心跳</p>
     </div>
-    <div style="display: flex; align-items: center; gap: 10px;">
-      <span id="weights-strategy-badge" class="badge badge-normal" style="font-size: 11px;">加载中...</span>
+    <div class="badge-slot">
+      <span id="weights-strategy-badge" class="badge badge-normal badge-sm">加载中...</span>
     </div>
   </div>
-  <div class="table-wrap" style="margin-top: 20px;">
-    <table>
+  <div class="table-wrap table-wrap-spaced">
+    <table class="responsive-card-table">
       <thead>
         <tr>
           <th>上游渠道</th>
@@ -627,10 +627,11 @@
     </div>`;
   }
 
-  function appendCell(row, htmlContent, className) {
+  function appendCell(row, htmlContent, className, label) {
     const cell = document.createElement("td");
     cell.innerHTML = htmlContent;
     if (className) cell.className = className;
+    if (label) cell.dataset.label = label;
     row.appendChild(cell);
   }
 
@@ -779,11 +780,12 @@
       var row = document.createElement("tr");
 
       // Upstream name
-      appendCell(row, "<code style=\"font-weight:600;\">" + u.id + "</code>", "mono");
+      appendCell(row, "<code style=\"font-weight:600;\">" + u.id + "</code>", "mono", "上游渠道");
 
       // Weight bar
       var percentage = maxWeight > 0 ? (u.weight / maxWeight * 100) : 0;
       var weightCell = document.createElement("td");
+      weightCell.dataset.label = "当前权重";
       weightCell.innerHTML = "<div style=\"display:flex; align-items:center; gap:8px;\">" +
         "<div style=\"flex:1; height:8px; background:rgba(255,255,255,0.06); border-radius:4px; overflow:hidden;\">" +
         "<div style=\"height:100%; width:" + percentage.toFixed(1) + "%; background:linear-gradient(90deg, #6366f1, #a5b4fc); border-radius:4px; transition: width 0.5s ease;\"></div>" +
@@ -795,17 +797,18 @@
       // Score with color coding
       var scoreColor = u.score >= 0.7 ? "#34d399" : u.score >= 0.4 ? "#f59e0b" : "#ef4444";
       var scoreCell = document.createElement("td");
+      scoreCell.dataset.label = "成功评分";
       scoreCell.innerHTML = "<span style=\"font-weight:600; color:" + scoreColor + ";\">" + u.score.toFixed(3) + "</span>";
       row.appendChild(scoreCell);
 
       // Queue size
-      appendCell(row, "<span style=\"font-weight:500;\">" + u.queue_size + "</span>");
+      appendCell(row, "<span style=\"font-weight:500;\">" + u.queue_size + "</span>", "", "排队数量");
 
       // Running status
       var runningHtml = u.running
         ? "<span class=\"status-pill status-running\">执行中</span>"
         : "<span class=\"status-pill\">空闲</span>";
-      appendCell(row, runningHtml);
+      appendCell(row, runningHtml, "", "运行状态");
 
       weightsBody.appendChild(row);
     }

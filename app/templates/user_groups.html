@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head">
   <h1>
-    <i data-lucide="users-round" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    <i data-lucide="users-round" class="h1-icon"></i>
     用户组
   </h1>
 </div>
@@ -10,15 +10,15 @@
 <section class="panel">
   <div class="section-head">
     <div>
-      <h2 style="font-size: 18px;">
-        <i data-lucide="plus" style="width: 18px; height: 18px; stroke: #10b981;"></i>
+      <h2 class="h2-sm">
+        <i data-lucide="plus" class="h2-icon h2-icon-success"></i>
         创建用户组
       </h2>
     </div>
   </div>
 
   <form method="post" action="/admin/user-groups" class="stack">
-    <div class="responsive-grid" style="display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px;">
+    <div class="responsive-grid grid-14-1-1">
       <label>
         组名称
         <input name="name" required placeholder="例如：Discord 默认组">
@@ -36,7 +36,7 @@
       </label>
     </div>
 
-    <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+    <div class="responsive-grid grid-1-1-1">
       <label>
         重置周期
         <select name="default_reset_period">
@@ -50,23 +50,23 @@
         重置日期
         <input name="default_reset_day" type="number" min="0" max="28" value="1">
       </label>
-      <div style="display: grid; align-content: end; gap: 8px;">
-        <label class="check" style="color: #cbd5e1; font-weight: 500;">
+      <div class="grid-align-self-end">
+        <label class="check check-muted">
           <input name="is_active" type="checkbox" checked>
           启用用户组
         </label>
       </div>
     </div>
 
-    <div class="responsive-actions" style="display: flex; gap: 20px; padding: 6px 0;">
-      <label class="check" style="color: #cbd5e1; font-weight: 500;">
+    <div class="responsive-actions check-row">
+      <label class="check check-muted">
         <input name="default_free_small_only" type="checkbox" checked>
         默认仅允许免费小图
       </label>
     </div>
 
-    <div class="responsive-grid" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
-      <label class="check" style="color: #cbd5e1; font-weight: 500;">
+    <div class="responsive-grid grid-12-1 grid-align-end">
+      <label class="check check-muted">
         <input name="free_small_daily_limit_enabled" type="checkbox">
         启用组内用户每日免费小图限制
       </label>
@@ -85,35 +85,35 @@
       </select>
     </label>
 
-    <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-      <div>
-        <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
-        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+    <div class="responsive-grid grid-2-cols-wide">
+      <div class="field-pad">
+        <div class="muted field-group-label">默认允许接口</div>
+        <div class="responsive-check-grid">
           {% for endpoint, label in endpoint_choices.items() %}
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="default_allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint == "generate-image" else "" }}>
             {{ label }}
           </label>
           {% endfor %}
         </div>
       </div>
-      <div>
-        <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许上游 Key</div>
-        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+      <div class="field-pad">
+        <div class="muted field-group-label">默认允许上游 Key</div>
+        <div class="responsive-check-grid">
           {% for upstream_id in upstream_choices %}
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="default_allowed_upstreams" type="checkbox" value="{{ upstream_id }}">
             {{ upstream_id }}
           </label>
           {% endfor %}
         </div>
-        <p class="muted" style="font-size: 12px; margin-top: 6px;">不勾选表示默认允许全部已启用上游。</p>
+        <p class="muted hint">不勾选表示默认允许全部已启用上游。</p>
       </div>
     </div>
 
     <div>
       <button type="submit">
-        <i data-lucide="check" style="width: 16px; height: 16px;"></i>
+        <i data-lucide="check" class="btn-icon"></i>
         创建用户组
       </button>
     </div>
@@ -123,15 +123,15 @@
 <section class="panel">
   <div class="section-head">
     <div>
-      <h2 style="font-size: 18px;">
-        <i data-lucide="list" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+      <h2 class="h2-sm">
+        <i data-lucide="list" class="h2-icon"></i>
         用户组列表
       </h2>
     </div>
   </div>
 
   <div class="table-wrap">
-    <table>
+    <table class="responsive-card-table">
       <thead>
         <tr>
           <th>ID</th>
@@ -147,55 +147,55 @@
       <tbody>
         {% for group in groups %}
         <tr>
-          <td><code>#{{ group.id }}</code></td>
-          <td style="font-weight: 700; color: #fff;">{{ group.name }}</td>
-          <td>
+          <td data-label="ID"><code>#{{ group.id }}</code></td>
+          <td data-label="名称" class="cell-name">{{ group.name }}</td>
+          <td data-label="状态">
             {% if group.is_active %}
             <span class="badge badge-active">启用中</span>
             {% else %}
             <span class="badge badge-inactive">已禁用</span>
             {% endif %}
           </td>
-          <td>
+          <td data-label="默认等级">
             {% if group.default_tier == 'vip' %}
             <span class="badge badge-vip">VIP</span>
             {% else %}
             <span class="badge badge-normal">Normal</span>
             {% endif %}
           </td>
-          <td>
+          <td data-label="默认权限">
             {% if group.default_free_small_only %}
-            <span class="badge" style="background: rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); color:#f59e0b;">仅免费小图</span>
+            <span class="badge badge-free">仅免费小图</span>
             {% else %}
-            <span class="badge" style="background: rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:#34d399;">不限图规格</span>
+            <span class="badge badge-unlimited">不限图规格</span>
             {% endif %}
             {% if group.free_small_daily_limit_enabled %}
-            <span class="badge" style="background: rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.25); color:#7dd3fc; margin-left: 4px;">每日每人 {{ group.free_small_daily_limit }} 张</span>
+            <span class="badge badge-daily badge-ml">每日每人 {{ group.free_small_daily_limit }} 张</span>
             {% endif %}
-            <span class="badge" style="background: rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.18); color:#c4b5fd; margin-left: 4px;">{{ group.default_image_format_policy_label }}</span>
-            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+            <span class="badge badge-format badge-ml">{{ group.default_image_format_policy_label }}</span>
+            <div class="badge-cluster">
               {% for endpoint in group.default_allowed_endpoints_list %}
-              <span class="badge" style="background: rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.18); color:#93c5fd;">{{ endpoint_choices.get(endpoint, endpoint) }}</span>
+              <span class="badge badge-endpoint">{{ endpoint_choices.get(endpoint, endpoint) }}</span>
               {% endfor %}
             </div>
-            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;">
+            <div class="badge-cluster">
               {% if group.default_allowed_upstreams_list %}
                 {% for upstream_id in group.default_allowed_upstreams_list %}
-                <span class="badge" style="background: rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.18); color:#86efac;">{{ upstream_id }}</span>
+                <span class="badge badge-upstream">{{ upstream_id }}</span>
                 {% endfor %}
               {% else %}
-                <span class="badge" style="background: rgba(148,163,184,0.08); border:1px solid rgba(148,163,184,0.18); color:#cbd5e1;">全部上游</span>
+                <span class="badge badge-all-upstream">全部上游</span>
               {% endif %}
             </div>
           </td>
-          <td>
-            <span class="mono" style="color: #34d399; font-weight: 700;">{{ group.default_anlas_total }}</span>
-            <span class="muted" style="display: block; font-size: 12px;">{{ group.default_reset_period }} / {{ group.default_reset_day }}</span>
+          <td data-label="默认Anlas额度">
+            <span class="mono anlas-total">{{ group.default_anlas_total }}</span>
+            <span class="muted muted-sm reset-sub">{{ group.default_reset_period }} / {{ group.default_reset_day }}</span>
           </td>
-          <td>{{ group.member_count }}</td>
-          <td>
-            <a href="/admin/user-groups/{{ group.id }}" style="display: inline-flex; align-items: center; gap: 4px; font-weight: 600;">
-              <i data-lucide="edit" style="width: 14px; height: 14px;"></i>
+          <td data-label="成员">{{ group.member_count }}</td>
+          <td data-label="操作">
+            <a href="/admin/user-groups/{{ group.id }}" class="edit-link">
+              <i data-lucide="edit" class="icon-edit"></i>
               编辑
             </a>
           </td>

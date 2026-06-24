@@ -12,7 +12,7 @@
       <i data-lucide="sparkles" style="width: 22px; height: 22px; stroke: #a5b4fc;"></i>
       NovelAI Proxy
     </a>
-    <nav>
+    <nav class="topbar-nav">
       <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/admin">
         <i data-lucide="layout-dashboard" style="width: 16px; height: 16px;"></i>仪表盘
       </a>
@@ -35,10 +35,29 @@
       </button>
     </form>
   </header>
-  
+
   <main class="page">
     {% block content %}{% endblock %}
   </main>
+
+  <!-- 移动端底部标签栏（PC 隐藏，≤768px 显示） -->
+  <nav class="bottom-nav" aria-label="主导航">
+    <a class="{{ 'active' if active == 'dashboard' else '' }}" href="/admin">
+      <i data-lucide="layout-dashboard"></i>仪表盘
+    </a>
+    <a class="{{ 'active' if active == 'users' else '' }}" href="/admin/users">
+      <i data-lucide="users"></i>用户
+    </a>
+    <a class="{{ 'active' if active == 'user_groups' else '' }}" href="/admin/user-groups">
+      <i data-lucide="users-round"></i>用户组
+    </a>
+    <a class="{{ 'active' if active == 'logs' else '' }}" href="/admin/logs">
+      <i data-lucide="history"></i>日志
+    </a>
+    <a class="{{ 'active' if active == 'database' else '' }}" href="/admin/database">
+      <i data-lucide="database"></i>数据库
+    </a>
+  </nav>
 
   <!-- Global Lightbox for Image Previews -->
   <div id="global-lightbox" class="lightbox">

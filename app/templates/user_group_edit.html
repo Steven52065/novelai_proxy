@@ -2,19 +2,19 @@
 {% block content %}
 <div class="page-head">
   <h1>
-    <i data-lucide="users-round" style="width: 28px; height: 28px; stroke: #a5b4fc;"></i>
+    <i data-lucide="users-round" class="h1-icon"></i>
     用户组 #{{ group.id }}
   </h1>
-  <a href="/admin/user-groups" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600;">
-    <i data-lucide="arrow-left" style="width: 16px; height: 16px;"></i>
+  <a href="/admin/user-groups" class="back-link">
+    <i data-lucide="arrow-left" class="btn-icon"></i>
     返回用户组
   </a>
 </div>
 
 {% if saved %}
-<section class="notice" style="animation: fadeIn 0.4s ease-out;">
-  <div style="display: flex; align-items: center; gap: 10px;">
-    <i data-lucide="check-circle-2" style="width: 20px; height: 20px; stroke: #93c5fd; flex-shrink: 0;"></i>
+<section class="notice notice-key">
+  <div class="notice-key-body">
+    <i data-lucide="check-circle-2" class="notice-icon notice-icon-soft"></i>
     <span>
       已保存组默认配置。
       {% if propagated is not none %}
@@ -33,14 +33,14 @@
 
 <div class="layout-grid">
   <div class="stack">
-    <section class="panel" style="margin-bottom: 0;">
+    <section class="panel panel-flush">
       <div class="section-head">
         <div>
-          <h2 style="font-size: 18px;">
-            <i data-lucide="settings" style="width: 18px; height: 18px; stroke: #3b82f6;"></i>
+          <h2 class="h2-sm">
+            <i data-lucide="settings" class="h2-icon h2-icon-info"></i>
             默认配置
           </h2>
-          <p class="muted" style="margin-top: 4px;">固定 ID：<code>#{{ group.id }}</code></p>
+          <p class="muted section-subtitle">固定 ID：<code>#{{ group.id }}</code></p>
         </div>
         {% if group.is_active %}
         <span class="badge badge-active">启用中</span>
@@ -51,7 +51,7 @@
 
       <form id="group-settings-form" method="post" action="/admin/user-groups/{{ group.id }}" class="stack">
         <input type="hidden" name="propagate_scope" value="unmodified">
-        <div class="responsive-grid" style="display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;">
+        <div class="responsive-grid grid-14-1">
           <label>
             组名称
             <input name="name" value="{{ group.name }}" required>
@@ -65,7 +65,7 @@
           </label>
         </div>
 
-        <div class="responsive-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+        <div class="responsive-grid grid-1-1-1">
           <label>
             默认Anlas额度总额
             <input name="default_anlas_total" type="number" min="0" value="{{ group.default_anlas_total }}">
@@ -84,19 +84,19 @@
           </label>
         </div>
 
-        <div class="responsive-actions" style="display: flex; gap: 20px; padding: 6px 0;">
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+        <div class="responsive-actions check-row">
+          <label class="check check-muted">
             <input name="is_active" type="checkbox" {{ "checked" if group.is_active else "" }}>
             启用用户组
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="default_free_small_only" type="checkbox" {{ "checked" if group.default_free_small_only else "" }}>
             默认仅允许免费小图
           </label>
         </div>
 
-        <div class="responsive-grid" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; align-items: end;">
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+        <div class="responsive-grid grid-12-1 grid-align-end">
+          <label class="check check-muted">
             <input name="free_small_daily_limit_enabled" type="checkbox" {{ "checked" if group.free_small_daily_limit_enabled else "" }}>
             启用组内用户每日免费小图限制
           </label>
@@ -115,11 +115,11 @@
           </select>
         </label>
 
-        <div>
-          <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许接口</div>
-          <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="field-pad">
+          <div class="muted field-group-label">默认允许接口</div>
+          <div class="responsive-check-grid">
             {% for endpoint, label in endpoint_choices.items() %}
-            <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <label class="check check-muted">
               <input name="default_allowed_endpoints" type="checkbox" value="{{ endpoint }}" {{ "checked" if endpoint in group.default_allowed_endpoints_list else "" }}>
               {{ label }}
             </label>
@@ -127,28 +127,28 @@
           </div>
         </div>
 
-        <div>
-          <div class="muted" style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">默认允许上游 Key</div>
-          <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
+        <div class="field-pad">
+          <div class="muted field-group-label">默认允许上游 Key</div>
+          <div class="responsive-check-grid">
             {% for upstream_id in upstream_choices %}
-            <label class="check" style="color: #cbd5e1; font-weight: 500;">
+            <label class="check check-muted">
               <input name="default_allowed_upstreams" type="checkbox" value="{{ upstream_id }}" {{ "checked" if upstream_id in group.default_allowed_upstreams_list else "" }}>
               {{ upstream_id }}
             </label>
             {% endfor %}
           </div>
-          <p class="muted" style="font-size: 12px; margin-top: 6px;">不勾选表示默认允许全部已启用上游。</p>
+          <p class="muted hint">不勾选表示默认允许全部已启用上游。</p>
         </div>
       </form>
 
-      <div class="responsive-actions" style="display: flex; gap: 12px; margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; justify-content: space-between; align-items: center;">
-        <button type="submit" form="group-settings-form" style="min-height: 42px; padding: 0 24px;">
-          <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+      <div class="form-footer">
+        <button type="submit" form="group-settings-form" class="btn-h42 btn-pad-lg">
+          <i data-lucide="save" class="btn-icon"></i>
           保存默认配置
         </button>
-        <form method="post" action="/admin/user-groups/{{ group.id }}/delete" onsubmit="return confirm('确认禁用此用户组吗？已有成员不会被移出。');">
-          <button class="danger" type="submit" style="min-height: 42px; padding: 0 16px;">
-            <i data-lucide="ban" style="width: 16px; height: 16px;"></i>
+        <form method="post" action="/admin/user-groups/{{ group.id }}/delete" onsubmit="return confirm('确认禁用此用户组吗？已有成员不会被移出。');" class="form-inline">
+          <button class="danger btn-h42 btn-pad-md" type="submit">
+            <i data-lucide="ban" class="btn-icon"></i>
             禁用用户组
           </button>
         </form>
@@ -157,78 +157,78 @@
   </div>
 
   <div class="stack">
-    <section class="panel" style="margin-bottom: 0;">
-      <h2 style="font-size: 18px; margin-bottom: 16px;">
-        <i data-lucide="refresh-cw" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+    <section class="panel panel-flush">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="refresh-cw" class="h2-icon h2-icon-warning"></i>
         同步到成员
       </h2>
       <form method="post" action="/admin/user-groups/{{ group.id }}/sync-members" class="stack">
-        <p class="muted" style="font-size: 12px; margin: 0;">把当前组默认配置强制覆盖到全部成员的所选字段。保存默认配置时也会弹窗按需覆盖，此处用于事后手动补齐。</p>
-        <div class="responsive-check-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;">
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+        <p class="muted muted-sm hint-flush">把当前组默认配置强制覆盖到全部成员的所选字段。保存默认配置时也会弹窗按需覆盖，此处用于事后手动补齐。</p>
+        <div class="responsive-check-grid">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="tier">
             默认等级
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="free_small_only">
             免费小图策略
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="free_small_daily_limit">
             免费小图单日限制
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="allowed_endpoints">
             允许接口
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="allowed_upstreams">
             允许上游
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="image_format_policy">
             图片输出格式
           </label>
-          <label class="check" style="color: #cbd5e1; font-weight: 500;">
+          <label class="check check-muted">
             <input name="fields" type="checkbox" value="anlas_quota">
             Anlas额度总额和重置规则
           </label>
         </div>
         <button type="submit">
-          <i data-lucide="check" style="width: 16px; height: 16px;"></i>
+          <i data-lucide="check" class="btn-icon"></i>
           同步选中字段
         </button>
       </form>
     </section>
 
-    <section class="panel" style="margin-bottom: 0;">
-      <h2 style="font-size: 18px; margin-bottom: 16px;">
-        <i data-lucide="gauge" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+    <section class="panel panel-flush">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="gauge" class="h2-icon h2-icon-warning"></i>
         组共享限流
       </h2>
-      <form method="post" action="/admin/user-groups/{{ group.id }}/rate-limit-rules" class="inline-form responsive-grid" style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: var(--border-radius-md); border:1px solid rgba(255,255,255,0.04); margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 12px; align-items: end;">
-        <label style="gap: 4px;">
+      <form method="post" action="/admin/user-groups/{{ group.id }}/rate-limit-rules" class="inline-form responsive-grid rate-limit-add-form rate-limit-add-form-sm">
+        <label class="label-gap-sm">
           周期
-          <select name="period" style="min-height: 38px;">
+          <select name="period" class="control-h38">
             <option value="minute">minute</option>
             <option value="hour">hour</option>
             <option value="day">day</option>
             <option value="month">month</option>
           </select>
         </label>
-        <label style="gap: 4px;">
+        <label class="label-gap-sm">
           组内请求上限
-          <input name="max_requests" type="number" min="1" required style="min-height: 38px;">
+          <input name="max_requests" type="number" min="1" required class="control-h38">
         </label>
-        <button type="submit" style="min-height: 38px; padding: 0 16px;">
-          <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
+        <button type="submit" class="btn-h38">
+          <i data-lucide="plus" class="icon-edit"></i>
           添加
         </button>
       </form>
 
       {% if group_rules %}
       <div class="table-wrap">
-        <table>
+        <table class="responsive-card-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -242,34 +242,34 @@
           <tbody>
             {% for rule in group_rules %}
             <tr>
-              <td>#{{ rule.id }}<input form="group-rate-limit-rule-{{ rule.id }}" type="hidden" name="group_id" value="{{ group.id }}"></td>
-              <td>
-                <select form="group-rate-limit-rule-{{ rule.id }}" name="period" style="min-height:32px; padding: 4px 8px; font-size:13px; background:rgba(0,0,0,0.3);">
+              <td data-label="ID">#{{ rule.id }}<input form="group-rate-limit-rule-{{ rule.id }}" type="hidden" name="group_id" value="{{ group.id }}"></td>
+              <td data-label="周期">
+                <select form="group-rate-limit-rule-{{ rule.id }}" name="period" class="rule-select">
                   {% for period in ["minute", "hour", "day", "month"] %}
                   <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
                   {% endfor %}
                 </select>
               </td>
-              <td>
-                <input form="group-rate-limit-rule-{{ rule.id }}" name="max_requests" type="number" min="1" value="{{ rule.max_requests }}" style="min-height:32px; padding: 4px 8px; font-size:13px; width:80px; background:rgba(0,0,0,0.3);">
+              <td data-label="上限">
+                <input form="group-rate-limit-rule-{{ rule.id }}" name="max_requests" type="number" min="1" value="{{ rule.max_requests }}" class="rule-input">
               </td>
-              <td>
-                <label class="check" style="min-height:auto; font-size: 13px; font-weight:500;">
-                  <input form="group-rate-limit-rule-{{ rule.id }}" name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }} style="width:14px; height:14px;">
+              <td data-label="状态">
+                <label class="check check-inline">
+                  <input form="group-rate-limit-rule-{{ rule.id }}" name="is_active" type="checkbox" {{ "checked" if rule.is_active else "" }} class="check-sm">
                   激活
                 </label>
               </td>
-              <td>
-                <button form="group-rate-limit-rule-{{ rule.id }}" type="submit" class="secondary" style="min-height: 32px; padding: 4px 10px; font-size: 12px;">
-                  <i data-lucide="save" style="width: 12px; height: 12px;"></i>
+              <td data-label="保存">
+                <button form="group-rate-limit-rule-{{ rule.id }}" type="submit" class="secondary log-btn-sm">
+                  <i data-lucide="save" class="icon-12"></i>
                   保存
                 </button>
               </td>
-              <td>
+              <td data-label="删除">
                 <form method="post" action="/admin/group-rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirm('确认要删除此组限流规则吗？');">
                   <input type="hidden" name="group_id" value="{{ group.id }}">
-                  <button class="danger" type="submit" style="min-height: 32px; padding: 4px 10px; font-size: 12px;">
-                    <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i>
+                  <button class="danger log-btn-sm" type="submit">
+                    <i data-lucide="trash-2" class="icon-12"></i>
                     删除
                   </button>
                 </form>
@@ -283,17 +283,17 @@
       <form id="group-rate-limit-rule-{{ rule.id }}" method="post" action="/admin/group-rate-limit-rules/{{ rule.id }}"></form>
       {% endfor %}
       {% else %}
-      <p class="muted" style="font-size: 13px;">暂未配置组共享限流。</p>
+      <p class="muted muted-13">暂未配置组共享限流。</p>
       {% endif %}
     </section>
 
-    <section class="panel" style="margin-bottom: 0;">
-      <h2 style="font-size: 18px; margin-bottom: 16px;">
-        <i data-lucide="users" style="width: 18px; height: 18px; stroke: #a5b4fc;"></i>
+    <section class="panel panel-flush">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="users" class="h2-icon"></i>
         成员
       </h2>
       <div class="table-wrap">
-        <table>
+        <table class="responsive-card-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -306,21 +306,21 @@
           <tbody>
             {% for member in members %}
             <tr>
-              <td>#{{ member.id }}</td>
-              <td><a href="/admin/users/{{ member.id }}">{{ member.name }}</a></td>
-              <td>{{ member.tier }}</td>
-              <td>
+              <td data-label="ID">#{{ member.id }}</td>
+              <td data-label="名称"><a href="/admin/users/{{ member.id }}">{{ member.name }}</a></td>
+              <td data-label="等级">{{ member.tier }}</td>
+              <td data-label="状态">
                 {% if member.is_active %}
                 <span class="badge badge-active">启用中</span>
                 {% else %}
                 <span class="badge badge-inactive">已禁用</span>
                 {% endif %}
               </td>
-              <td class="mono">
+              <td data-label="Anlas额度" class="mono">
                 {% if (member.anlas_total or 0) > 0 %}
                 {{ member.anlas_used }} + {{ member.anlas_reserved }} / {{ member.anlas_total }}
                 {% else %}
-                <span class="muted" style="font-size: 12px;">未配置Anlas额度</span>
+                <span class="muted muted-sm">未配置Anlas额度</span>
                 {% endif %}
               </td>
             </tr>
@@ -332,35 +332,35 @@
   </div>
 </div>
 
-<div id="propagate-overlay" style="position: fixed; inset: 0; background: rgba(3,4,9,0.6); backdrop-filter: blur(4px); z-index: 999; display: none;"></div>
-<div id="propagate-modal" role="dialog" aria-modal="true" aria-labelledby="propagate-modal-title" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; display: none; width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow-y: auto;">
-  <section class="panel" style="margin: 0;">
-    <h2 id="propagate-modal-title" style="font-size: 18px; margin-bottom: 8px;">
-      <i data-lucide="users-round" style="width: 18px; height: 18px; stroke: #f59e0b;"></i>
+<div id="propagate-overlay" class="propagate-overlay" style="display: none;"></div>
+<div id="propagate-modal" class="propagate-modal" role="dialog" aria-modal="true" aria-labelledby="propagate-modal-title" style="display: none;">
+  <section class="panel propagate-card">
+    <h2 id="propagate-modal-title" class="h2-sm h2-mb-sm">
+      <i data-lucide="users-round" class="h2-icon h2-icon-warning"></i>
       把组配置覆盖到成员？
     </h2>
-    <p class="muted" style="font-size: 13px; margin-bottom: 14px;">
+    <p class="muted muted-13 propagate-desc">
       以下组默认配置将发生变化。可以把新值直接写入成员的用户配置，使成员设置与组保持一致。
     </p>
-    <div id="propagate-changes" class="stack" style="gap: 8px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: var(--border-radius-md); padding: 14px; margin-bottom: 16px; font-size: 13px;"></div>
-    <div class="stack" style="gap: 10px; margin-bottom: 18px;">
-      <label class="check" style="color: #cbd5e1; font-weight: 500; align-items: flex-start;">
-        <input type="radio" name="propagate-choice" value="unmodified" checked style="margin-top: 3px;">
-        <span>仅覆盖跟随组配置的成员（默认）<br><span class="muted" style="font-size: 12px; font-weight: 400;">只更新当前设置仍与修改前组配置一致的成员，手动改过的成员保持不变。</span></span>
+    <div id="propagate-changes" class="propagate-changes"></div>
+    <div class="stack propagate-choices">
+      <label class="check check-muted check-top">
+        <input type="radio" name="propagate-choice" value="unmodified" checked class="radio-top">
+        <span>仅覆盖跟随组配置的成员（默认）<br><span class="muted muted-sm muted-normal">只更新当前设置仍与修改前组配置一致的成员，手动改过的成员保持不变。</span></span>
       </label>
-      <label class="check" style="color: #cbd5e1; font-weight: 500; align-items: flex-start;">
-        <input type="radio" name="propagate-choice" value="all" style="margin-top: 3px;">
-        <span>覆盖全部成员<br><span class="muted" style="font-size: 12px; font-weight: 400;">包括手动修改过设置的成员，全部改为新的组配置。</span></span>
+      <label class="check check-muted check-top">
+        <input type="radio" name="propagate-choice" value="all" class="radio-top">
+        <span>覆盖全部成员<br><span class="muted muted-sm muted-normal">包括手动修改过设置的成员，全部改为新的组配置。</span></span>
       </label>
-      <label class="check" style="color: #cbd5e1; font-weight: 500; align-items: flex-start;">
-        <input type="radio" name="propagate-choice" value="none" style="margin-top: 3px;">
-        <span>仅保存组配置<br><span class="muted" style="font-size: 12px; font-weight: 400;">不修改任何成员，组配置只对之后新建的成员生效。</span></span>
+      <label class="check check-muted check-top">
+        <input type="radio" name="propagate-choice" value="none" class="radio-top">
+        <span>仅保存组配置<br><span class="muted muted-sm muted-normal">不修改任何成员，组配置只对之后新建的成员生效。</span></span>
       </label>
     </div>
-    <div class="responsive-actions" style="display: flex; gap: 12px; justify-content: flex-end;">
-      <button type="button" class="secondary" id="propagate-cancel" style="min-height: 40px; padding: 0 18px;">取消</button>
-      <button type="button" id="propagate-confirm" style="min-height: 40px; padding: 0 22px;">
-        <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+    <div class="responsive-actions propagate-actions">
+      <button type="button" class="secondary btn-h40 btn-pad-md" id="propagate-cancel">取消</button>
+      <button type="button" id="propagate-confirm" class="btn-h40 btn-pad-lg">
+        <i data-lucide="save" class="btn-icon"></i>
         保存
       </button>
     </div>
@@ -412,10 +412,10 @@
     function renderPreview(preview) {
       const rows = preview.fields.map((field) => {
         return (
-          '<div style="display: flex; flex-direction: column; gap: 2px;">' +
-          '<strong style="color: #e2e8f0;">' + escapeHtml(field.label) + "</strong>" +
-          '<span class="muted">' + escapeHtml(field.old) + ' <span style="color: #f59e0b;">→</span> ' + escapeHtml(field.new) + "</span>" +
-          '<span class="muted" style="font-size: 12px;">' +
+          '<div class="propagate-change-row">' +
+          '<strong class="propagate-change-label">' + escapeHtml(field.label) + "</strong>" +
+          '<span class="muted">' + escapeHtml(field.old) + ' <span class="propagate-arrow">→</span> ' + escapeHtml(field.new) + "</span>" +
+          '<span class="muted muted-sm">' +
           escapeHtml(field.unmodified_count) + " / " + escapeHtml(preview.member_count) +
           " 名成员当前跟随组配置</span>" +
           "</div>"
