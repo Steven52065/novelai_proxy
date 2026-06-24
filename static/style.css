@@ -1205,9 +1205,9 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 
 /* --- queue table --- */
 .queue-table { table-layout: fixed; }
-.queue-table th:nth-child(1), .queue-table td:nth-child(1) { width: 58px; text-align: center; }
-.queue-table th:nth-child(2), .queue-table td:nth-child(2) { width: 94px; }
-.queue-table th:nth-child(5), .queue-table td:nth-child(5) { width: 260px; }
+.queue-table th:nth-child(1), .queue-table td:nth-child(1) { width: 94px; text-align: center; }
+.queue-table th:nth-child(4), .queue-table td:nth-child(4) { width: 260px; }
+.queue-table th:nth-child(5), .queue-table td:nth-child(5) { width: 92px; text-align: center; }
 
 .queue-table .queue-status-icon {
   min-width: 24px;
