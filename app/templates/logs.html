@@ -3,6 +3,8 @@
 <script>
 (() => {
   const storageKey = "novelai_proxy_logs_visible_columns";
+  // 注意：这里的 columns / columnWidths 必须与页面底部脚本中的
+  // logColumns / logColumnWidths 保持一致；日志列变更时两处要同步修改。
   const columns = [
     "request_id",
     "log_level",
@@ -472,6 +474,8 @@
   const logsLimitStorageKey = "novelai_proxy_logs_limit";
   const logsColumnStorageKey = "novelai_proxy_logs_visible_columns";
   const logsColumnVisibilityStyleId = "logs-column-visibility-style";
+  // 注意：这里的 logColumns / logColumnWidths 必须与 head_extra 中的
+  // columns / columnWidths 保持一致；head_extra 会在首屏渲染前生成列隐藏 CSS。
   const logColumns = [
     "request_id",
     "log_level",
