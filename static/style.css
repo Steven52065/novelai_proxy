@@ -2981,8 +2981,10 @@ pre {
   }
 
   .log-detail-row td {
+    display: block;
     max-width: none;
     padding: 0 var(--space-2);
+    text-align: left;
   }
   .log-details-block { padding: var(--space-3) 0; }
 
