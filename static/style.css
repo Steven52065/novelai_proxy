@@ -3160,6 +3160,15 @@ pre {
     max-width: none;
   }
   .queue-table td:last-child { border-bottom: 0; }
+  .queue-table th:nth-child(1),
+  .queue-table td:nth-child(1),
+  .queue-table th:nth-child(4),
+  .queue-table td:nth-child(4),
+  .queue-table th:nth-child(5),
+  .queue-table td:nth-child(5) {
+    width: 100%;
+    text-align: right;
+  }
   .queue-table td::before {
     content: attr(data-label);
     flex: none;
@@ -3175,15 +3184,13 @@ pre {
   .queue-table td[colspan]::before { display: none; }
   .queue-table .queue-status-icon { min-width: 22px; width: 22px; min-height: 22px; }
   .queue-table .queue-spec {
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
     min-width: 0;
+    text-align: right;
   }
   .queue-table .queue-spec-full {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 4px;
+    display: block;
     text-align: right;
   }
   .queue-table .queue-spec-toggle,
