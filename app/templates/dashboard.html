@@ -679,13 +679,14 @@
     
     for (const item of rows) {
       const row = document.createElement("tr");
+      if (item.status === "running") row.classList.add("is-running");
       
       // Status pill with custom glow
-      const statusHtml = item.status === "running" 
+      const statusHtml = item.status === "running"
         ? `<span class="status-pill status-running queue-status-icon" title="执行中" aria-label="执行中"></span>`
         : `<span class="status-pill queue-status-icon" title="排队中" aria-label="排队中"></span>`;
-      appendCell(row, statusHtml);
-      
+      appendCell(row, statusHtml, "", "状态");
+
       // Position
       const position = item.upstream_position ?? null;
       const posHtml = item.status === "running"
@@ -693,33 +694,33 @@
         : position === null
           ? `<span class="muted">调度中</span>`
           : `<span class="badge badge-normal" style="background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.3); color:#f59e0b;"># ${position}</span>`;
-      appendCell(row, posHtml);
-      
+      appendCell(row, posHtml, "", "排队位置");
+
       // User name
       const userName = item.user_name || `用户 #${item.user_id}`;
-      appendCell(row, `<span style="font-weight:600; color:#fff;">${userName}</span>`);
-      
+      appendCell(row, `<span style="font-weight:600; color:#fff;">${userName}</span>`, "", "发起用户");
+
       // Action
-      const actionHtml = item.action 
-        ? `<span class="badge" style="background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.25); color:#c084fc;">${item.action}</span>` 
+      const actionHtml = item.action
+        ? `<span class="badge" style="background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.25); color:#c084fc;">${item.action}</span>`
         : `<span class="muted">-</span>`;
-      appendCell(row, actionHtml);
-      
+      appendCell(row, actionHtml, "", "API动作");
+
       // Spec Label
-      appendCell(row, specCellHtml(item));
-      
+      appendCell(row, specCellHtml(item), "", "规格");
+
       // Anlas cost
       const anlas = Number(item.estimated_anlas_cost || 0);
-      const anlasHtml = anlas > 0 
+      const anlasHtml = anlas > 0
         ? `<span style="font-weight:700; color:#34d399;">${anlas}</span>`
         : `<span class="muted">免费</span>`;
-      appendCell(row, anlasHtml);
-      
+      appendCell(row, anlasHtml, "", "消耗");
+
       // Wait time
-      appendCell(row, elapsedTimerHtml(item.queued_seconds));
+      appendCell(row, elapsedTimerHtml(item.queued_seconds), "", "已等待");
 
       // Upstream
-      appendCell(row, item.upstream_id ? `<code>${item.upstream_id}</code>` : `<span class="muted">调度中</span>`, "mono");
+      appendCell(row, item.upstream_id ? `<code>${item.upstream_id}</code>` : `<span class="muted">调度中</span>`, "mono", "上游");
 
       queueBody.appendChild(row);
     }
