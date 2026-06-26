@@ -37,14 +37,14 @@ DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
 DASHBOARD_QUEUE_DISPLAY_LIMIT = 80
 ADMIN_UPSTREAM_TEST_PAYLOAD = {
     "input": "A simple red apple on a white plate.",
-    "model": "nai-diffusion-3",
+    "model": "nai-diffusion-4-5-full",
     "action": "generate",
     "parameters": {
         "width": 512,
-        "height": 768,
+        "height": 512,
         "scale": 5.0,
         "sampler": "k_euler_ancestral",
-        "steps": 1,
+        "steps": 28,
         "n_samples": 1,
         "ucPreset": 0,
         "qualityToggle": False,
