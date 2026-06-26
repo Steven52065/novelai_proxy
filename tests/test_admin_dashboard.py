@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 from datetime import datetime, timezone
 from pathlib import Path
+import zipfile
 
 from fastapi.testclient import TestClient
 from novelai_python._exceptions import APIError
@@ -20,6 +22,16 @@ class FailingAPIErrorUpstream(FakeUpstream):
             response={"message": "bad token"},
             code="401",
         )
+
+
+class EmptyZipUpstream(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(0)
+        self.last_generate_payload = payload
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode="w") as archive:
+            archive.writestr("metadata.txt", b"no image")
+        return buffer.getvalue()
 
 
 def test_admin_login_page(tmp_path: Path, monkeypatch):
@@ -169,6 +181,10 @@ def test_admin_upstream_test_uses_selected_upstream_and_fixed_payload(tmp_path: 
         assert body["upstream_id"] == "opus-b"
         assert body["zip_bytes"] > 0
         assert body["image_count"] == 1
+        assert body["preview_image"]["filename"] == "image.png"
+        assert body["preview_image"]["content_type"] == "image/png"
+        assert body["preview_image"]["bytes"] == len(b"fake-image")
+        assert body["preview_image"]["data_url"].startswith("data:image/png;base64,")
         assert len(upstream_a.generate_started_at) == 0
         assert len(upstream_b.generate_started_at) == 1
         payload = upstream_b.last_generate_payload
@@ -199,6 +215,22 @@ def test_admin_upstream_test_returns_api_error_details(tmp_path: Path, monkeypat
         assert body["error_type"] == "APIError"
         assert body["message"] == "bad token"
         assert isinstance(body["elapsed_ms"], int)
+
+
+def test_admin_upstream_test_rejects_zip_without_images(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = EmptyZipUpstream()
+
+        resp = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 502
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error_code"] == "invalid_upstream_response"
+        assert body["error_type"] == "InvalidUpstreamResponse"
 
 
 def test_admin_upstream_test_unknown_upstream_returns_400(tmp_path: Path, monkeypatch):
@@ -253,5 +285,6 @@ def test_admin_dashboard_includes_upstream_test_modal_and_fetch(tmp_path: Path, 
         assert dashboard.status_code == 200
         assert 'id="upstream-test-modal"' in dashboard.text
         assert "data-upstream-test" in dashboard.text
+        assert "upstream-test-preview" in dashboard.text
         assert "/admin/api/upstreams/" in dashboard.text
         assert "encodeURIComponent(activeUpstreamTestId)" in dashboard.text

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import time
 import uuid
@@ -175,12 +176,24 @@ async def test_upstream(request: Request, upstream_id: str):
             message=str(exc) or "Upstream test failed",
         )
 
+    image_count, preview_image = _zip_image_preview(payload)
+    if preview_image is None:
+        return _upstream_test_failure_response(
+            status_code=502,
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code="invalid_upstream_response",
+            error_type="InvalidUpstreamResponse",
+            message="Upstream returned a zip without a valid image",
+        )
+
     return {
         "ok": True,
         "upstream_id": normalized_upstream_id,
         "elapsed_ms": _elapsed_ms(started_at),
         "zip_bytes": len(payload),
-        "image_count": _zip_image_count(payload),
+        "image_count": image_count,
+        "preview_image": preview_image,
         "message": "Upstream test succeeded",
     }
 
@@ -367,18 +380,40 @@ def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.monotonic() - started_at) * 1000))
 
 
-def _zip_image_count(payload: bytes) -> int:
+def _zip_image_preview(payload: bytes) -> tuple[int, dict[str, object] | None]:
+    image_count = 0
+    preview_image = None
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            return sum(
-                1
-                for item in archive.infolist()
-                if not item.is_dir()
-                and item.file_size > 0
-                and item.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
-            )
+            for item in archive.infolist():
+                if item.is_dir() or item.file_size <= 0:
+                    continue
+                content_type = _image_content_type(item.filename)
+                if content_type is None:
+                    continue
+                image_count += 1
+                if preview_image is None:
+                    image_bytes = archive.read(item)
+                    preview_image = {
+                        "filename": item.filename,
+                        "content_type": content_type,
+                        "bytes": len(image_bytes),
+                        "data_url": f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('ascii')}",
+                    }
     except zipfile.BadZipFile:
-        return 0
+        return 0, None
+    return image_count, preview_image
+
+
+def _image_content_type(filename: str) -> str | None:
+    lower = filename.lower()
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if lower.endswith(".webp"):
+        return "image/webp"
+    return None
 
 
 def _api_error_status_code(exc: APIError) -> int:

@@ -820,15 +820,27 @@
 
   function renderUpstreamTestSuccess(data) {
     upstreamTestBusy = false;
-    upstreamTestSummary.textContent = "测试完成，上游返回了有效 zip 响应。";
+    upstreamTestSummary.textContent = "测试完成，上游返回了可预览图片。";
     setUpstreamTestState("成功", "status-success");
     setUpstreamTestDetails([
       ["上游渠道", data.upstream_id],
       ["耗时", `${data.elapsed_ms ?? 0} ms`],
       ["Zip 大小", `${data.zip_bytes ?? 0} bytes`],
       ["图片数量", String(data.image_count ?? 0)],
+      ["预览文件", data.preview_image?.filename || "-"],
       ["消息", data.message || "Upstream test succeeded"],
     ]);
+    if (data.preview_image?.data_url) {
+      const preview = document.createElement("figure");
+      const image = document.createElement("img");
+      const caption = document.createElement("figcaption");
+      preview.className = "upstream-test-preview";
+      image.src = data.preview_image.data_url;
+      image.alt = data.preview_image.filename || "Upstream test preview";
+      caption.textContent = data.preview_image.filename || "preview image";
+      preview.append(image, caption);
+      upstreamTestDetails.appendChild(preview);
+    }
     upstreamTestCancel.disabled = false;
     upstreamTestCancel.textContent = "关闭";
     upstreamTestConfirm.disabled = true;
