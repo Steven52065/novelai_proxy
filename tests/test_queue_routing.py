@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from novelai_python._exceptions import APIError
+import pytest
 
 from helpers import PAYLOAD, BlockingFakeUpstream, FakeUpstream, write_test_config_with_upstreams
 from app.queue_manager import RoutingProxyQueue, UpstreamQueueTarget
@@ -224,3 +226,52 @@ def test_select_client_does_not_use_adaptive_weighted_random_for_query_routes(mo
     monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.2)
 
     assert queue.select_client() == "client-a"
+
+
+def test_admin_upstream_probe_does_not_update_adaptive_weight_or_retry_429():
+    class Always429Upstream(FakeUpstream):
+        async def generate_image_payload_zip(self, payload):
+            self.generate_started_at.append(time.monotonic())
+            self.last_generate_payload = payload
+            raise APIError(
+                "Too many requests",
+                request=payload,
+                response={"message": "Too many requests"},
+                code="429",
+            )
+
+    async def run_test():
+        upstream_a = Always429Upstream()
+        upstream_b = FakeUpstream()
+        queue = RoutingProxyQueue(
+            targets=[
+                UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream_a),
+                UpstreamQueueTarget(id="opus-b", client_provider=lambda: upstream_b),
+            ],
+            quota_manager=object(),
+            usage_logs=object(),
+            max_queue_size=2,
+            routing_strategy="adaptive_weighted_random",
+            adaptive_initial_score=0.8,
+            adaptive_alpha=0.5,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        try:
+            before = queue.get_weights()
+            with pytest.raises(APIError):
+                await queue.submit_upstream_probe(
+                    upstream_id="opus-a",
+                    request_id="admin-probe-429",
+                    logging_config=object(),
+                    handler=lambda upstream: upstream.generate_image_payload_zip(PAYLOAD),
+                )
+            after = queue.get_weights()
+        finally:
+            await queue.stop()
+
+        assert len(upstream_a.generate_started_at) == 1
+        assert len(upstream_b.generate_started_at) == 0
+        assert after["upstreams"][0]["score"] == before["upstreams"][0]["score"]
+
+    asyncio.run(run_test())

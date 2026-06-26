@@ -205,3 +205,31 @@ class RequestAccounting:
             manager.confirm(reservation)
         except Exception:
             logger.exception("failed to confirm free small daily reservation user_id=%s", reservation.user_id)
+
+
+class NoopRequestAccounting:
+    """Accounting adapter for admin probes that must not touch quota or logs."""
+
+    manage_quota = False
+
+    @property
+    def settled(self) -> bool:
+        return True
+
+    def settle_success(self, **_kwargs) -> None:
+        pass
+
+    def settle_failure(self, **_kwargs) -> None:
+        pass
+
+    def settle_rejected(self, **_kwargs) -> None:
+        pass
+
+    def settle_released(self) -> None:
+        pass
+
+    def record_retry_failure(self, **_kwargs) -> None:
+        pass
+
+    def record_retry_attempt(self, **_kwargs) -> None:
+        pass

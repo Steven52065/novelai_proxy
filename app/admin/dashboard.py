@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import time
+import uuid
+import zipfile
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
+from novelai_python._exceptions import APIError
 
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger
+from ..queue_manager import NoAvailableUpstream, QueueClosed, QueueFull, UpstreamExecutionTimeout
 from ..templating import templates
 from .auth import has_admin_session, require_admin_or_session, require_admin_page_session
 from .common import (
@@ -25,6 +32,23 @@ api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin")
 DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
 DASHBOARD_QUEUE_DISPLAY_LIMIT = 80
+ADMIN_UPSTREAM_TEST_PAYLOAD = {
+    "input": "A simple red apple on a white plate.",
+    "model": "nai-diffusion-4-5-full",
+    "action": "generate",
+    "parameters": {
+        "width": 512,
+        "height": 512,
+        "scale": 5.0,
+        "sampler": "k_euler_ancestral",
+        "steps": 28,
+        "n_samples": 1,
+        "ucPreset": 0,
+        "qualityToggle": False,
+        "sm": False,
+        "sm_dyn": False,
+    },
+}
 
 
 @api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
@@ -61,6 +85,104 @@ async def admin_stats(request: Request):
 @api_router.get("/upstream-weights", dependencies=[Depends(require_admin_or_session)])
 async def upstream_weights(request: Request):
     return _upstream_weights_payload(request)
+
+
+@api_router.post("/upstreams/{upstream_id}/test", dependencies=[Depends(require_admin_or_session)])
+async def test_upstream(request: Request, upstream_id: str):
+    started_at = time.monotonic()
+    try:
+        normalized_upstream_id = _normalize_upstream_filter(request, upstream_id)
+    except HTTPException as exc:
+        return _upstream_test_failure_response(
+            status_code=exc.status_code,
+            upstream_id=upstream_id,
+            started_at=started_at,
+            error_code="unknown_upstream",
+            error_type="UnknownUpstream",
+            message=_http_exception_message(exc),
+        )
+    if normalized_upstream_id is None:
+        return _upstream_test_failure_response(
+            status_code=400,
+            upstream_id=upstream_id,
+            started_at=started_at,
+            error_code="unknown_upstream",
+            error_type="UnknownUpstream",
+            message="Unknown upstream id",
+        )
+
+    proxy_queue = request.app.state.proxy_queue
+    try:
+        payload = await proxy_queue.submit_upstream_probe(
+            upstream_id=normalized_upstream_id,
+            request_id=f"admin-probe-{uuid.uuid4().hex}",
+            logging_config=request.app.state.config.logging,
+            handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
+        )
+    except QueueFull:
+        return _upstream_test_failure_response(
+            status_code=503,
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code="queue_full",
+            error_type="QueueFull",
+            message="Queue full, please retry later",
+        )
+    except QueueClosed:
+        return _upstream_test_failure_response(
+            status_code=503,
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code="server_shutting_down",
+            error_type="QueueClosed",
+            message="Server is shutting down, please retry later",
+        )
+    except NoAvailableUpstream as exc:
+        return _upstream_test_failure_response(
+            status_code=400,
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code="unknown_upstream",
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+        )
+    except UpstreamExecutionTimeout as exc:
+        return _upstream_test_failure_response(
+            status_code=504,
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code="upstream_timeout",
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+        )
+    except APIError as exc:
+        return _upstream_test_failure_response(
+            status_code=_api_error_status_code(exc),
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code=str(exc.code or "upstream_error"),
+            error_type=_api_error_type(exc),
+            message=exc.message or str(exc),
+        )
+    except Exception as exc:
+        logger.exception("admin upstream test failed upstream_id=%s", normalized_upstream_id)
+        return _upstream_test_failure_response(
+            status_code=502,
+            upstream_id=normalized_upstream_id,
+            started_at=started_at,
+            error_code=exc.__class__.__name__,
+            error_type=exc.__class__.__name__,
+            message=str(exc) or "Upstream test failed",
+        )
+
+    return {
+        "ok": True,
+        "upstream_id": normalized_upstream_id,
+        "elapsed_ms": _elapsed_ms(started_at),
+        "zip_bytes": len(payload),
+        "image_count": _zip_image_count(payload),
+        "message": "Upstream test succeeded",
+    }
 
 
 # websocket 路由与页面共用本 router，会话依赖挂在各 HTML 路由上而非 router 级。
@@ -211,6 +333,71 @@ def _upstream_weights_payload(request: Request | WebSocket) -> dict:
     if callable(get_weights):
         return get_weights()
     return {"strategy": "unknown", "upstreams": []}
+
+
+def _admin_upstream_test_payload() -> dict:
+    payload = dict(ADMIN_UPSTREAM_TEST_PAYLOAD)
+    payload["parameters"] = dict(ADMIN_UPSTREAM_TEST_PAYLOAD["parameters"])
+    return payload
+
+
+def _upstream_test_failure_response(
+    *,
+    status_code: int,
+    upstream_id: str,
+    started_at: float,
+    error_code: str,
+    error_type: str,
+    message: str,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ok": False,
+            "upstream_id": upstream_id,
+            "elapsed_ms": _elapsed_ms(started_at),
+            "error_code": error_code,
+            "error_type": error_type,
+            "message": message,
+        },
+    )
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _zip_image_count(payload: bytes) -> int:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            return sum(
+                1
+                for item in archive.infolist()
+                if not item.is_dir()
+                and item.file_size > 0
+                and item.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            )
+    except zipfile.BadZipFile:
+        return 0
+
+
+def _api_error_status_code(exc: APIError) -> int:
+    return int(exc.code) if str(exc.code or "").isdigit() else 502
+
+
+def _api_error_type(exc: APIError) -> str:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error_type = response.get("type") or response.get("errorType") or response.get("name")
+        if error_type:
+            return str(error_type)
+    return exc.__class__.__name__
+
+
+def _http_exception_message(exc: HTTPException) -> str:
+    if isinstance(exc.detail, dict):
+        return str(exc.detail.get("message") or exc.detail)
+    return str(exc.detail)
 
 
 def queue_status_payload(request: Request | WebSocket, upstream_id: str | None = None, queued_limit: int | None = None):

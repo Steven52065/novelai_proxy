@@ -174,7 +174,8 @@ class ProxyQueue:
                         item.attempt_number,
                     )
                     continue
-                self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
+                if not item.is_admin_probe:
+                    self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
                 logger.info(
                     "proxy request running request_id=%s upstream_id=%s queued_ms=%s attempt_number=%s",
                     item.request_id,
@@ -208,7 +209,7 @@ class ProxyQueue:
             except Exception as exc:
                 self._last_upstream_completed_at = time.monotonic()
 
-                if isinstance(exc, APIError) and str(exc.code) == "429":
+                if not item.is_admin_probe and isinstance(exc, APIError) and str(exc.code) == "429":
                     should_retry = (
                         self._retry_policy.should_attempt_429_retry(self.get_total_queue_length())
                         if self.get_total_queue_length
@@ -236,7 +237,7 @@ class ProxyQueue:
                             item.future.set_exception(Retry429Error(exc))
                         continue
 
-                if isinstance(exc, (APIError, UpstreamExecutionTimeout)):
+                if not item.is_admin_probe and isinstance(exc, (APIError, UpstreamExecutionTimeout)):
                     self._apply_error_extra_delay_next = True
 
                 code, message = self._error_details(exc)
@@ -255,7 +256,7 @@ class ProxyQueue:
                     self._last_upstream_completed_at = time.monotonic()
             else:
                 saved_files = []
-                if item.process_zip_response:
+                if item.process_zip_response and not item.is_admin_probe:
                     try:
                         saved_files = archive_zip_images(
                             zip_payload=payload,
@@ -285,7 +286,7 @@ class ProxyQueue:
                 )
                 if not item.future.done():
                     item.future.set_result(payload)
-                if item.process_zip_response and self.image_hosting is not None:
+                if item.process_zip_response and not item.is_admin_probe and self.image_hosting is not None:
                     self._schedule_image_upload(zip_payload=payload, request_id=item.request_id, attempt_number=item.attempt_number)
             finally:
                 self._running_item = None

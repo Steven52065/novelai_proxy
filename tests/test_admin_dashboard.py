@@ -4,8 +4,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from novelai_python._exceptions import APIError
 
-from helpers import write_test_config
+from helpers import FakeImageHosting, FakeUpstream, write_test_config, write_test_config_with_upstreams
+from app.queue_manager import QueueFull
+
+
+class FailingAPIErrorUpstream(FakeUpstream):
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(0)
+        self.last_generate_payload = payload
+        raise APIError(
+            "bad token",
+            request=payload,
+            response={"message": "bad token"},
+            code="401",
+        )
 
 
 def test_admin_login_page(tmp_path: Path, monkeypatch):
@@ -132,3 +146,112 @@ def test_admin_dashboard_snapshot_limits_queue_rows(tmp_path: Path, monkeypatch)
         full_queue = full_resp.json()
         assert len(full_queue["queued"]) == total_queued
         assert "queued_hidden" not in full_queue
+
+
+def test_admin_upstream_test_uses_selected_upstream_and_fixed_payload(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        upstream_a = FakeUpstream()
+        upstream_b = FakeUpstream()
+        image_hosting = FakeImageHosting()
+        app.state.upstream = upstream_a
+        app.state.upstream_clients["opus-b"] = upstream_b
+        app.state.proxy_queue.image_hosting = image_hosting
+
+        before_logs = app.state.db.query_one("SELECT COUNT(*) AS c FROM usage_logs")["c"]
+        resp = client.post("/admin/api/upstreams/opus-b/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["upstream_id"] == "opus-b"
+        assert body["zip_bytes"] > 0
+        assert body["image_count"] == 1
+        assert len(upstream_a.generate_started_at) == 0
+        assert len(upstream_b.generate_started_at) == 1
+        payload = upstream_b.last_generate_payload
+        assert payload["model"] == "nai-diffusion-4-5-full"
+        assert payload["input"] == "A simple red apple on a white plate."
+        assert payload["parameters"]["width"] == 512
+        assert payload["parameters"]["height"] == 512
+        assert payload["parameters"]["steps"] == 28
+        assert payload["parameters"]["n_samples"] == 1
+        assert app.state.db.query_one("SELECT COUNT(*) AS c FROM usage_logs")["c"] == before_logs
+        assert image_hosting.uploaded_request_ids == []
+
+
+def test_admin_upstream_test_returns_api_error_details(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FailingAPIErrorUpstream()
+
+        resp = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["upstream_id"] == "opus-a"
+        assert body["error_code"] == "401"
+        assert body["error_type"] == "APIError"
+        assert body["message"] == "bad token"
+        assert isinstance(body["elapsed_ms"], int)
+
+
+def test_admin_upstream_test_unknown_upstream_returns_400(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        resp = client.post("/admin/api/upstreams/missing/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error_code"] == "unknown_upstream"
+
+
+def test_admin_upstream_test_queue_full_returns_503(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    class QueueFullProbeQueue:
+        def qsize(self):
+            return 0
+
+        def get_weights(self):
+            return {"strategy": "round_robin", "upstreams": [{"id": "opus-a", "score": 0.8, "weight": 0.95, "queue_size": 0, "running": False}]}
+
+        def snapshot(self):
+            return {"queue_size": 0, "running": None, "running_items": [], "queued": [], "dispatch_queue_size": 0, "upstreams": []}
+
+        async def submit_upstream_probe(self, **_kwargs):
+            raise QueueFull
+
+    with TestClient(app) as client:
+        app.state.proxy_queue = QueueFullProbeQueue()
+
+        resp = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error_code"] == "queue_full"
+
+
+def test_admin_dashboard_includes_upstream_test_modal_and_fetch(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        dashboard = client.get("/admin")
+
+        assert dashboard.status_code == 200
+        assert 'id="upstream-test-modal"' in dashboard.text
+        assert "data-upstream-test" in dashboard.text
+        assert "/admin/api/upstreams/" in dashboard.text
+        assert "encodeURIComponent(activeUpstreamTestId)" in dashboard.text

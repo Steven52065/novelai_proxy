@@ -24,7 +24,7 @@ from .queue_tiers import (
     tier_allows_overflow,
 )
 from .queue_work_queue import PriorityWorkQueue
-from .request_accounting import RequestAccounting
+from .request_accounting import NoopRequestAccounting, RequestAccounting
 from .retry_policy import RetryDecision, RetryPolicy
 from .upstream_queue import ProxyQueue
 from .usage_logs import UsageLogRepository
@@ -290,6 +290,51 @@ class RoutingProxyQueue:
             future.cancel()
             raise
 
+    async def submit_upstream_probe(
+        self,
+        *,
+        upstream_id: str,
+        request_id: str,
+        logging_config: LoggingConfig,
+        handler: Callable[[Any], Awaitable[bytes]],
+    ) -> bytes:
+        if not self._accepting:
+            raise QueueClosed
+        queue = self._queues.get(upstream_id)
+        if queue is None:
+            raise NoAvailableUpstream(f"Unknown upstream id: {upstream_id}")
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        item = QueueItem(
+            priority=QUEUE_PRIORITY_NORMAL,
+            sequence=next(self._sequence),
+            enqueued_at=time.monotonic(),
+            request_id=request_id,
+            user_id=0,
+            action="admin-upstream-test",
+            tier="admin",
+            estimated_cost=0,
+            accounting=NoopRequestAccounting(),
+            logging_config=logging_config,
+            process_zip_response=False,
+            handler=handler,
+            future=future,
+            allowed_upstreams=frozenset({upstream_id}),
+            is_admin_probe=True,
+        )
+        upstream_future = queue.enqueue(item, allow_overflow=False)
+        self._active_futures.add(future)
+        future.add_done_callback(self._active_futures.discard)
+        upstream_future.add_done_callback(
+            lambda completed, future=future: self._handle_probe_completion(completed, future=future)
+        )
+        try:
+            return await future
+        except asyncio.CancelledError:
+            future.cancel()
+            raise
+
     async def _wait_for_active_futures(self) -> None:
         while self._active_futures:
             await asyncio.gather(*tuple(self._active_futures), return_exceptions=True)
@@ -377,7 +422,8 @@ class RoutingProxyQueue:
         upstream_id: str,
         last_429_error: APIError | None,
     ) -> None:
-        self._record_adaptive_result(upstream_id, completed)
+        if not item.is_admin_probe:
+            self._record_adaptive_result(upstream_id, completed)
         if completed.cancelled():
             if not item.future.done():
                 item.future.cancel()
@@ -428,6 +474,20 @@ class RoutingProxyQueue:
             item.future.set_exception(exc)
             return
         item.future.set_result(completed.result())
+
+    def _handle_probe_completion(self, completed: asyncio.Future, *, future: asyncio.Future) -> None:
+        if future.done():
+            if not completed.cancelled():
+                completed.exception()
+            return
+        if completed.cancelled():
+            future.cancel()
+            return
+        exc = completed.exception()
+        if exc is not None:
+            future.set_exception(exc)
+            return
+        future.set_result(completed.result())
 
     def _requeue_429_retry(
         self,
