@@ -188,12 +188,13 @@ def test_admin_upstream_test_uses_selected_upstream_and_fixed_payload(tmp_path: 
         assert len(upstream_a.generate_started_at) == 0
         assert len(upstream_b.generate_started_at) == 1
         payload = upstream_b.last_generate_payload
-        assert payload["model"] == "nai-diffusion-4-5-full"
+        assert payload["model"] == "nai-diffusion-3"
         assert payload["input"] == "A simple red apple on a white plate."
         assert payload["parameters"]["width"] == 512
-        assert payload["parameters"]["height"] == 512
-        assert payload["parameters"]["steps"] == 28
+        assert payload["parameters"]["height"] == 768
+        assert payload["parameters"]["steps"] == 1
         assert payload["parameters"]["n_samples"] == 1
+        assert payload["parameters"]["noise_schedule"] == "karras"
         assert app.state.db.query_one("SELECT COUNT(*) AS c FROM usage_logs")["c"] == before_logs
         assert image_hosting.uploaded_request_ids == []
 

@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from novelai_python._exceptions import APIError
+from novelai_python.sdk.ai._enum import Model, Sampler
+from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
@@ -35,14 +37,14 @@ DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
 DASHBOARD_QUEUE_DISPLAY_LIMIT = 80
 ADMIN_UPSTREAM_TEST_PAYLOAD = {
     "input": "A simple red apple on a white plate.",
-    "model": "nai-diffusion-4-5-full",
+    "model": "nai-diffusion-3",
     "action": "generate",
     "parameters": {
         "width": 512,
-        "height": 512,
+        "height": 768,
         "scale": 5.0,
         "sampler": "k_euler_ancestral",
-        "steps": 28,
+        "steps": 1,
         "n_samples": 1,
         "ucPreset": 0,
         "qualityToggle": False,
@@ -349,9 +351,20 @@ def _upstream_weights_payload(request: Request | WebSocket) -> dict:
 
 
 def _admin_upstream_test_payload() -> dict:
-    payload = dict(ADMIN_UPSTREAM_TEST_PAYLOAD)
-    payload["parameters"] = dict(ADMIN_UPSTREAM_TEST_PAYLOAD["parameters"])
-    return payload
+    params = ADMIN_UPSTREAM_TEST_PAYLOAD["parameters"]
+    req = GenerateImageInfer.build_generate(
+        ADMIN_UPSTREAM_TEST_PAYLOAD["input"],
+        model=Model(ADMIN_UPSTREAM_TEST_PAYLOAD["model"]),
+        width=params["width"],
+        height=params["height"],
+        sampler=Sampler(params["sampler"]),
+        steps=params["steps"],
+        ucPreset=params["ucPreset"],
+        qualityToggle=params["qualityToggle"],
+    )
+    req.parameters.scale = params["scale"]
+    req.parameters.n_samples = params["n_samples"]
+    return req.model_dump(mode="json", exclude_none=True)
 
 
 def _upstream_test_failure_response(
