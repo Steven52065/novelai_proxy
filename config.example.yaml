@@ -74,16 +74,26 @@ routing:
 
 # NovelAI 上游账号配置。
 novelai:
-  # 兼容旧配置的单 NovelAI API Key。必须只写在本地 config.yaml 中，不要提交。
+  # 上游鉴权模式。api_key 兼容旧配置；login 使用 NovelAI 账号密码登录并复用 access token。
+  # 账号密码和 API Key 都必须只写在本地 config.yaml 中，不要提交，也不要共享给代理用户。
+  auth_type: api_key
+  # api_key 模式使用的单 NovelAI API Key，支持 pst-... persistent token 或 ey... JWT。
   # 如果配置了下面的 upstreams 且存在 enabled: true 的条目，会优先使用 upstreams。
   api_key: ""
-  # 多上游 key 配置。id 会用于队列状态、日志记录和用户 allowed_upstreams 授权。
+  # login 模式使用的 NovelAI 账号密码。auth_type: login 时必须填写。
+  username: ""
+  password: ""
+  # 多上游配置。id 会用于队列状态、日志记录和用户 allowed_upstreams 授权。
+  # 每个上游可独立选择 auth_type，支持 api_key 与 login 混合。
   # upstreams:
   #   - id: opus-1
+  #     auth_type: api_key
   #     api_key: ""
   #     enabled: true
   #   - id: opus-2
-  #     api_key: ""
+  #     auth_type: login
+  #     username: "your-email"
+  #     password: "your-password"
   #     enabled: true
   # NovelAI 账号等级，用于估算图片生成 anlas 成本。
   # 3 通常表示 Opus；其他等级按 NovelAI SDK 的成本计算逻辑处理。

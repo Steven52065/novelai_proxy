@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
-from novelai_python.credential import ApiCredential, JwtCredential
+from novelai_python.credential import ApiCredential, JwtCredential, LoginCredential
 
 from app.upstream import UpstreamClient
 
@@ -66,6 +67,54 @@ def test_upstream_uses_jwt_credential_for_jwt_token():
 
     assert isinstance(credential, JwtCredential)
     assert credential.jwt_token.get_secret_value() == "eyJhbGciOiJIUzI1NiJ9.token.signature"
+
+
+def test_upstream_reuses_api_key_credential_instance():
+    client = UpstreamClient("pst-secret-token")
+
+    assert client._credential() is client._credential()
+
+
+def test_upstream_login_config_builds_reused_login_credential():
+    client = UpstreamClient.from_config(
+        SimpleNamespace(auth_type="login", username="user@example.com", password="secret-password")
+    )
+
+    credential = client._credential()
+    inner = credential.credential
+
+    assert client._credential() is credential
+    assert isinstance(inner, LoginCredential)
+    assert inner.username == "user@example.com"
+    assert inner.password.get_secret_value() == "secret-password"
+
+
+def test_upstream_login_get_session_is_serialized(monkeypatch):
+    active = 0
+    max_active = 0
+    calls = 0
+
+    async def fake_get_session(self, timeout=180, update_headers=None):
+        nonlocal active, max_active, calls
+        calls += 1
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return object()
+
+    monkeypatch.setattr(LoginCredential, "get_session", fake_get_session)
+    client = UpstreamClient.from_config(
+        SimpleNamespace(auth_type="login", username="user@example.com", password="secret-password")
+    )
+
+    async def run_concurrently():
+        await asyncio.gather(*(client._credential().get_session() for _ in range(5)))
+
+    asyncio.run(run_concurrently())
+
+    assert calls == 5
+    assert max_active == 1
 
 
 @pytest.mark.parametrize(

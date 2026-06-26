@@ -144,10 +144,10 @@ def _build_upstream_clients(config) -> dict[str, UpstreamClient]:
     enabled_upstreams = [upstream for upstream in config.novelai.upstreams if upstream.enabled]
     if enabled_upstreams:
         return {
-            upstream.id: UpstreamClient(upstream.api_key)
+            upstream.id: UpstreamClient.from_config(upstream)
             for upstream in enabled_upstreams
         }
-    return {"default": UpstreamClient(config.novelai.api_key)}
+    return {"default": UpstreamClient.from_config(config.novelai)}
 
 
 async def _payload_archive_loop(service: PayloadArchiveService, config) -> None:

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import io
 import zipfile
-from typing import Any
+from typing import Any, Protocol
 
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
-from novelai_python.credential import ApiCredential, JwtCredential, SecretStr
+from novelai_python.credential import ApiCredential, JwtCredential, LoginCredential, SecretStr
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from novelai_python.sdk.ai.generate_image.suggest_tags import SuggestTags
@@ -15,12 +16,34 @@ from novelai_python.sdk.ai.upscale import Upscale
 from .novelai_endpoints import ENCODE_VIBE_ENDPOINT, GENERATE_IMAGE_ENDPOINT
 
 
-class UpstreamClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+class _Credential(Protocol):
+    async def get_session(self, timeout: int = 180, update_headers: dict = None):
+        ...
 
-    def _credential(self) -> ApiCredential | JwtCredential:
-        token = self.api_key.strip()
+
+class UpstreamClient:
+    def __init__(self, api_key: str, *, credential: _Credential | None = None):
+        self.api_key = api_key
+        self._credential_instance = credential or self._api_key_credential(api_key)
+
+    @classmethod
+    def from_config(cls, config) -> "UpstreamClient":
+        if config.auth_type == "login":
+            credential = _LockedCredential(
+                LoginCredential(
+                    username=config.username.strip(),
+                    password=SecretStr(config.password),
+                )
+            )
+            return cls("", credential=credential)
+        return cls(config.api_key)
+
+    def _credential(self) -> _Credential:
+        return self._credential_instance
+
+    @staticmethod
+    def _api_key_credential(api_key: str) -> ApiCredential | JwtCredential:
+        token = api_key.strip()
         if token.startswith("ey"):
             return JwtCredential(jwt_token=SecretStr(token))
         return ApiCredential(api_token=SecretStr(token))
@@ -79,6 +102,16 @@ class UpstreamClient:
                     code=response.status_code,
                 )
             return response.content
+
+
+class _LockedCredential:
+    def __init__(self, credential: _Credential):
+        self.credential = credential
+        self._lock = asyncio.Lock()
+
+    async def get_session(self, timeout: int = 180, update_headers: dict = None):
+        async with self._lock:
+            return await self.credential.get_session(timeout=timeout, update_headers=update_headers)
 
 
 def _files_to_zip(files: list[tuple[str, bytes]] | tuple[tuple[str, bytes], ...]) -> bytes:
