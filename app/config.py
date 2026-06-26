@@ -4,11 +4,10 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 RESERVED_UPSTREAM_IDS = {"__all__"}
-NovelAIAuthType = Literal["api_key", "login"]
 
 
 class AdminConfig(BaseModel):
@@ -39,11 +38,10 @@ class QueueConfig(BaseModel):
 
 
 class NovelAIUpstreamConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
-    auth_type: NovelAIAuthType = "api_key"
     api_key: str = ""
-    username: str = ""
-    password: str = ""
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -53,31 +51,19 @@ class NovelAIUpstreamConfig(BaseModel):
         self.id = self.id.strip()
         if self.id in RESERVED_UPSTREAM_IDS:
             raise ValueError(f"novelai.upstreams[].id is reserved: {self.id}")
-        if self.enabled and self.auth_type == "login":
-            if not self.username.strip():
-                raise ValueError("novelai.upstreams[].username must not be empty when auth_type is login")
-            if not self.password.strip():
-                raise ValueError("novelai.upstreams[].password must not be empty when auth_type is login")
         return self
 
 
 class NovelAIConfig(BaseModel):
-    auth_type: NovelAIAuthType = "api_key"
+    model_config = ConfigDict(extra="forbid")
+
     api_key: str = ""
-    username: str = ""
-    password: str = ""
     upstreams: list[NovelAIUpstreamConfig] = Field(default_factory=list)
     account_tier: int = Field(default=3, ge=0, le=3)
     upscale_anlas_cost: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_novelai(self):
-        uses_top_level_upstream = not any(upstream.enabled for upstream in self.upstreams)
-        if uses_top_level_upstream and self.auth_type == "login":
-            if not self.username.strip():
-                raise ValueError("novelai.username must not be empty when auth_type is login")
-            if not self.password.strip():
-                raise ValueError("novelai.password must not be empty when auth_type is login")
         ids = [upstream.id for upstream in self.upstreams]
         if len(ids) != len(set(ids)):
             raise ValueError("novelai.upstreams[].id must be unique")

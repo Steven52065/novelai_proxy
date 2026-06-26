@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import io
 import zipfile
 from typing import Any, Protocol
 
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
-from novelai_python.credential import ApiCredential, JwtCredential, LoginCredential, SecretStr
+from novelai_python.credential import ApiCredential, JwtCredential, SecretStr
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from novelai_python.sdk.ai.generate_image.suggest_tags import SuggestTags
@@ -22,20 +21,12 @@ class _Credential(Protocol):
 
 
 class UpstreamClient:
-    def __init__(self, api_key: str, *, credential: _Credential | None = None):
+    def __init__(self, api_key: str):
         self.api_key = api_key
-        self._credential_instance = credential or self._api_key_credential(api_key)
+        self._credential_instance = self._api_key_credential(api_key)
 
     @classmethod
     def from_config(cls, config) -> "UpstreamClient":
-        if config.auth_type == "login":
-            credential = _LockedCredential(
-                LoginCredential(
-                    username=config.username.strip(),
-                    password=SecretStr(config.password),
-                )
-            )
-            return cls("", credential=credential)
         return cls(config.api_key)
 
     def _credential(self) -> _Credential:
@@ -102,17 +93,6 @@ class UpstreamClient:
                     code=response.status_code,
                 )
             return response.content
-
-
-class _LockedCredential:
-    def __init__(self, credential: _Credential):
-        self.credential = credential
-        self._lock = asyncio.Lock()
-
-    async def get_session(self, timeout: int = 180, update_headers: dict = None):
-        async with self._lock:
-            return await self.credential.get_session(timeout=timeout, update_headers=update_headers)
-
 
 def _files_to_zip(files: list[tuple[str, bytes]] | tuple[tuple[str, bytes], ...]) -> bytes:
         zip_file_bytes = io.BytesIO()

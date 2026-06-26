@@ -22,101 +22,50 @@ def test_reserved_upstream_id_is_rejected():
 def test_novelai_api_key_config_stays_compatible():
     config = AppConfig.model_validate({"novelai": {"api_key": "pst-secret-token", "account_tier": 3}})
 
-    assert config.novelai.auth_type == "api_key"
     assert config.novelai.api_key == "pst-secret-token"
 
 
-def test_novelai_login_config_requires_credentials():
+def test_novelai_jwt_config_uses_api_key_field():
     config = AppConfig.model_validate(
         {
             "novelai": {
-                "auth_type": "login",
-                "username": "user@example.com",
-                "password": "secret-password",
-            },
-        }
-    )
-
-    assert config.novelai.auth_type == "login"
-    assert config.novelai.username == "user@example.com"
-    assert config.novelai.password == "secret-password"
-
-
-def test_novelai_login_config_rejects_missing_credentials():
-    with pytest.raises(ValidationError, match="novelai.username"):
-        AppConfig.model_validate({"novelai": {"auth_type": "login", "password": "secret-password"}})
-
-    with pytest.raises(ValidationError, match="novelai.password"):
-        AppConfig.model_validate({"novelai": {"auth_type": "login", "username": "user@example.com"}})
-
-
-def test_ignored_top_level_login_config_does_not_require_credentials_when_enabled_upstreams_exist():
-    config = AppConfig.model_validate(
-        {
-            "novelai": {
-                "auth_type": "login",
-                "upstreams": [
-                    {"id": "main", "auth_type": "api_key", "api_key": "pst-secret-token", "enabled": True},
-                ],
+                "api_key": "eyJhbGciOiJIUzI1NiJ9.payload.signature",
             }
         }
     )
 
-    assert config.novelai.auth_type == "login"
-    assert config.novelai.upstreams[0].id == "main"
+    assert config.novelai.api_key == "eyJhbGciOiJIUzI1NiJ9.payload.signature"
 
 
-def test_novelai_upstreams_allow_mixed_auth_modes():
+def test_novelai_upstreams_allow_persistent_tokens_and_jwt_tokens():
     config = AppConfig.model_validate(
         {
             "novelai": {
                 "upstreams": [
-                    {"id": "main", "auth_type": "login", "username": "user@example.com", "password": "secret-password"},
-                    {"id": "backup", "auth_type": "api_key", "api_key": "pst-secret-token"},
+                    {"id": "main", "api_key": "pst-secret-token", "enabled": True},
+                    {"id": "jwt", "api_key": "eyJhbGciOiJIUzI1NiJ9.payload.signature"},
                 ]
             }
         }
     )
 
-    assert [upstream.auth_type for upstream in config.novelai.upstreams] == ["login", "api_key"]
-    assert config.novelai.upstreams[0].username == "user@example.com"
-    assert config.novelai.upstreams[1].api_key == "pst-secret-token"
+    assert config.novelai.upstreams[0].api_key == "pst-secret-token"
+    assert config.novelai.upstreams[1].api_key.startswith("ey")
 
 
-def test_disabled_login_upstream_does_not_require_credentials():
-    config = AppConfig.model_validate(
-        {
-            "novelai": {
-                "upstreams": [
-                    {"id": "unused", "auth_type": "login", "enabled": False},
-                    {"id": "main", "auth_type": "api_key", "api_key": "pst-secret-token", "enabled": True},
-                ]
-            }
-        }
-    )
+def test_novelai_removed_auth_fields_are_rejected():
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"novelai": {"auth_type": "login"}})
 
-    assert config.novelai.upstreams[0].enabled is False
-    assert config.novelai.upstreams[0].auth_type == "login"
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"novelai": {"username": "user@example.com", "password": "secret-password"}})
 
-
-def test_novelai_upstream_login_rejects_missing_credentials():
-    with pytest.raises(ValidationError, match="novelai.upstreams\\[\\].username"):
+    with pytest.raises(ValidationError):
         AppConfig.model_validate(
             {
                 "novelai": {
                     "upstreams": [
-                        {"id": "main", "auth_type": "login", "password": "secret-password"},
-                    ]
-                }
-            }
-        )
-
-    with pytest.raises(ValidationError, match="novelai.upstreams\\[\\].password"):
-        AppConfig.model_validate(
-            {
-                "novelai": {
-                    "upstreams": [
-                        {"id": "main", "auth_type": "login", "username": "user@example.com"},
+                        {"id": "main", "auth_type": "api_key", "api_key": "pst-secret-token"},
                     ]
                 }
             }
