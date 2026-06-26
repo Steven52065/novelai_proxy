@@ -152,13 +152,16 @@ def test_admin_replay_by_log_id_reads_archived_payload(tmp_path: Path, monkeypat
             json={"name": "replay-archived-payload", "tier": "normal", "anlas_total": 100},
         )
         user_id = create_resp.json()["user_id"]
+        payload_json = '{"input":"archived replay","model":"nai-diffusion-3","parameters":{}}'
+        payload_bytes = len(payload_json.encode("utf-8"))
         app.state.db.execute(
             """
             INSERT INTO usage_logs (
                 request_id, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, log_level, upstream_id, request_payload, created_at
+                estimated_anlas_cost, status, log_level, upstream_id, request_payload,
+                request_payload_bytes, request_payload_available_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "archived-replay-source",
@@ -173,7 +176,9 @@ def test_admin_replay_by_log_id_reads_archived_payload(tmp_path: Path, monkeypat
                 "success",
                 "INFO",
                 "default",
-                '{"input":"archived replay","model":"nai-diffusion-3","parameters":{}}',
+                payload_json,
+                payload_bytes,
+                payload_bytes,
                 "2026-05-10T00:00:00+00:00",
             ),
         )

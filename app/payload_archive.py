@@ -169,10 +169,7 @@ class PayloadArchiveService:
             FROM usage_logs l
             LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
             WHERE l.created_at < ?
-              AND (
-                  (l.request_payload IS NOT NULL AND l.request_payload != '')
-                  OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
-              )
+              AND l.request_payload_bytes > 0
               AND r.log_id IS NULL
             """,
             (cutoff,),
@@ -196,10 +193,7 @@ class PayloadArchiveService:
             FROM usage_logs l
             LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
             WHERE l.created_at < ?
-              AND (
-                  (l.request_payload IS NOT NULL AND l.request_payload != '')
-                  OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
-              )
+              AND l.request_payload_bytes > 0
               AND r.log_id IS NULL
             ORDER BY l.created_at ASC, l.id ASC
             LIMIT ?
@@ -270,10 +264,7 @@ class PayloadArchiveService:
                 FROM usage_logs l
                 LEFT JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
                 WHERE l.id IN ({placeholders})
-                  AND (
-                      (l.request_payload IS NOT NULL AND l.request_payload != '')
-                      OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
-                  )
+                  AND l.request_payload_bytes > 0
                   AND r.log_id IS NULL
                 ORDER BY l.created_at ASC, l.id ASC
                 """,

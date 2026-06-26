@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import inspect
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,50 @@ from app.database import utc_now_iso, validate_discord_self_service_config
 from app.payload_archive import PayloadArchiveService
 from app.usage_logs import UsageLogCreate
 from helpers import write_test_config
+
+
+def _utf8_len(value: str | None) -> int:
+    return len(value.encode("utf-8")) if value is not None else 0
+
+
+def _insert_precomputed_usage_log(
+    db: Database,
+    *,
+    request_id: str,
+    user_id: int,
+    created_at: str,
+    request_payload: str | None = None,
+    output_files: str | None = None,
+    image_urls: str | None = None,
+    status: str = "success",
+) -> None:
+    request_payload_bytes = _utf8_len(request_payload)
+    db.execute(
+        """
+        INSERT INTO usage_logs (
+            request_id, user_id, action, estimated_anlas_cost, status, log_level,
+            request_payload, request_payload_bytes, request_payload_available_bytes,
+            output_files, output_files_bytes, image_urls, image_urls_bytes, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            user_id,
+            "generate",
+            0,
+            status,
+            "INFO",
+            request_payload,
+            request_payload_bytes,
+            request_payload_bytes,
+            output_files,
+            _utf8_len(output_files),
+            image_urls,
+            _utf8_len(image_urls),
+            created_at,
+        ),
+    )
 
 
 def test_admin_database_management_clears_large_payloads(tmp_path: Path, monkeypatch):
@@ -32,47 +77,23 @@ def test_admin_database_management_clears_large_payloads(tmp_path: Path, monkeyp
         )
         user_id = create_resp.json()["user_id"]
         for request_id, created_at in (("old-large-payload", old_time), ("recent-large-payload", recent_time)):
-            app.state.db.execute(
-                """
-                INSERT INTO usage_logs (
-                    request_id, user_id, action, estimated_anlas_cost, status, log_level,
-                    request_payload, output_files, image_urls, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    request_id,
-                    user_id,
-                    "generate",
-                    0,
-                    "success",
-                    "INFO",
-                    large_payload,
-                    '["image.png"]',
-                    '[{"url":"https://files.catbox.moe/image.png"}]',
-                    created_at,
-                ),
+            _insert_precomputed_usage_log(
+                app.state.db,
+                request_id=request_id,
+                user_id=user_id,
+                request_payload=large_payload,
+                output_files='["image.png"]',
+                image_urls='[{"url":"https://files.catbox.moe/image.png"}]',
+                created_at=created_at,
             )
-        app.state.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, user_id, action, estimated_anlas_cost, status, log_level,
-                request_payload, output_files, image_urls, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "old-large-image-urls",
-                user_id,
-                "generate",
-                0,
-                "success",
-                "INFO",
-                None,
-                "[]",
-                '[{"url":"https://files.catbox.moe/' + ("b" * 2048) + '.png"}]',
-                old_time,
-            ),
+        _insert_precomputed_usage_log(
+            app.state.db,
+            request_id="old-large-image-urls",
+            user_id=user_id,
+            request_payload=None,
+            output_files="[]",
+            image_urls='[{"url":"https://files.catbox.moe/' + ("b" * 2048) + '.png"}]',
+            created_at=old_time,
         )
 
         stats = client.get("/admin/api/database/stats", auth=("admin", "admin123"))
@@ -130,14 +151,12 @@ def test_admin_database_clear_payloads_purges_archived_payloads(tmp_path: Path, 
             auth=("admin", "admin123"),
             json={"name": "db-clear-archived", "tier": "normal", "anlas_total": 100},
         ).json()["user_id"]
-        app.state.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("clear-archived-payload", user_id, "generate", 0, "success", "INFO", large_payload, old_time),
+        _insert_precomputed_usage_log(
+            app.state.db,
+            request_id="clear-archived-payload",
+            user_id=user_id,
+            request_payload=large_payload,
+            created_at=old_time,
         )
 
         archive_result = app.state.payload_archive_service.archive_due_payloads(
@@ -249,39 +268,52 @@ def test_admin_database_stats_and_clear_payloads_handle_hot_compressed_payloads(
 
 
 def test_admin_database_clear_payloads_counts_legacy_text_payload_bytes(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
-    from app.main import app
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
 
     old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
     legacy_payload = '{"input":"' + ("中文提示词" * 80) + '","parameters":{"steps":1}}'
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_key_hash TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE usage_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            log_level TEXT NOT NULL DEFAULT 'INFO',
+            request_payload TEXT,
+            request_payload_bytes INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO users(api_key_hash, name, created_at)
+        VALUES ('legacy-hash', 'legacy-user', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO usage_logs (
+            request_id, user_id, action, estimated_anlas_cost, status, log_level,
+            request_payload, request_payload_bytes, created_at
+        )
+        VALUES (?, 1, 'generate', 0, 'success', 'INFO', ?, 0, ?)
+        """,
+        ("old-legacy-nonascii-payload", legacy_payload, old_time),
+    )
+    conn.commit()
+    conn.close()
+
+    from app.main import app
 
     with TestClient(app) as client:
-        user_id = client.post(
-            "/admin/api/users",
-            auth=("admin", "admin123"),
-            json={"name": "db-legacy-nonascii-payload", "tier": "normal", "anlas_total": 100},
-        ).json()["user_id"]
-        app.state.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, user_id, action, estimated_anlas_cost, status, log_level,
-                request_payload, request_payload_bytes, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "old-legacy-nonascii-payload",
-                user_id,
-                "generate",
-                0,
-                "success",
-                "INFO",
-                legacy_payload,
-                0,
-                old_time,
-            ),
-        )
-
         expected_bytes = len(legacy_payload.encode("utf-8"))
         assert expected_bytes >= 1024
         assert len(legacy_payload) < 1024
@@ -305,6 +337,142 @@ def test_admin_database_clear_payloads_counts_legacy_text_payload_bytes(tmp_path
             ("old-legacy-nonascii-payload",),
         )
         assert cleared["request_payload"] is None
+
+
+def test_usage_log_size_fields_migration_backfills_archived_and_json_sizes(tmp_path: Path):
+    db_path = tmp_path / "old-size-fields.db"
+    payload = '{"input":"legacy hot","parameters":{"steps":1}}'
+    output_files = '["legacy.png"]'
+    image_urls = '[{"url":"https://files.example/legacy.png"}]'
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        PRAGMA user_version = 1;
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_key_hash TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE usage_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL DEFAULT 0,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            log_level TEXT NOT NULL DEFAULT 'INFO',
+            request_payload TEXT,
+            request_payload_encoding TEXT NOT NULL DEFAULT 'json',
+            request_payload_blob BLOB,
+            request_payload_bytes INTEGER NOT NULL DEFAULT 0,
+            request_payload_compressed_bytes INTEGER NOT NULL DEFAULT 0,
+            output_files TEXT,
+            image_urls TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(request_id, attempt_number)
+        );
+        CREATE TABLE usage_log_payload_archives (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_date TEXT NOT NULL,
+            part_number INTEGER NOT NULL,
+            compression TEXT NOT NULL,
+            compression_level INTEGER NOT NULL,
+            payload_count INTEGER NOT NULL,
+            raw_bytes INTEGER NOT NULL,
+            compressed_bytes INTEGER NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            payload_blob BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(archive_date, part_number)
+        );
+        CREATE TABLE usage_log_payload_archive_refs (
+            log_id INTEGER PRIMARY KEY,
+            archive_id INTEGER NOT NULL,
+            payload_key TEXT NOT NULL,
+            payload_bytes INTEGER NOT NULL
+        );
+        INSERT INTO users(api_key_hash, name, created_at)
+        VALUES ('hash', 'user', '2026-01-01T00:00:00+00:00');
+        INSERT INTO usage_log_payload_archives (
+            id, archive_date, part_number, compression, compression_level, payload_count,
+            raw_bytes, compressed_bytes, payload_sha256, payload_blob, created_at
+        )
+        VALUES (1, '2026-01-01', 1, 'zlib', 6, 1, 10, 10, 'sha', X'00', '2026-01-01T00:00:00+00:00');
+        INSERT INTO usage_logs (
+            id, request_id, user_id, action, estimated_anlas_cost, status, log_level, created_at
+        )
+        VALUES (1, 'archived-legacy', 1, 'generate', 0, 'success', 'INFO', '2026-01-01T00:00:00+00:00');
+        INSERT INTO usage_log_payload_archive_refs(log_id, archive_id, payload_key, payload_bytes)
+        VALUES (1, 1, '1', 4321);
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO usage_logs (
+            id, request_id, user_id, action, estimated_anlas_cost, status, log_level,
+            request_payload, request_payload_bytes, output_files, image_urls, created_at
+        )
+        VALUES (2, 'hot-legacy', 1, 'generate', 0, 'success', 'INFO', ?, 0, ?, ?, '2026-01-01T00:00:01+00:00')
+        """,
+        (payload, output_files, image_urls),
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(str(db_path))
+    db.init_schema()
+
+    archived = db.query_one("SELECT * FROM usage_logs WHERE request_id = ?", ("archived-legacy",))
+    hot = db.query_one("SELECT * FROM usage_logs WHERE request_id = ?", ("hot-legacy",))
+    assert archived["request_payload_available_bytes"] == 4321
+    assert archived["request_payload_bytes"] == 0
+    assert hot["request_payload_bytes"] == len(payload.encode("utf-8"))
+    assert hot["request_payload_available_bytes"] == len(payload.encode("utf-8"))
+    assert hot["output_files_bytes"] == len(output_files.encode("utf-8"))
+    assert hot["image_urls_bytes"] == len(image_urls.encode("utf-8"))
+    assert db.query_one("PRAGMA user_version")[0] == 2
+    db.close()
+
+
+def test_database_size_report_uses_precomputed_fields_and_index():
+    from app.admin import database as admin_database
+
+    db = Database(":memory:")
+    db.init_schema()
+    db.execute(
+        "INSERT INTO users(api_key_hash, name, created_at) VALUES (?, ?, ?)",
+        ("hash", "user", "2026-01-01T00:00:00+00:00"),
+    )
+    db.execute(
+        """
+        INSERT INTO usage_logs (
+            request_id, user_id, action, estimated_anlas_cost, status, log_level,
+            request_payload_available_bytes, output_files_bytes, image_urls_bytes, created_at
+        )
+        VALUES ('size-plan', 1, 'generate', 0, 'success', 'INFO', 3, 2, 1, '2026-01-01T00:00:00+00:00')
+        """
+    )
+
+    plan_rows = db.query_all(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT l.id, l.request_id, u.name AS user_name
+        FROM usage_logs l
+        JOIN users u ON u.id = l.user_id
+        ORDER BY l.request_payload_available_bytes DESC, l.output_files_bytes DESC, l.image_urls_bytes DESC, l.id DESC
+        LIMIT 10
+        """
+    )
+    plan_text = "\n".join(str(row["detail"]) for row in plan_rows)
+    assert "idx_usage_size_report" in plan_text
+
+    stats_source = inspect.getsource(admin_database._database_stats)
+    assert "LENGTH(l.output_files)" not in stats_source
+    assert "LENGTH(l.image_urls)" not in stats_source
+    assert "LENGTH(l.request_payload_blob)" not in stats_source
+    db.close()
 
 
 def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, monkeypatch):
@@ -365,23 +533,13 @@ def test_admin_database_cleanup_prevents_archive_insert_between_scan_and_delete(
             auth=("admin", "admin123"),
             json={"name": "db-cleanup-race", "tier": "normal", "anlas_total": 100},
         ).json()["user_id"]
-        app.state.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "cleanup-archive-race",
-                user_id,
-                "generate",
-                0,
-                "failed",
-                "INFO",
-                '{"input":"cleanup race","parameters":{"steps":1}}',
-                old_time,
-            ),
+        _insert_precomputed_usage_log(
+            app.state.db,
+            request_id="cleanup-archive-race",
+            user_id=user_id,
+            status="failed",
+            request_payload='{"input":"cleanup race","parameters":{"steps":1}}',
+            created_at=old_time,
         )
 
         competing_db = Database(str(app.state.db.path))
@@ -462,14 +620,12 @@ def test_admin_database_archives_old_payloads_and_keeps_recent_hot(tmp_path: Pat
             ("archive-boundary", '{"input":"boundary","parameters":{"steps":1}}', boundary_time),
             ("archive-recent", '{"input":"recent","parameters":{"steps":1}}', recent_time),
         ):
-            app.state.db.execute(
-                """
-                INSERT INTO usage_logs (
-                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (request_id, user_id, "generate", 0, "success", "INFO", payload, created_at),
+            _insert_precomputed_usage_log(
+                app.state.db,
+                request_id=request_id,
+                user_id=user_id,
+                request_payload=payload,
+                created_at=created_at,
             )
 
         archive = client.post(
@@ -521,14 +677,12 @@ def test_admin_database_archive_splits_by_part_limits(tmp_path: Path, monkeypatc
             json={"name": "db-archive-parts", "tier": "normal", "anlas_total": 100},
         ).json()["user_id"]
         for index in range(3):
-            app.state.db.execute(
-                """
-                INSERT INTO usage_logs (
-                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (f"archive-part-{index}", user_id, "generate", 0, "success", "INFO", f'{{"index":{index}}}', "2026-05-10T00:00:00+00:00"),
+            _insert_precomputed_usage_log(
+                app.state.db,
+                request_id=f"archive-part-{index}",
+                user_id=user_id,
+                request_payload=f'{{"index":{index}}}',
+                created_at="2026-05-10T00:00:00+00:00",
             )
 
         result = app.state.payload_archive_service.archive_due_payloads(
@@ -557,14 +711,13 @@ def test_admin_database_cleanup_compacts_archived_payloads(tmp_path: Path, monke
             json={"name": "db-archive-compact", "tier": "normal", "anlas_total": 100},
         ).json()["user_id"]
         for request_id, status in (("compact-delete", "failed"), ("compact-keep", "success")):
-            app.state.db.execute(
-                """
-                INSERT INTO usage_logs (
-                    request_id, user_id, action, estimated_anlas_cost, status, log_level, request_payload, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (request_id, user_id, "generate", 0, status, "INFO", f'{{"request_id":"{request_id}"}}', "2026-05-10T00:00:00+00:00"),
+            _insert_precomputed_usage_log(
+                app.state.db,
+                request_id=request_id,
+                user_id=user_id,
+                status=status,
+                request_payload=f'{{"request_id":"{request_id}"}}',
+                created_at="2026-05-10T00:00:00+00:00",
             )
         app.state.payload_archive_service.archive_due_payloads(
             now=datetime(2026, 5, 22, 12, tzinfo=timezone.utc),

@@ -15,6 +15,7 @@ from .migrations import (
     add_column_if_missing,
     clear_stored_user_api_keys,
     migrate_group_daily_limit_into_members,
+    migrate_usage_log_size_fields,
     migrate_usage_logs_unique_constraint,
 )
 from .schema import initialize_schema
@@ -99,6 +100,9 @@ class Database:
 
     def _migrate_group_daily_limit_into_members(self) -> None:
         migrate_group_daily_limit_into_members(self.conn)
+
+    def _migrate_usage_log_size_fields(self) -> None:
+        migrate_usage_log_size_fields(self.conn)
 
     def _migrate_usage_logs_unique_constraint(self) -> None:
         migrate_usage_logs_unique_constraint(self.conn)

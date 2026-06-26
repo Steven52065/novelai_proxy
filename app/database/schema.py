@@ -115,9 +115,12 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     request_payload_encoding TEXT NOT NULL DEFAULT 'json',
     request_payload_blob BLOB,
     request_payload_bytes INTEGER NOT NULL DEFAULT 0,
+    request_payload_available_bytes INTEGER NOT NULL DEFAULT 0,
     request_payload_compressed_bytes INTEGER NOT NULL DEFAULT 0,
     output_files TEXT,
+    output_files_bytes INTEGER NOT NULL DEFAULT 0,
     image_urls TEXT,
+    image_urls_bytes INTEGER NOT NULL DEFAULT 0,
     is_retry_success INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     completed_at TEXT,
@@ -210,9 +213,12 @@ USAGE_LOGS_COLUMNS = (
     ("request_payload_encoding", "TEXT NOT NULL DEFAULT 'json'"),
     ("request_payload_blob", "BLOB"),
     ("request_payload_bytes", "INTEGER NOT NULL DEFAULT 0"),
+    ("request_payload_available_bytes", "INTEGER NOT NULL DEFAULT 0"),
     ("request_payload_compressed_bytes", "INTEGER NOT NULL DEFAULT 0"),
     ("output_files", "TEXT"),
+    ("output_files_bytes", "INTEGER NOT NULL DEFAULT 0"),
     ("image_urls", "TEXT"),
+    ("image_urls_bytes", "INTEGER NOT NULL DEFAULT 0"),
     ("is_retry_success", "INTEGER NOT NULL DEFAULT 0"),
     ("attempt_number", "INTEGER NOT NULL DEFAULT 0"),
     ("completed_at", "TEXT"),
@@ -260,6 +266,15 @@ def initialize_schema(db: Any) -> None:
             "CREATE INDEX IF NOT EXISTS idx_usage_payload_archive_refs_archive "
             "ON usage_log_payload_archive_refs(archive_id)"
         )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_size_report "
+            "ON usage_logs(request_payload_available_bytes DESC, output_files_bytes DESC, image_urls_bytes DESC, id DESC)"
+        )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_hot_payload_created "
+            "ON usage_logs(created_at, id) WHERE request_payload_bytes > 0"
+        )
         db._clear_stored_user_api_keys()
+        db._migrate_usage_log_size_fields()
         db._init_dashboard_hourly_triggers()
         db._backfill_dashboard_hourly_stats_if_empty()

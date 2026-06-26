@@ -82,9 +82,12 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
             request_payload_encoding TEXT NOT NULL DEFAULT 'json',
             request_payload_blob BLOB,
             request_payload_bytes INTEGER NOT NULL DEFAULT 0,
+            request_payload_available_bytes INTEGER NOT NULL DEFAULT 0,
             request_payload_compressed_bytes INTEGER NOT NULL DEFAULT 0,
             output_files TEXT,
+            output_files_bytes INTEGER NOT NULL DEFAULT 0,
             image_urls TEXT,
+            image_urls_bytes INTEGER NOT NULL DEFAULT 0,
             is_retry_success INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             completed_at TEXT,
@@ -95,7 +98,8 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
             id, request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
             estimated_anlas_cost, final_anlas_cost, queued_ms, upstream_ms, total_ms, status, error_code, error_message,
             log_level, upstream_id, request_payload, request_payload_encoding, request_payload_blob,
-            request_payload_bytes, request_payload_compressed_bytes, output_files, image_urls, is_retry_success,
+            request_payload_bytes, request_payload_available_bytes, request_payload_compressed_bytes,
+            output_files, output_files_bytes, image_urls, image_urls_bytes, is_retry_success,
             created_at, completed_at
         )
         SELECT
@@ -109,8 +113,17 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
                 WHEN request_payload IS NOT NULL AND request_payload != '' THEN LENGTH(CAST(request_payload AS BLOB))
                 ELSE 0
             END,
+            CASE
+                WHEN request_payload_bytes > 0 THEN request_payload_bytes
+                WHEN request_payload IS NOT NULL AND request_payload != '' THEN LENGTH(CAST(request_payload AS BLOB))
+                ELSE 0
+            END,
             COALESCE(request_payload_compressed_bytes, 0),
-            output_files, image_urls, is_retry_success,
+            output_files,
+            COALESCE(LENGTH(CAST(output_files AS BLOB)), 0),
+            image_urls,
+            COALESCE(LENGTH(CAST(image_urls AS BLOB)), 0),
+            is_retry_success,
             created_at, completed_at
         FROM usage_logs;
 
@@ -130,5 +143,47 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
             ON usage_logs(status);
         CREATE INDEX IF NOT EXISTS idx_usage_request_id
             ON usage_logs(request_id);
+        CREATE INDEX IF NOT EXISTS idx_usage_size_report
+            ON usage_logs(request_payload_available_bytes DESC, output_files_bytes DESC, image_urls_bytes DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_usage_hot_payload_created
+            ON usage_logs(created_at, id)
+            WHERE request_payload_bytes > 0;
         """
     )
+
+
+def migrate_usage_log_size_fields(conn: sqlite3.Connection) -> None:
+    """Backfill usage_logs precomputed byte counters introduced in user_version 2."""
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if version >= 2:
+        return
+
+    conn.execute(
+        """
+        UPDATE usage_logs
+        SET request_payload_bytes = LENGTH(CAST(request_payload AS BLOB))
+        WHERE COALESCE(request_payload_bytes, 0) = 0
+          AND request_payload IS NOT NULL
+          AND request_payload != ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE usage_logs
+        SET request_payload_available_bytes = COALESCE(
+                (
+                    SELECT r.payload_bytes
+                    FROM usage_log_payload_archive_refs r
+                    WHERE r.log_id = usage_logs.id
+                ),
+                CASE
+                    WHEN request_payload_bytes > 0 THEN request_payload_bytes
+                    WHEN request_payload IS NOT NULL AND request_payload != '' THEN LENGTH(CAST(request_payload AS BLOB))
+                    ELSE 0
+                END
+            ),
+            output_files_bytes = COALESCE(LENGTH(CAST(output_files AS BLOB)), 0),
+            image_urls_bytes = COALESCE(LENGTH(CAST(image_urls AS BLOB)), 0)
+        """
+    )
+    conn.execute("PRAGMA user_version = 2")

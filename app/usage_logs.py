@@ -26,18 +26,11 @@ USAGE_LOG_SELECT_COLUMNS = """
     END AS request_payload,
     l.output_files, l.image_urls, l.is_retry_success, l.created_at, l.completed_at,
     CASE
-        WHEN (l.request_payload IS NOT NULL AND l.request_payload != '')
-          OR (l.request_payload_blob IS NOT NULL AND LENGTH(l.request_payload_blob) > 0)
-          OR r.log_id IS NOT NULL THEN 1
+        WHEN l.request_payload_available_bytes > 0 THEN 1
         ELSE 0
     END AS has_request_payload,
     CASE WHEN r.log_id IS NOT NULL THEN 1 ELSE 0 END AS payload_archived,
-    CASE
-        WHEN r.log_id IS NOT NULL THEN r.payload_bytes
-        WHEN l.request_payload_bytes > 0 THEN l.request_payload_bytes
-        WHEN l.request_payload IS NOT NULL THEN LENGTH(CAST(l.request_payload AS BLOB))
-        ELSE 0
-    END AS request_payload_bytes
+    l.request_payload_available_bytes AS request_payload_bytes
 """
 
 
@@ -89,9 +82,9 @@ class UsageLogRepository:
                 request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
                 estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id,
                 request_payload, request_payload_encoding, request_payload_blob, request_payload_bytes,
-                request_payload_compressed_bytes, created_at
+                request_payload_available_bytes, request_payload_compressed_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -112,6 +105,7 @@ class UsageLogRepository:
                 payload.encoding,
                 payload.blob,
                 payload.original_bytes,
+                payload.original_bytes,
                 payload.compressed_bytes,
                 utc_now_iso(),
             ),
@@ -126,9 +120,9 @@ class UsageLogRepository:
                 request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
                 estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id,
                 request_payload, request_payload_encoding, request_payload_blob, request_payload_bytes,
-                request_payload_compressed_bytes, created_at
+                request_payload_available_bytes, request_payload_compressed_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -148,6 +142,7 @@ class UsageLogRepository:
                 payload.request_payload,
                 payload.encoding,
                 payload.blob,
+                payload.original_bytes,
                 payload.original_bytes,
                 payload.compressed_bytes,
                 utc_now_iso(),
@@ -178,6 +173,8 @@ class UsageLogRepository:
         is_retry_success: bool = False,
         attempt_number: int = 0,
     ) -> None:
+        output_files_json = json_dumps(output_files)
+        image_urls_json = json_dumps([] if image_urls is None else image_urls)
         self.db.execute(
             """
             UPDATE usage_logs
@@ -186,7 +183,9 @@ class UsageLogRepository:
                 upstream_ms = COALESCE(upstream_ms, ?),
                 final_anlas_cost = ?,
                 output_files = ?,
+                output_files_bytes = ?,
                 image_urls = COALESCE(image_urls, ?),
+                image_urls_bytes = CASE WHEN image_urls IS NULL THEN ? ELSE image_urls_bytes END,
                 is_retry_success = ?,
                 error_code = NULL,
                 error_message = NULL,
@@ -197,8 +196,10 @@ class UsageLogRepository:
                 queued_ms,
                 upstream_ms,
                 final_cost,
-                json_dumps(output_files),
-                json_dumps([] if image_urls is None else image_urls),
+                output_files_json,
+                self._utf8_len(output_files_json),
+                image_urls_json,
+                self._utf8_len(image_urls_json),
                 1 if is_retry_success else 0,
                 utc_now_iso(),
                 request_id,
@@ -257,13 +258,15 @@ class UsageLogRepository:
         self._notify_change()
 
     def update_image_urls(self, request_id: str, image_urls: list[dict[str, object]], attempt_number: int = 0) -> None:
+        image_urls_json = json_dumps(image_urls)
         self.db.execute(
             """
             UPDATE usage_logs
-            SET image_urls = ?
+            SET image_urls = ?,
+                image_urls_bytes = ?
             WHERE request_id = ? AND attempt_number = ?
             """,
-            (json_dumps(image_urls), request_id, attempt_number),
+            (image_urls_json, self._utf8_len(image_urls_json), request_id, attempt_number),
         )
         self._notify_change()
 
@@ -304,13 +307,15 @@ class UsageLogRepository:
                 request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
                 estimated_anlas_cost, status, log_level, upstream_id, request_payload,
                 request_payload_encoding, request_payload_blob, request_payload_bytes,
-                request_payload_compressed_bytes, created_at
+                request_payload_available_bytes, request_payload_compressed_bytes,
+                output_files_bytes, image_urls_bytes, created_at
             )
             SELECT
                 request_id, ?, user_id, action, model, width, height, steps, n_samples,
                 estimated_anlas_cost, 'running', 'INFO', ?, request_payload,
                 request_payload_encoding, request_payload_blob, request_payload_bytes,
-                request_payload_compressed_bytes, ?
+                request_payload_available_bytes, request_payload_compressed_bytes,
+                output_files_bytes, image_urls_bytes, ?
             FROM usage_logs
             WHERE request_id = ? AND attempt_number = 0
             """,
@@ -445,6 +450,10 @@ class UsageLogRepository:
             separators=(",", ":"),
             default=str,
         )
+
+    @staticmethod
+    def _utf8_len(value: str | None) -> int:
+        return len(value.encode("utf-8")) if value is not None else 0
 
     def _notify_change(self) -> None:
         if self._on_change is not None:
