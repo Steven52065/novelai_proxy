@@ -50,6 +50,22 @@ def test_novelai_login_config_rejects_missing_credentials():
         AppConfig.model_validate({"novelai": {"auth_type": "login", "username": "user@example.com"}})
 
 
+def test_ignored_top_level_login_config_does_not_require_credentials_when_enabled_upstreams_exist():
+    config = AppConfig.model_validate(
+        {
+            "novelai": {
+                "auth_type": "login",
+                "upstreams": [
+                    {"id": "main", "auth_type": "api_key", "api_key": "pst-secret-token", "enabled": True},
+                ],
+            }
+        }
+    )
+
+    assert config.novelai.auth_type == "login"
+    assert config.novelai.upstreams[0].id == "main"
+
+
 def test_novelai_upstreams_allow_mixed_auth_modes():
     config = AppConfig.model_validate(
         {
@@ -65,6 +81,22 @@ def test_novelai_upstreams_allow_mixed_auth_modes():
     assert [upstream.auth_type for upstream in config.novelai.upstreams] == ["login", "api_key"]
     assert config.novelai.upstreams[0].username == "user@example.com"
     assert config.novelai.upstreams[1].api_key == "pst-secret-token"
+
+
+def test_disabled_login_upstream_does_not_require_credentials():
+    config = AppConfig.model_validate(
+        {
+            "novelai": {
+                "upstreams": [
+                    {"id": "unused", "auth_type": "login", "enabled": False},
+                    {"id": "main", "auth_type": "api_key", "api_key": "pst-secret-token", "enabled": True},
+                ]
+            }
+        }
+    )
+
+    assert config.novelai.upstreams[0].enabled is False
+    assert config.novelai.upstreams[0].auth_type == "login"
 
 
 def test_novelai_upstream_login_rejects_missing_credentials():

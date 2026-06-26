@@ -53,7 +53,7 @@ class NovelAIUpstreamConfig(BaseModel):
         self.id = self.id.strip()
         if self.id in RESERVED_UPSTREAM_IDS:
             raise ValueError(f"novelai.upstreams[].id is reserved: {self.id}")
-        if self.auth_type == "login":
+        if self.enabled and self.auth_type == "login":
             if not self.username.strip():
                 raise ValueError("novelai.upstreams[].username must not be empty when auth_type is login")
             if not self.password.strip():
@@ -72,7 +72,8 @@ class NovelAIConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_novelai(self):
-        if self.auth_type == "login":
+        uses_top_level_upstream = not any(upstream.enabled for upstream in self.upstreams)
+        if uses_top_level_upstream and self.auth_type == "login":
             if not self.username.strip():
                 raise ValueError("novelai.username must not be empty when auth_type is login")
             if not self.password.strip():
