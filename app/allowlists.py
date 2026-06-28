@@ -6,6 +6,7 @@ users / user_groups 表以 CSV 字符串存储这两个字段，
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Self
@@ -74,12 +75,27 @@ class AllowedEndpoints(_CsvField):
 
 
 class AllowedUpstreams(_CsvField):
-    """用户/组允许使用的上游清单，空值表示不限制。"""
+    """用户/组允许使用的上游清单，空值表示不限制。
+
+    旧数据使用 CSV 保存；新数据使用 JSON 列表，避免逗号等字符破坏上游 ID。
+    """
 
     @classmethod
     def parse(cls, value: str | None) -> AllowedUpstreams:
+        if value:
+            stripped = value.strip()
+            if stripped.startswith("["):
+                try:
+                    loaded = json.loads(stripped)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    if isinstance(loaded, list):
+                        return cls.of(str(item) for item in loaded)
         return cls(cls._split(value))
 
     def serialize(self) -> str | None:
         unique = self._unique_items()
-        return ",".join(unique) if unique else None
+        if not unique:
+            return None
+        return json.dumps(unique, ensure_ascii=False, separators=(",", ":"))

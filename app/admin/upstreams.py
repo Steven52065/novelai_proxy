@@ -54,7 +54,7 @@ async def create_upstream(request: Request, payload: UpstreamCreateInput):
     return {"upstream": upstream_to_public_dict(record)}
 
 
-@api_router.patch("/upstreams/{upstream_id}", dependencies=[Depends(require_admin_or_session)])
+@api_router.patch("/upstreams/{upstream_id:path}", dependencies=[Depends(require_admin_or_session)])
 async def update_upstream(request: Request, upstream_id: str, payload: UpstreamUpdateInput):
     runtime = request.app.state.upstream_runtime
     try:
@@ -71,7 +71,7 @@ async def update_upstream(request: Request, upstream_id: str, payload: UpstreamU
     return {"upstream": upstream_to_public_dict(record)}
 
 
-@api_router.delete("/upstreams/{upstream_id}", dependencies=[Depends(require_admin_or_session)])
+@api_router.delete("/upstreams/{upstream_id:path}", dependencies=[Depends(require_admin_or_session)])
 async def delete_upstream(request: Request, upstream_id: str):
     runtime = request.app.state.upstream_runtime
     try:

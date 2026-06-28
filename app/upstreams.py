@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -12,9 +11,6 @@ from .config import RESERVED_UPSTREAM_IDS
 from .database import Database
 from .queue_models import UpstreamQueueTarget
 from .upstream import UpstreamClient
-
-
-UPSTREAM_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -53,8 +49,6 @@ def validate_upstream_id(upstream_id: str) -> str:
         raise ValueError("upstream id must not be empty")
     if normalized in RESERVED_UPSTREAM_IDS:
         raise ValueError(f"upstream id is reserved: {normalized}")
-    if not UPSTREAM_ID_PATTERN.fullmatch(normalized):
-        raise ValueError("upstream id must be 1-64 characters and contain only letters, numbers, dot, underscore or dash")
     return normalized
 
 

@@ -105,7 +105,7 @@ def test_user_allowed_upstreams_limits_routing(tmp_path: Path, monkeypatch):
         assert len(upstream_b.generate_started_at) == 2
         users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
         created = next(row for row in users if row["name"] == "restricted-user")
-        assert created["allowed_upstreams"] == "opus-b"
+        assert created["allowed_upstreams"] == '["opus-b"]'
         assert created["allowed_upstreams_list"] == ["opus-b"]
 
 def test_routing_tries_other_allowed_upstream_when_selected_queue_is_full(tmp_path: Path, monkeypatch):

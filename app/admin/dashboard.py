@@ -90,7 +90,7 @@ async def upstream_weights(request: Request):
     return _upstream_weights_payload(request)
 
 
-@api_router.post("/upstreams/{upstream_id}/test", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/upstreams/{upstream_id:path}/test", dependencies=[Depends(require_admin_or_session)])
 async def test_upstream(request: Request, upstream_id: str):
     started_at = time.monotonic()
     try:
