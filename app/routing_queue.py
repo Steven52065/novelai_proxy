@@ -603,6 +603,11 @@ class RoutingProxyQueue:
                 continue
             original_future = item.cancel_future
             if original_future is None:
+                self._settle_routing_rejection(
+                    item,
+                    error_code="no_available_upstream",
+                    error_message=f"Upstream is unavailable: {upstream_id}",
+                )
                 item.future.set_exception(NoAvailableUpstream(f"Upstream is unavailable: {upstream_id}"))
                 failed += 1
                 continue
@@ -629,6 +634,11 @@ class RoutingProxyQueue:
             try:
                 self._dispatch_queue.put_nowait(dispatch_item)
             except asyncio.QueueFull:
+                self._settle_routing_rejection(
+                    item,
+                    error_code="queue_full",
+                    error_message="Queue full, please retry later",
+                )
                 if not original_future.done():
                     original_future.set_exception(QueueFull())
                 failed += 1
@@ -655,7 +665,18 @@ class RoutingProxyQueue:
         errors: list[Exception],
         last_429_error: APIError | None,
     ) -> None:
-        item.accounting.settle_released()
+        if errors:
+            self._settle_routing_rejection(
+                item,
+                error_code="queue_full",
+                error_message="Queue full, please retry later",
+            )
+        else:
+            self._settle_routing_rejection(
+                item,
+                error_code="no_available_upstream",
+                error_message="No enabled upstream is available for this user",
+            )
         if last_429_error is not None:
             if not item.future.done():
                 item.future.set_exception(last_429_error)
@@ -663,6 +684,23 @@ class RoutingProxyQueue:
         if errors:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("No enabled upstream is available for this user")
+
+    @staticmethod
+    def _settle_routing_rejection(
+        item: QueueItem,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        if item.attempt_number > 0 and item.retry_attempt_logged:
+            item.accounting.settle_rejected(
+                error_code=error_code,
+                error_message=error_message,
+                log_level="ERROR",
+                attempt_number=item.attempt_number,
+            )
+            return
+        item.accounting.settle_released()
 
     def _finish_user_unavailable(self, item: QueueItem) -> None:
         item.accounting.settle_rejected(

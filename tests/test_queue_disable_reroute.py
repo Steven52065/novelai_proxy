@@ -5,6 +5,7 @@ import threading
 import time
 
 import pytest
+from novelai_python._exceptions import APIError
 
 from app.queue_manager import (
     NoAvailableUpstream,
@@ -31,6 +32,7 @@ class LabelUpstream:
 class RecordingRetryUsageLogs(_NoopUsageLogs):
     def __init__(self):
         self.retry_attempts = []
+        self.rejected = []
 
     def insert_retry_attempt(self, *, request_id=None, attempt_number, upstream_id=None):
         self.retry_attempts.append(
@@ -40,6 +42,26 @@ class RecordingRetryUsageLogs(_NoopUsageLogs):
                 "upstream_id": upstream_id,
             }
         )
+
+    def mark_rejected(self, request_id, *, error_code, error_message, log_level="ERROR", attempt_number=0):
+        self.rejected.append(
+            {
+                "request_id": request_id,
+                "attempt_number": attempt_number,
+                "error_code": error_code,
+                "error_message": error_message,
+                "log_level": log_level,
+            }
+        )
+
+
+def _api_429() -> APIError:
+    return APIError(
+        "Too many requests",
+        request={},
+        response={"message": "Too many requests"},
+        code="429",
+    )
 
 
 def test_disabled_upstream_pending_user_request_reroutes_to_enabled_target():
@@ -430,5 +452,179 @@ def test_disabled_upstream_rerouted_retry_attempt_does_not_duplicate_retry_log()
         finally:
             release_a.set()
             await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_disabled_upstream_rerouted_retry_attempt_is_rejected_when_no_upstream_remains():
+    async def run_test():
+        release_a = threading.Event()
+        upstream_a = FirstRequestBlockingLabelUpstream(release_a)
+        usage_logs = RecordingRetryUsageLogs()
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream_a)],
+            quota_manager=object(),
+            usage_logs=usage_logs,
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        try:
+            first = asyncio.create_task(
+                queue.submit(
+                    request_id="running-on-a",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "running-on-a"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            await _wait_until_async(lambda: upstream_a.started_labels == ["running-on-a"])
+
+            loop = asyncio.get_running_loop()
+            original_future = loop.create_future()
+            accounting = RequestAccounting(
+                quota_manager=object(),
+                usage_logs=usage_logs,
+                request_id="retry-no-upstream",
+                user_id=7,
+                estimated_cost=0,
+                manage_quota=False,
+            )
+            retry_item = QueueItem(
+                priority=RoutingProxyQueue.NORMAL_PRIORITY,
+                sequence=0,
+                enqueued_at=time.monotonic(),
+                request_id="retry-no-upstream",
+                user_id=7,
+                action="generate",
+                tier="normal",
+                estimated_cost=0,
+                accounting=accounting,
+                logging_config=object(),
+                process_zip_response=False,
+                handler=lambda upstream: upstream.generate_image_payload_zip({"label": "retry-no-upstream"}),
+                future=original_future,
+                attempt_number=1,
+                has_retried_429=True,
+                last_429_error=_api_429(),
+            )
+            queue._dispatch_to_upstream(retry_item)
+            await _wait_until_async(lambda: queue._queues["opus-a"].qsize() == 1)
+
+            queue.sync_targets([])
+
+            with pytest.raises(APIError):
+                await asyncio.wait_for(original_future, timeout=1)
+            assert usage_logs.retry_attempts == [
+                {"request_id": "retry-no-upstream", "attempt_number": 1, "upstream_id": "opus-a"}
+            ]
+            assert usage_logs.rejected == [
+                {
+                    "request_id": "retry-no-upstream",
+                    "attempt_number": 1,
+                    "error_code": "no_available_upstream",
+                    "error_message": "No enabled upstream is available for this user",
+                    "log_level": "ERROR",
+                }
+            ]
+
+            release_a.set()
+            assert await asyncio.wait_for(first, timeout=1) == b"running-on-a"
+        finally:
+            release_a.set()
+            await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_disabled_upstream_rerouted_retry_attempt_is_rejected_when_dispatch_queue_is_full():
+    async def run_test():
+        usage_logs = RecordingRetryUsageLogs()
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=LabelUpstream)],
+            quota_manager=object(),
+            usage_logs=usage_logs,
+            max_queue_size=2,
+            dispatch_max_queue_size=1,
+        )
+        loop = asyncio.get_running_loop()
+        original_future = loop.create_future()
+        retry_item = QueueItem(
+            priority=RoutingProxyQueue.NORMAL_PRIORITY,
+            sequence=0,
+            enqueued_at=time.monotonic(),
+            request_id="retry-dispatch-full",
+            user_id=7,
+            action="generate",
+            tier="normal",
+            estimated_cost=0,
+            accounting=RequestAccounting(
+                quota_manager=object(),
+                usage_logs=usage_logs,
+                request_id="retry-dispatch-full",
+                user_id=7,
+                estimated_cost=0,
+                manage_quota=False,
+            ),
+            logging_config=object(),
+            process_zip_response=False,
+            handler=lambda upstream: upstream.generate_image_payload_zip({"label": "retry-dispatch-full"}),
+            future=original_future,
+            attempt_number=1,
+            has_retried_429=True,
+            last_429_error=_api_429(),
+        )
+        attempt_future = queue._queues["opus-a"].enqueue(retry_item)
+
+        filler_future = loop.create_future()
+        filler_item = QueueItem(
+            priority=RoutingProxyQueue.NORMAL_PRIORITY,
+            sequence=1,
+            enqueued_at=time.monotonic(),
+            request_id="dispatch-filler",
+            user_id=1,
+            action="generate",
+            tier="normal",
+            estimated_cost=0,
+            accounting=RequestAccounting(
+                quota_manager=object(),
+                usage_logs=_NoopUsageLogs(),
+                request_id="dispatch-filler",
+                user_id=1,
+                estimated_cost=0,
+                manage_quota=False,
+            ),
+            logging_config=object(),
+            process_zip_response=False,
+            handler=lambda upstream: upstream.generate_image_payload_zip({"label": "dispatch-filler"}),
+            future=filler_future,
+        )
+        queue._dispatch_queue.put_nowait(filler_item)
+
+        queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=LabelUpstream)])
+
+        with pytest.raises(QueueFull):
+            await original_future
+        with pytest.raises(UpstreamItemRerouted):
+            await attempt_future
+        assert usage_logs.retry_attempts == [
+            {"request_id": "retry-dispatch-full", "attempt_number": 1, "upstream_id": "opus-a"}
+        ]
+        assert usage_logs.rejected == [
+            {
+                "request_id": "retry-dispatch-full",
+                "attempt_number": 1,
+                "error_code": "queue_full",
+                "error_message": "Queue full, please retry later",
+                "log_level": "ERROR",
+            }
+        ]
 
     asyncio.run(run_test())
