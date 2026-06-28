@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from ..templating import templates
 from ..upstreams import upstream_to_public_dict
 from .auth import require_admin_or_session, require_admin_page_session
+from .common import format_display_time
 
 
 api_router = APIRouter(prefix="/admin/api")
@@ -34,7 +35,7 @@ async def list_upstreams(request: Request):
     runtime = request.app.state.upstream_runtime
     repo = runtime.repository
     return {
-        "upstreams": [upstream_to_public_dict(row) for row in repo.list(include_disabled=True)],
+        "upstreams": [_upstream_to_admin_dict(row) for row in repo.list(include_disabled=True)],
         "settings": _settings_to_dict(repo.get_settings()),
     }
 
@@ -51,7 +52,7 @@ async def create_upstream(request: Request, payload: UpstreamCreateInput):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
     runtime.reload_upstream(record.id)
-    return {"upstream": upstream_to_public_dict(record)}
+    return {"upstream": _upstream_to_admin_dict(record)}
 
 
 @api_router.patch("/upstreams/{upstream_id:path}", dependencies=[Depends(require_admin_or_session)])
@@ -68,7 +69,7 @@ async def update_upstream(request: Request, upstream_id: str, payload: UpstreamU
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
     runtime.reload_upstream(record.id)
-    return {"upstream": upstream_to_public_dict(record)}
+    return {"upstream": _upstream_to_admin_dict(record)}
 
 
 @api_router.delete("/upstreams/{upstream_id:path}", dependencies=[Depends(require_admin_or_session)])
@@ -104,10 +105,17 @@ async def upstreams_page(request: Request):
         "upstreams.html",
         {
             "active": "upstreams",
-            "upstreams": [upstream_to_public_dict(row) for row in repo.list(include_disabled=True)],
+            "upstreams": [_upstream_to_admin_dict(row) for row in repo.list(include_disabled=True)],
             "settings": _settings_to_dict(repo.get_settings()),
         },
     )
+
+
+def _upstream_to_admin_dict(record) -> dict:
+    data = upstream_to_public_dict(record)
+    changed_at = data.get("updated_at") or data.get("created_at")
+    data["changed_at_display"] = format_display_time(changed_at)
+    return data
 
 
 def _settings_to_dict(settings) -> dict:

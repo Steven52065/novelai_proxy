@@ -38,9 +38,12 @@
       Token
       <input type="password" name="api_key" required autocomplete="new-password">
     </label>
-    <label class="checkbox-label">
-      <input type="checkbox" name="enabled" checked>
-      启用
+    <label class="upstream-switch-field">
+      <span class="upstream-switch-label">启用</span>
+      <span class="upstream-switch">
+        <input class="upstream-switch-input" type="checkbox" name="enabled" checked>
+        <span class="upstream-switch-track" aria-hidden="true"></span>
+      </span>
     </label>
     <div class="form-actions">
       <button type="submit">
@@ -77,7 +80,7 @@
               <span class="status-pill status-info">禁用</span>
             {% endif %}
           </td>
-          <td>{{ upstream.updated_at or upstream.created_at }}</td>
+          <td title="UTC 原始时间：{{ upstream.updated_at or upstream.created_at }}">{{ upstream.changed_at_display }}</td>
           <td>
             <div class="inline-actions">
               <input class="token-input" type="password" placeholder="Token" autocomplete="new-password">

@@ -13,12 +13,26 @@ def test_admin_upstreams_list_masks_tokens(tmp_path: Path, monkeypatch):
     from app.main import app
 
     with TestClient(app) as client:
+        client.app.state.db.execute(
+            "UPDATE novelai_upstreams SET updated_at = ? WHERE id = ?",
+            ("2026-06-28T01:02:03.987654+00:00", "default"),
+        )
         resp = client.get("/admin/api/upstreams", auth=("admin", "admin123"))
 
         assert resp.status_code == 200
         text = resp.text
         assert "pst-test-token-default" not in text
-        assert resp.json()["upstreams"][0]["api_key_masked"].startswith("pst-te")
+        upstream = resp.json()["upstreams"][0]
+        assert upstream["api_key_masked"].startswith("pst-te")
+        assert upstream["changed_at_display"] == "2026-06-28 09:02:03 UTC+8"
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        page = client.get("/admin/upstreams")
+        assert page.status_code == 200
+        assert "2026-06-28 09:02:03 UTC+8" in page.text
+        assert "2026-06-28T01:02:03.987654+00:00</td>" not in page.text
+        assert "upstream-switch-input" in page.text
 
 
 def test_admin_upstream_update_replaces_runtime_client_without_restarting(tmp_path: Path, monkeypatch):
