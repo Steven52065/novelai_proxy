@@ -291,3 +291,18 @@ def test_admin_dashboard_includes_upstream_test_modal_and_fetch(tmp_path: Path, 
         assert "512x512 / 28 步 / 1 张" in dashboard.text
         assert "/admin/api/upstreams/" in dashboard.text
         assert "encodeURIComponent(activeUpstreamTestId)" in dashboard.text
+
+
+def test_admin_dashboard_treats_arbitrary_upstream_ids_as_text(tmp_path: Path, monkeypatch):
+    malicious_id = '<img src=x onerror="window.__xss=1">'
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, [malicious_id])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        dashboard = client.get("/admin")
+
+        assert dashboard.status_code == 200
+        assert "<img src=x" not in dashboard.text
+        assert "escapeHtml(item.upstream_id)" in dashboard.text
+        assert "escapeHtml(u.id)" in dashboard.text

@@ -623,7 +623,7 @@
   function specLabel(item) {
     const parts = [];
     if (item.model) {
-      parts.push(`<span class="badge badge-normal" style="font-size: 11px; padding: 2px 6px;">${item.model}</span>`);
+      parts.push(`<span class="badge badge-normal" style="font-size: 11px; padding: 2px 6px;">${escapeHtml(item.model)}</span>`);
     }
     if (item.width && item.height) {
       parts.push(`<code>${item.width}x${item.height}</code>`);
@@ -656,6 +656,15 @@
     if (className) cell.className = className;
     if (label) cell.dataset.label = label;
     row.appendChild(cell);
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
   }
 
   function renderQueue(data) {
@@ -715,11 +724,11 @@
 
       // User name
       const userName = item.user_name || `用户 #${item.user_id}`;
-      appendCell(row, `<span style="font-weight:600; color:#fff;">${userName}</span>`, "", "发起用户");
+      appendCell(row, `<span style="font-weight:600; color:#fff;">${escapeHtml(userName)}</span>`, "", "发起用户");
 
       // Action
       const actionHtml = item.action
-        ? `<span class="badge" style="background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.25); color:#c084fc;">${item.action}</span>`
+        ? `<span class="badge" style="background:rgba(139,92,246,0.12); border:1px solid rgba(139,92,246,0.25); color:#c084fc;">${escapeHtml(item.action)}</span>`
         : `<span class="muted">-</span>`;
       appendCell(row, actionHtml, "", "API动作");
 
@@ -737,7 +746,7 @@
       appendCell(row, elapsedTimerHtml(item.queued_seconds), "", "已等待");
 
       // Upstream
-      appendCell(row, item.upstream_id ? `<code>${item.upstream_id}</code>` : `<span class="muted">调度中</span>`, "mono", "上游");
+      appendCell(row, item.upstream_id ? `<code>${escapeHtml(item.upstream_id)}</code>` : `<span class="muted">调度中</span>`, "mono", "上游");
 
       queueBody.appendChild(row);
     }
@@ -937,7 +946,7 @@
       var row = document.createElement("tr");
 
       // Upstream name
-      appendCell(row, "<code style=\"font-weight:600;\">" + u.id + "</code>", "mono", "上游渠道");
+      appendCell(row, "<code style=\"font-weight:600;\">" + escapeHtml(u.id) + "</code>", "mono", "上游渠道");
 
       // Weight bar
       var percentage = maxWeight > 0 ? (u.weight / maxWeight * 100) : 0;
