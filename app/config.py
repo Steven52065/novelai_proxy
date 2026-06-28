@@ -48,6 +48,23 @@ class RoutingConfig(BaseModel):
     adaptive: AdaptiveRoutingConfig = Field(default_factory=AdaptiveRoutingConfig)
 
 
+class UpstreamAutoDisableConfig(BaseModel):
+    enabled: bool = True
+    status_codes: list[int] = Field(default_factory=lambda: [403])
+
+    @field_validator("status_codes")
+    @classmethod
+    def validate_status_codes(cls, value: list[int]) -> list[int]:
+        normalized: list[int] = []
+        for item in value:
+            code = int(item)
+            if code < 100 or code > 599:
+                raise ValueError("upstream_auto_disable.status_codes must contain HTTP status codes")
+            if code not in normalized:
+                normalized.append(code)
+        return normalized
+
+
 class PayloadArchiveConfig(BaseModel):
     enabled: bool = False
     hot_days: int = Field(default=7, ge=0, le=3650)
@@ -156,6 +173,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    upstream_auto_disable: UpstreamAutoDisableConfig = Field(default_factory=UpstreamAutoDisableConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)

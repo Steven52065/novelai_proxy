@@ -194,6 +194,20 @@ CREATE TABLE IF NOT EXISTS dashboard_hourly_request_refs (
 CREATE INDEX IF NOT EXISTS idx_dashboard_hourly_refs_upstream_bucket
     ON dashboard_hourly_request_refs(upstream_id, bucket_hour, request_id);
 
+CREATE TABLE IF NOT EXISTS admin_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    dismissed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_notifications_pending
+    ON admin_notifications(dismissed_at, event_time, id);
+
 CREATE TABLE IF NOT EXISTS novelai_upstreams (
     id TEXT PRIMARY KEY,
     api_key TEXT NOT NULL,
@@ -289,6 +303,10 @@ def initialize_schema(db: Any) -> None:
         db.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_usage_hot_payload_created "
             "ON usage_logs(created_at, id) WHERE request_payload_bytes > 0"
+        )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_notifications_pending "
+            "ON admin_notifications(dismissed_at, event_time, id)"
         )
         db.conn.execute(
             """

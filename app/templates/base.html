@@ -82,6 +82,22 @@
     </div>
   </div>
 
+  <div id="admin-notification-overlay" class="admin-notification-overlay" hidden></div>
+  <div id="admin-notification-modal" class="admin-notification-modal" role="dialog" aria-modal="true" aria-labelledby="admin-notification-title" hidden>
+    <div class="admin-notification-card">
+      <div class="admin-notification-head">
+        <i data-lucide="alert-triangle" class="admin-notification-icon"></i>
+        <h2 id="admin-notification-title"></h2>
+      </div>
+      <p id="admin-notification-content" class="admin-notification-content"></p>
+      <div id="admin-notification-time" class="admin-notification-time"></div>
+      <div class="admin-notification-actions">
+        <button id="admin-notification-close" type="button" class="secondary">关闭</button>
+        <button id="admin-notification-dismiss" type="button">不再提醒</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Lucide Icons Library -->
   <script src="https://unpkg.com/lucide@latest"></script>
   
@@ -132,6 +148,84 @@
       const img = document.getElementById('global-lightbox-img');
       img.src = base64Data;
       lightbox.classList.add('show');
+    }
+
+    // Admin notifications
+    const adminNotificationOverlay = document.getElementById('admin-notification-overlay');
+    const adminNotificationModal = document.getElementById('admin-notification-modal');
+    const adminNotificationTitle = document.getElementById('admin-notification-title');
+    const adminNotificationContent = document.getElementById('admin-notification-content');
+    const adminNotificationTime = document.getElementById('admin-notification-time');
+    const adminNotificationClose = document.getElementById('admin-notification-close');
+    const adminNotificationDismiss = document.getElementById('admin-notification-dismiss');
+    const adminNotificationQueue = [];
+    let currentAdminNotification = null;
+
+    function hideAdminNotification() {
+      adminNotificationOverlay.hidden = true;
+      adminNotificationModal.hidden = true;
+      currentAdminNotification = null;
+    }
+
+    function showNextAdminNotification() {
+      if (currentAdminNotification || adminNotificationQueue.length === 0) {
+        return;
+      }
+      currentAdminNotification = adminNotificationQueue.shift();
+      adminNotificationTitle.textContent = currentAdminNotification.title || '后台事件';
+      adminNotificationContent.textContent = currentAdminNotification.content || '';
+      adminNotificationTime.textContent = currentAdminNotification.event_time_display || currentAdminNotification.event_time || '';
+      adminNotificationOverlay.hidden = false;
+      adminNotificationModal.hidden = false;
+      lucide.createIcons();
+    }
+
+    function closeAdminNotification() {
+      hideAdminNotification();
+      showNextAdminNotification();
+    }
+
+    async function dismissAdminNotification() {
+      if (!currentAdminNotification) {
+        return;
+      }
+      const notification = currentAdminNotification;
+      adminNotificationDismiss.disabled = true;
+      try {
+        const response = await fetch(`/admin/api/notifications/${notification.id}/dismiss`, {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+        if (!response.ok) {
+          showToast('通知状态更新失败');
+          return;
+        }
+        closeAdminNotification();
+      } catch (error) {
+        showToast('通知状态更新失败');
+      } finally {
+        adminNotificationDismiss.disabled = false;
+      }
+    }
+
+    async function loadAdminNotifications() {
+      try {
+        const response = await fetch('/admin/api/notifications/pending', {credentials: 'same-origin'});
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        adminNotificationQueue.push(...(data.notifications || []));
+        showNextAdminNotification();
+      } catch (error) {
+        // Ignore notification fetch failures; normal page actions should continue.
+      }
+    }
+
+    if (adminNotificationClose && adminNotificationDismiss) {
+      adminNotificationClose.addEventListener('click', closeAdminNotification);
+      adminNotificationDismiss.addEventListener('click', dismissAdminNotification);
+      loadAdminNotifications();
     }
   </script>
   <!-- PWA Service Worker -->

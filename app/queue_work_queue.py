@@ -26,6 +26,28 @@ class PriorityWorkQueue:
     def snapshot_items(self) -> list[Any]:
         return sorted(self._items)
 
+    def remove_matching(self, predicate) -> list[Any]:
+        removed: list[Any] = []
+        kept: list[Any] = []
+        for item in self._items:
+            if predicate(item):
+                removed.append(item)
+            else:
+                kept.append(item)
+        if not removed:
+            return []
+
+        heapq.heapify(kept)
+        self._items = kept
+        self._unfinished_tasks -= len(removed)
+        if self._unfinished_tasks < 0:
+            raise ValueError("queue unfinished task count became negative")
+        if self._unfinished_tasks == 0:
+            self._finished.set()
+        if self._items:
+            self._wake_next_getter()
+        return sorted(removed)
+
     def put_nowait(self, item: Any, *, allow_overflow: bool = False) -> None:
         if self.full() and not allow_overflow:
             raise asyncio.QueueFull

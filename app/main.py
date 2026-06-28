@@ -22,6 +22,7 @@ from .admin.routes import (
     router as admin_router,
 )
 from .admin.session_middleware import AdminSessionRefreshMiddleware
+from .admin_notifications import AdminNotificationRepository
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
@@ -40,6 +41,7 @@ from .rate_limiter import RateLimiter
 from .self_service.discord import DiscordOAuthClient
 from .self_service.routes import router as self_service_router
 from .upstreams import UpstreamRuntimeManager
+from .upstream_auto_disable import UpstreamAutoDisableService
 from .users.service import user_is_available
 from .usage_logs import UsageLogRepository
 
@@ -62,8 +64,14 @@ async def lifespan(app: FastAPI):
         on_change=dashboard_events.notify_nowait,
         hot_payload_config=config.database.hot_payload,
     )
+    admin_notifications = AdminNotificationRepository(db)
     payload_archive_service = PayloadArchiveService(db)
     upstream_runtime = UpstreamRuntimeManager(db, app.state)
+    upstream_auto_disable = UpstreamAutoDisableService(
+        config=config.upstream_auto_disable,
+        runtime=upstream_runtime,
+        notifications=admin_notifications,
+    )
     upstream_clients = upstream_runtime.sync()
     default_upstream_id = next(iter(upstream_clients), None)
     proxy_queue = RoutingProxyQueue(
@@ -93,6 +101,7 @@ async def lifespan(app: FastAPI):
         is_user_available=lambda user_id: user_is_available(db, user_id),
         image_hosting=ImageHostingService(config.image_hosting),
         on_change=dashboard_events.notify_nowait,
+        on_upstream_api_error=upstream_auto_disable.handle_api_error,
     )
 
     app.state.config = config
@@ -101,9 +110,11 @@ async def lifespan(app: FastAPI):
     app.state.quota_manager = quota_manager
     app.state.free_small_daily_limit_manager = free_small_daily_limit_manager
     app.state.usage_logs = usage_logs
+    app.state.admin_notifications = admin_notifications
     app.state.payload_archive_service = payload_archive_service
     app.state.rate_limiter = RateLimiter(db)
     app.state.upstream_runtime = upstream_runtime
+    app.state.upstream_auto_disable = upstream_auto_disable
     app.state.upstream = upstream_clients[default_upstream_id] if default_upstream_id is not None else None
     app.state.upstream_clients = upstream_clients
     app.state.default_upstream_id = default_upstream_id

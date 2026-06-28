@@ -11,6 +11,7 @@ from .groups import api_router as groups_api_router
 from .groups import web_router as groups_web_router
 from .logs import api_router as logs_api_router
 from .logs import web_router as logs_web_router
+from .notifications import api_router as notifications_api_router
 from .upstreams import api_router as upstreams_api_router
 from .upstreams import web_router as upstreams_web_router
 from .users import api_router as users_api_router
@@ -27,6 +28,7 @@ for child_router in (
     dashboard_api_router,
     database_api_router,
     upstreams_api_router,
+    notifications_api_router,
     dashboard_web_router,
     auth_web_router,
     upstreams_web_router,

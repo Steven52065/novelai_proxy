@@ -39,6 +39,7 @@ class QueueItem:
     cancel_future: asyncio.Future | None = field(default=None, compare=False)
     has_retried_429: bool = field(default=False, compare=False)
     attempt_number: int = field(default=0, compare=False)
+    retry_attempt_logged: bool = field(default=False, compare=False)
     last_429_error: APIError | None = field(default=None, compare=False)
     is_admin_probe: bool = field(default=False, compare=False)
 

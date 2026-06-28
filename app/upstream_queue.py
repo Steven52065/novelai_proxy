@@ -37,6 +37,7 @@ class ProxyQueue:
         is_user_available: Callable[[int], bool] | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
+        on_api_error: Callable[[str, APIError], None] | None = None,
     ):
         self.upstream_id = upstream_id
         self.usage_logs = usage_logs
@@ -61,6 +62,7 @@ class ProxyQueue:
         self._running_item: QueueItem | None = None
         self._running_started_at: float | None = None
         self._on_change = on_change
+        self._on_api_error = on_api_error
 
     def start(self) -> None:
         if self._worker is None or self._worker.done():
@@ -113,18 +115,21 @@ class ProxyQueue:
 
         loop = asyncio.get_running_loop()
         attempt_future: asyncio.Future = loop.create_future()
+        retry_attempt_logged = item.retry_attempt_logged
+        if item.attempt_number > 0 and not retry_attempt_logged:
+            item.accounting.record_retry_attempt(
+                attempt_number=item.attempt_number,
+                upstream_id=self.upstream_id,
+            )
+            retry_attempt_logged = True
         attempt_item = dataclasses.replace(
             item,
             enqueued_at=time.monotonic(),
             upstream_id=self.upstream_id,
             future=attempt_future,
             cancel_future=item.future,
+            retry_attempt_logged=retry_attempt_logged,
         )
-        if attempt_item.attempt_number > 0:
-            attempt_item.accounting.record_retry_attempt(
-                attempt_number=attempt_item.attempt_number,
-                upstream_id=self.upstream_id,
-            )
 
         try:
             self.queue.put_nowait(attempt_item, allow_overflow=allow_overflow)
@@ -132,6 +137,12 @@ class ProxyQueue:
             raise QueueFull from exc
         self._notify_change()
         return attempt_future
+
+    def extract_pending_items(self) -> list[QueueItem]:
+        items = self.queue.remove_matching(lambda _item: True)
+        if items:
+            self._notify_change()
+        return items
 
     async def _run(self) -> None:
         while True:
@@ -208,6 +219,11 @@ class ProxyQueue:
                 self._last_upstream_completed_at = time.monotonic()
             except Exception as exc:
                 self._last_upstream_completed_at = time.monotonic()
+                if isinstance(exc, APIError) and self._on_api_error is not None:
+                    try:
+                        self._on_api_error(self.upstream_id, exc)
+                    except Exception:
+                        logger.exception("upstream API error callback failed upstream_id=%s", self.upstream_id)
 
                 if not item.is_admin_probe and isinstance(exc, APIError) and str(exc.code) == "429":
                     should_retry = (

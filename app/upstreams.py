@@ -277,6 +277,14 @@ class UpstreamRuntimeManager:
         self._replace_state_clients(clients)
         self._sync_queue_targets()
 
+    def disable_upstream(self, upstream_id: str) -> NovelAIUpstreamRecord | None:
+        record = self.repository.get(upstream_id)
+        if record is None or not record.enabled:
+            return None
+        updated = self.repository.update(upstream_id, enabled=False)
+        self.reload_upstream(upstream_id)
+        return updated
+
     def list_upstream_ids(self, *, include_disabled: bool = True) -> list[str]:
         return [record.id for record in self.repository.list(include_disabled=include_disabled)]
 

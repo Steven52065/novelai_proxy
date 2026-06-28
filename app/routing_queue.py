@@ -12,7 +12,7 @@ from novelai_python._exceptions import APIError
 from .config import LoggingConfig
 from .logging_utils import logger
 from .quota_manager import QuotaManager
-from .queue_errors import NoAvailableUpstream, QueueClosed, QueueFull, Retry429Error, UserUnavailable
+from .queue_errors import NoAvailableUpstream, QueueClosed, QueueFull, Retry429Error, UpstreamItemRerouted, UserUnavailable
 from .queue_models import AdaptiveUpstreamScore, ImageHostingServiceLike, QueueItem, UpstreamQueueTarget
 from .queue_snapshot import RoutingQueueSnapshot
 from .queue_snapshot_helpers import item_snapshot, without_sequence
@@ -56,6 +56,7 @@ class RoutingProxyQueue:
         is_user_available: Callable[[int], bool] | None = None,
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
+        on_upstream_api_error: Callable[[str, APIError], None] | None = None,
     ):
         self._quota_manager = quota_manager
         self._usage_logs = usage_logs
@@ -93,6 +94,7 @@ class RoutingProxyQueue:
         self._accepting = True
         self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
+        self._on_upstream_api_error = on_upstream_api_error
         self._is_user_available = is_user_available or (lambda _user_id: True)
         self._queues = {
             target.id: ProxyQueue(
@@ -110,6 +112,7 @@ class RoutingProxyQueue:
                 is_user_available=self._is_user_available,
                 image_hosting=image_hosting,
                 on_change=on_change,
+                on_api_error=on_upstream_api_error,
             )
             for target in enabled_targets
         }
@@ -145,10 +148,12 @@ class RoutingProxyQueue:
         self._started = False
 
     def sync_targets(self, targets: list[UpstreamQueueTarget]) -> None:
+        previous_target_order = list(self._target_order)
         enabled_targets = [target for target in targets if target.id]
         new_target_ids = [target.id for target in enabled_targets]
         self._targets = {target.id: target for target in enabled_targets}
         self._target_order = new_target_ids
+        removed_target_ids = [upstream_id for upstream_id in previous_target_order if upstream_id not in self._targets]
         for target in enabled_targets:
             if target.id not in self._queues:
                 queue = ProxyQueue(
@@ -166,13 +171,18 @@ class RoutingProxyQueue:
                     is_user_available=self._is_user_available,
                     image_hosting=self._image_hosting,
                     on_change=self._on_change,
+                    on_api_error=self._on_upstream_api_error,
                 )
                 self._queues[target.id] = queue
                 if self._started:
                     queue.start()
             else:
                 self._queues[target.id].client_provider = target.client_provider
+                self._queues[target.id]._on_api_error = self._on_upstream_api_error
             self._adaptive_scores.setdefault(target.id, AdaptiveUpstreamScore(score=self._adaptive_initial_score))
+
+        for upstream_id in removed_target_ids:
+            self._reroute_pending_from_disabled_upstream(upstream_id)
 
         self._notify_change()
 
@@ -180,7 +190,11 @@ class RoutingProxyQueue:
         await asyncio.gather(*(queue.wait_for_image_uploads() for queue in self._queues.values()))
 
     def qsize(self) -> int:
-        return self._dispatch_queue.qsize() + sum(queue.qsize() for queue in self._queues.values())
+        return self._dispatch_queue.qsize() + sum(
+            self._queues[upstream_id].qsize()
+            for upstream_id in self._target_order
+            if upstream_id in self._queues
+        )
 
     def snapshot(self) -> RoutingQueueSnapshot:
         upstream_snapshots = []
@@ -235,7 +249,11 @@ class RoutingProxyQueue:
         }
 
     def _get_total_queue_length(self) -> int:
-        return sum(queue.qsize() for queue in self._queues.values())
+        return sum(
+            self._queues[upstream_id].qsize()
+            for upstream_id in self._target_order
+            if upstream_id in self._queues
+        )
 
     def enqueue(
         self,
@@ -463,6 +481,12 @@ class RoutingProxyQueue:
         upstream_id: str,
         last_429_error: APIError | None,
     ) -> None:
+        if not completed.cancelled():
+            exc = completed.exception()
+            if isinstance(exc, UpstreamItemRerouted):
+                return
+        else:
+            exc = None
         if not item.is_admin_probe:
             self._record_adaptive_result(upstream_id, completed)
         if completed.cancelled():
@@ -470,7 +494,6 @@ class RoutingProxyQueue:
                 item.future.cancel()
             return
 
-        exc = completed.exception()
         if isinstance(exc, Retry429Error):
             if item.future.done():
                 item.accounting.settle_released()
@@ -560,6 +583,70 @@ class RoutingProxyQueue:
             self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
         else:
             self._notify_change()
+
+    def _reroute_pending_from_disabled_upstream(self, upstream_id: str) -> None:
+        queue = self._queues.get(upstream_id)
+        if queue is None:
+            return
+        pending_items = queue.extract_pending_items()
+        if not pending_items:
+            return
+
+        rerouted = 0
+        failed = 0
+        for item in pending_items:
+            if item.is_admin_probe:
+                self._finish_disabled_probe(item, upstream_id=upstream_id)
+                failed += 1
+                continue
+            if item.future.done():
+                continue
+            original_future = item.cancel_future
+            if original_future is None:
+                item.future.set_exception(NoAvailableUpstream(f"Upstream is unavailable: {upstream_id}"))
+                failed += 1
+                continue
+
+            item.future.set_exception(UpstreamItemRerouted())
+            if original_future.done():
+                item.accounting.settle_failure(
+                    queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
+                    error_code="client_cancelled",
+                    error_message="Client cancelled before upstream reroute",
+                    attempt_number=item.attempt_number,
+                )
+                failed += 1
+                continue
+
+            dispatch_item = dataclasses.replace(
+                item,
+                sequence=next(self._sequence),
+                enqueued_at=time.monotonic(),
+                upstream_id=None,
+                future=original_future,
+                cancel_future=None,
+            )
+            try:
+                self._dispatch_queue.put_nowait(dispatch_item)
+            except asyncio.QueueFull:
+                if not original_future.done():
+                    original_future.set_exception(QueueFull())
+                failed += 1
+            else:
+                rerouted += 1
+
+        logger.info(
+            "disabled upstream pending queue processed upstream_id=%s rerouted=%s failed=%s",
+            upstream_id,
+            rerouted,
+            failed,
+        )
+        self._notify_change()
+
+    @staticmethod
+    def _finish_disabled_probe(item: QueueItem, *, upstream_id: str) -> None:
+        if not item.future.done():
+            item.future.set_exception(NoAvailableUpstream(f"Upstream is unavailable: {upstream_id}"))
 
     def _finish_unavailable_dispatch(
         self,

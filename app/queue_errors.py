@@ -34,3 +34,7 @@ class Retry429Error(Exception):
     def __init__(self, original_error: APIError):
         self.original_error = original_error
         super().__init__(str(original_error))
+
+
+class UpstreamItemRerouted(Exception):
+    """Internal sentinel for a per-upstream attempt moved back to dispatch."""

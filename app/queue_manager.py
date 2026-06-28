@@ -19,6 +19,7 @@ from .queue_errors import (
     QueueClosed,
     QueueFull,
     Retry429Error,
+    UpstreamItemRerouted,
     UpstreamExecutionTimeout,
     UserUnavailable,
 )

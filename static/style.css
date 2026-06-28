@@ -1058,6 +1058,78 @@ option { background: #0f172a; color: #fff; }
   gap: var(--space-3);
   margin-top: var(--space-5);
 }
+
+/* admin notification modal */
+.admin-notification-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 4, 9, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 1000;
+}
+
+.admin-notification-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+}
+
+.admin-notification-overlay[hidden],
+.admin-notification-modal[hidden] { display: none; }
+
+.admin-notification-card {
+  width: min(520px, 100%);
+  background: var(--panel-bg-elevated);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-6);
+}
+
+.admin-notification-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.admin-notification-icon {
+  width: 20px;
+  height: 20px;
+  stroke: var(--warning-text);
+  flex: none;
+}
+
+.admin-notification-head h2 {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.admin-notification-content {
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.7;
+  margin-bottom: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.admin-notification-time {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: var(--space-5);
+}
+
+.admin-notification-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
 .upstream-status-actions {
   display: inline-flex;
   align-items: center;
@@ -3397,6 +3469,23 @@ pre {
     max-width: calc(100vw - var(--space-6));
     padding: var(--space-3) 14px;
     align-items: flex-start;
+  }
+
+  .admin-notification-modal {
+    align-items: flex-end;
+    padding: var(--space-3);
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+  .admin-notification-card {
+    padding: var(--space-5);
+    border-radius: var(--space-3);
+  }
+  .admin-notification-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .admin-notification-actions button {
+    width: 100%;
   }
 
   .lightbox { padding: var(--space-3); }

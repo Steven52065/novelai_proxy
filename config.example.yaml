@@ -76,6 +76,16 @@ routing:
 # http://127.0.0.1:8080/admin/upstreams
 # config.yaml 中不再支持 novelai: 配置段。
 
+# 上游错误自动禁用配置。
+# 当某个 NovelAI 上游账号返回指定 HTTP 状态码时，会自动把该账号设为禁用，
+# 并把该账号队列里尚未开始执行的普通用户请求退回调度队列重新分流。
+upstream_auto_disable:
+  # 默认开启。关闭后只记录正常失败，不会自动修改上游账号启用状态。
+  enabled: true
+  # 默认 403，通常表示 API Key 或账号状态不可用。
+  status_codes:
+    - 403
+
 # SQLite 数据库配置。
 database:
   # 运行数据库路径。默认会在项目根目录生成 novelai_proxy.db。
