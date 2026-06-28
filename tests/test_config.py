@@ -6,70 +6,9 @@ from pydantic import ValidationError
 from app.config import AppConfig
 
 
-def test_reserved_upstream_id_is_rejected():
-    with pytest.raises(ValidationError, match="reserved"):
-        AppConfig.model_validate(
-            {
-                "novelai": {
-                    "upstreams": [
-                        {"id": "__all__", "api_key": ""},
-                    ],
-                },
-            }
-        )
-
-
-def test_novelai_api_key_config_stays_compatible():
-    config = AppConfig.model_validate({"novelai": {"api_key": "pst-secret-token", "account_tier": 3}})
-
-    assert config.novelai.api_key == "pst-secret-token"
-
-
-def test_novelai_jwt_config_uses_api_key_field():
-    config = AppConfig.model_validate(
-        {
-            "novelai": {
-                "api_key": "eyJhbGciOiJIUzI1NiJ9.payload.signature",
-            }
-        }
-    )
-
-    assert config.novelai.api_key == "eyJhbGciOiJIUzI1NiJ9.payload.signature"
-
-
-def test_novelai_upstreams_allow_persistent_tokens_and_jwt_tokens():
-    config = AppConfig.model_validate(
-        {
-            "novelai": {
-                "upstreams": [
-                    {"id": "main", "api_key": "pst-secret-token", "enabled": True},
-                    {"id": "jwt", "api_key": "eyJhbGciOiJIUzI1NiJ9.payload.signature"},
-                ]
-            }
-        }
-    )
-
-    assert config.novelai.upstreams[0].api_key == "pst-secret-token"
-    assert config.novelai.upstreams[1].api_key.startswith("ey")
-
-
-def test_novelai_removed_auth_fields_are_rejected():
-    with pytest.raises(ValidationError):
-        AppConfig.model_validate({"novelai": {"auth_type": "login"}})
-
-    with pytest.raises(ValidationError):
-        AppConfig.model_validate({"novelai": {"username": "user@example.com", "password": "secret-password"}})
-
-    with pytest.raises(ValidationError):
-        AppConfig.model_validate(
-            {
-                "novelai": {
-                    "upstreams": [
-                        {"id": "main", "auth_type": "api_key", "api_key": "pst-secret-token"},
-                    ]
-                }
-            }
-        )
+def test_novelai_config_is_rejected():
+    with pytest.raises(ValidationError, match="admin database"):
+        AppConfig.model_validate({"novelai": {"api_key": "pst-secret-token", "account_tier": 3}})
 
 
 def test_self_service_config_defaults_to_disabled():

@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import HTTPException
+
+from .allowlists import AllowedUpstreams
+from .config import RESERVED_UPSTREAM_IDS
+from .database import Database
+from .queue_models import UpstreamQueueTarget
+from .upstream import UpstreamClient
+
+
+UPSTREAM_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+@dataclass(frozen=True)
+class NovelAIUpstreamRecord:
+    id: str
+    api_key: str
+    enabled: bool
+    created_at: str
+    updated_at: str | None
+
+
+@dataclass(frozen=True)
+class NovelAISettings:
+    account_tier: int
+    upscale_anlas_cost: int
+    created_at: str
+    updated_at: str | None
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def mask_token(token: str) -> str:
+    value = token.strip()
+    if not value:
+        return ""
+    if len(value) <= 10:
+        return f"{value[:2]}...{value[-2:]}"
+    return f"{value[:6]}...{value[-4:]}"
+
+
+def validate_upstream_id(upstream_id: str) -> str:
+    normalized = upstream_id.strip()
+    if not normalized:
+        raise ValueError("upstream id must not be empty")
+    if normalized in RESERVED_UPSTREAM_IDS:
+        raise ValueError(f"upstream id is reserved: {normalized}")
+    if not UPSTREAM_ID_PATTERN.fullmatch(normalized):
+        raise ValueError("upstream id must be 1-64 characters and contain only letters, numbers, dot, underscore or dash")
+    return normalized
+
+
+def validate_api_key(api_key: str) -> str:
+    normalized = api_key.strip()
+    if not normalized:
+        raise ValueError("api_key must not be empty")
+    return normalized
+
+
+def upstream_to_public_dict(record: NovelAIUpstreamRecord) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "enabled": record.enabled,
+        "api_key_masked": mask_token(record.api_key),
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+class NovelAIUpstreamRepository:
+    def __init__(self, db: Database):
+        self.db = db
+
+    def list(self, *, include_disabled: bool = True) -> list[NovelAIUpstreamRecord]:
+        where = "" if include_disabled else "WHERE enabled = 1"
+        rows = self.db.query_all(
+            f"""
+            SELECT id, api_key, enabled, created_at, updated_at
+            FROM novelai_upstreams
+            {where}
+            ORDER BY id
+            """
+        )
+        return [self._row_to_record(row) for row in rows]
+
+    def get(self, upstream_id: str) -> NovelAIUpstreamRecord | None:
+        row = self.db.query_one(
+            """
+            SELECT id, api_key, enabled, created_at, updated_at
+            FROM novelai_upstreams
+            WHERE id = ?
+            """,
+            (upstream_id,),
+        )
+        return self._row_to_record(row) if row is not None else None
+
+    def create(self, *, upstream_id: str, api_key: str, enabled: bool = True) -> NovelAIUpstreamRecord:
+        upstream_id = validate_upstream_id(upstream_id)
+        api_key = validate_api_key(api_key)
+        timestamp = now_iso()
+        try:
+            self.db.execute(
+                """
+                INSERT INTO novelai_upstreams(id, api_key, enabled, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (upstream_id, api_key, 1 if enabled else 0, timestamp),
+            )
+        except Exception as exc:
+            if "UNIQUE" in str(exc).upper():
+                raise ValueError(f"upstream id already exists: {upstream_id}") from exc
+            raise
+        created = self.get(upstream_id)
+        assert created is not None
+        return created
+
+    def update(
+        self,
+        upstream_id: str,
+        *,
+        api_key: str | None = None,
+        enabled: bool | None = None,
+    ) -> NovelAIUpstreamRecord:
+        existing = self.get(upstream_id)
+        if existing is None:
+            raise KeyError(upstream_id)
+
+        fields: list[str] = []
+        params: list[Any] = []
+        if api_key is not None:
+            fields.append("api_key = ?")
+            params.append(validate_api_key(api_key))
+        if enabled is not None:
+            fields.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if not fields:
+            return existing
+
+        fields.append("updated_at = ?")
+        params.append(now_iso())
+        params.append(upstream_id)
+        self.db.execute(
+            f"UPDATE novelai_upstreams SET {', '.join(fields)} WHERE id = ?",
+            tuple(params),
+        )
+        updated = self.get(upstream_id)
+        assert updated is not None
+        return updated
+
+    def delete(self, upstream_id: str) -> None:
+        if self.get(upstream_id) is None:
+            raise KeyError(upstream_id)
+        conflicts = self.find_allowed_upstream_references(upstream_id)
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Upstream is still referenced by users or groups", "references": conflicts},
+            )
+        self.db.execute("DELETE FROM novelai_upstreams WHERE id = ?", (upstream_id,))
+
+    def find_allowed_upstream_references(self, upstream_id: str) -> dict[str, list[int]]:
+        user_rows = self.db.query_all("SELECT id, allowed_upstreams FROM users WHERE deleted_at IS NULL")
+        group_rows = self.db.query_all("SELECT id, default_allowed_upstreams FROM user_groups")
+        user_ids = [
+            int(row["id"])
+            for row in user_rows
+            if upstream_id in AllowedUpstreams.parse(row["allowed_upstreams"]).as_frozenset()
+        ]
+        group_ids = [
+            int(row["id"])
+            for row in group_rows
+            if upstream_id in AllowedUpstreams.parse(row["default_allowed_upstreams"]).as_frozenset()
+        ]
+        result: dict[str, list[int]] = {}
+        if user_ids:
+            result["users"] = user_ids
+        if group_ids:
+            result["groups"] = group_ids
+        return result
+
+    def get_settings(self) -> NovelAISettings:
+        row = self.db.query_one(
+            """
+            SELECT account_tier, upscale_anlas_cost, created_at, updated_at
+            FROM novelai_settings
+            WHERE id = 1
+            """
+        )
+        if row is None:
+            timestamp = now_iso()
+            self.db.execute(
+                """
+                INSERT INTO novelai_settings(id, account_tier, upscale_anlas_cost, created_at)
+                VALUES (1, 3, 0, ?)
+                """,
+                (timestamp,),
+            )
+            row = self.db.query_one(
+                """
+                SELECT account_tier, upscale_anlas_cost, created_at, updated_at
+                FROM novelai_settings
+                WHERE id = 1
+                """
+            )
+        assert row is not None
+        return NovelAISettings(
+            account_tier=int(row["account_tier"]),
+            upscale_anlas_cost=int(row["upscale_anlas_cost"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def update_settings(
+        self,
+        *,
+        account_tier: int | None = None,
+        upscale_anlas_cost: int | None = None,
+    ) -> NovelAISettings:
+        fields: list[str] = []
+        params: list[Any] = []
+        if account_tier is not None:
+            if account_tier < 0 or account_tier > 3:
+                raise ValueError("account_tier must be between 0 and 3")
+            fields.append("account_tier = ?")
+            params.append(int(account_tier))
+        if upscale_anlas_cost is not None:
+            if upscale_anlas_cost < 0:
+                raise ValueError("upscale_anlas_cost must be >= 0")
+            fields.append("upscale_anlas_cost = ?")
+            params.append(int(upscale_anlas_cost))
+        if not fields:
+            return self.get_settings()
+
+        fields.append("updated_at = ?")
+        params.append(now_iso())
+        self.db.execute(
+            f"UPDATE novelai_settings SET {', '.join(fields)} WHERE id = 1",
+            tuple(params),
+        )
+        return self.get_settings()
+
+    @staticmethod
+    def _row_to_record(row) -> NovelAIUpstreamRecord:
+        return NovelAIUpstreamRecord(
+            id=row["id"],
+            api_key=row["api_key"],
+            enabled=bool(row["enabled"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class UpstreamRuntimeManager:
+    def __init__(self, db: Database, app_state: Any):
+        self.repository = NovelAIUpstreamRepository(db)
+        self._app_state = app_state
+
+    def sync(self) -> dict[str, UpstreamClient]:
+        enabled = self.repository.list(include_disabled=False)
+        clients = {
+            record.id: UpstreamClient(record.api_key)
+            for record in enabled
+        }
+        self._replace_state_clients(clients)
+        self._sync_queue_targets()
+        return clients
+
+    def reload_upstream(self, upstream_id: str) -> None:
+        record = self.repository.get(upstream_id)
+        clients = dict(getattr(self._app_state, "upstream_clients", {}) or {})
+        if record is None or not record.enabled:
+            clients.pop(upstream_id, None)
+        else:
+            clients[record.id] = UpstreamClient(record.api_key)
+        self._replace_state_clients(clients)
+        self._sync_queue_targets()
+
+    def list_upstream_ids(self, *, include_disabled: bool = True) -> list[str]:
+        return [record.id for record in self.repository.list(include_disabled=include_disabled)]
+
+    def get_settings(self) -> NovelAISettings:
+        return self.repository.get_settings()
+
+    def _replace_state_clients(self, clients: dict[str, UpstreamClient]) -> None:
+        self._app_state.upstream_clients = clients
+        default_upstream_id = next(iter(clients), None)
+        self._app_state.default_upstream_id = default_upstream_id
+        self._app_state.upstream = clients[default_upstream_id] if default_upstream_id is not None else None
+
+    def _sync_queue_targets(self) -> None:
+        queue = getattr(self._app_state, "proxy_queue", None)
+        sync_targets = getattr(queue, "sync_targets", None)
+        if not callable(sync_targets):
+            return
+        sync_targets(
+            [
+                UpstreamQueueTarget(
+                    id=upstream_id,
+                    client_provider=lambda upstream_id=upstream_id: self._app_state.upstream
+                    if upstream_id == self._app_state.default_upstream_id
+                    else self._app_state.upstream_clients[upstream_id],
+                )
+                for upstream_id in getattr(self._app_state, "upstream_clients", {})
+            ]
+        )

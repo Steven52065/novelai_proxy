@@ -34,6 +34,9 @@
       <a class="{{ 'active' if active == 'logs' else '' }}" href="/admin/logs">
         <i data-lucide="history" style="width: 16px; height: 16px;"></i>使用日志
       </a>
+      <a class="{{ 'active' if active == 'upstreams' else '' }}" href="/admin/upstreams">
+        <i data-lucide="key-round" style="width: 16px; height: 16px;"></i>上游账号
+      </a>
       <a class="{{ 'active' if active == 'database' else '' }}" href="/admin/database">
         <i data-lucide="database" style="width: 16px; height: 16px;"></i>数据库管理
       </a>
@@ -62,6 +65,9 @@
     </a>
     <a class="{{ 'active' if active == 'logs' else '' }}" href="/admin/logs">
       <i data-lucide="history"></i>日志
+    </a>
+    <a class="{{ 'active' if active == 'upstreams' else '' }}" href="/admin/upstreams">
+      <i data-lucide="key-round"></i>上游
     </a>
     <a class="{{ 'active' if active == 'database' else '' }}" href="/admin/database">
       <i data-lucide="database"></i>数据库

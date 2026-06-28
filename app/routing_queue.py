@@ -65,10 +65,13 @@ class RoutingProxyQueue:
             vip_retry_priority=self.VIP_RETRY_PRIORITY,
         )
         enabled_targets = [target for target in targets if target.id]
-        if not enabled_targets:
-            raise ValueError("at least one upstream target is required")
         self.routing_strategy = routing_strategy
         self._image_hosting = image_hosting
+        self._max_queue_size = max_queue_size
+        self._upstream_interval_min_seconds = upstream_interval_min_seconds
+        self._upstream_interval_max_seconds = upstream_interval_max_seconds
+        self._upstream_error_extra_delay_seconds = upstream_error_extra_delay_seconds
+        self._upstream_execution_timeout_seconds = upstream_execution_timeout_seconds
         self._targets = {target.id: target for target in enabled_targets}
         self._target_order = [target.id for target in enabled_targets]
         self._round_robin = itertools.count()
@@ -76,12 +79,14 @@ class RoutingProxyQueue:
         self._adaptive_alpha = max(0.0, min(1.0, float(adaptive_alpha)))
         self._adaptive_min_weight = max(0.0, float(adaptive_min_weight))
         initial_score = max(0.0, min(1.0, float(adaptive_initial_score)))
+        self._adaptive_initial_score = initial_score
         self._adaptive_scores = {
             target.id: AdaptiveUpstreamScore(score=initial_score)
             for target in enabled_targets
         }
         if dispatch_max_queue_size is None:
-            dispatch_max_queue_size = max_queue_size * len(enabled_targets)
+            dispatch_max_queue_size = max_queue_size * max(len(enabled_targets), 1)
+        self._started = False
         self._dispatch_queue = PriorityWorkQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
         self._dispatch_running_item: QueueItem | None = None
@@ -120,6 +125,7 @@ class RoutingProxyQueue:
             queue.image_hosting = value
 
     def start(self) -> None:
+        self._started = True
         if self._dispatch_worker is None or self._dispatch_worker.done():
             self._dispatch_worker = asyncio.create_task(self._run_dispatcher())
         for queue in self._queues.values():
@@ -136,6 +142,39 @@ class RoutingProxyQueue:
             except asyncio.CancelledError:
                 pass
         await asyncio.gather(*(queue.stop(drain=drain) for queue in self._queues.values()))
+        self._started = False
+
+    def sync_targets(self, targets: list[UpstreamQueueTarget]) -> None:
+        enabled_targets = [target for target in targets if target.id]
+        new_target_ids = [target.id for target in enabled_targets]
+        self._targets = {target.id: target for target in enabled_targets}
+        self._target_order = new_target_ids
+        for target in enabled_targets:
+            if target.id not in self._queues:
+                queue = ProxyQueue(
+                    upstream_id=target.id,
+                    quota_manager=self._quota_manager,
+                    usage_logs=self._usage_logs,
+                    max_queue_size=self._max_queue_size,
+                    client_provider=target.client_provider,
+                    upstream_interval_min_seconds=self._upstream_interval_min_seconds,
+                    upstream_interval_max_seconds=self._upstream_interval_max_seconds,
+                    upstream_error_extra_delay_seconds=self._upstream_error_extra_delay_seconds,
+                    upstream_execution_timeout_seconds=self._upstream_execution_timeout_seconds,
+                    retry_policy=self._retry_policy,
+                    get_total_queue_length=self._get_total_queue_length,
+                    is_user_available=self._is_user_available,
+                    image_hosting=self._image_hosting,
+                    on_change=self._on_change,
+                )
+                self._queues[target.id] = queue
+                if self._started:
+                    queue.start()
+            else:
+                self._queues[target.id].client_provider = target.client_provider
+            self._adaptive_scores.setdefault(target.id, AdaptiveUpstreamScore(score=self._adaptive_initial_score))
+
+        self._notify_change()
 
     async def wait_for_image_uploads(self) -> None:
         await asyncio.gather(*(queue.wait_for_image_uploads() for queue in self._queues.values()))
@@ -300,6 +339,8 @@ class RoutingProxyQueue:
     ) -> bytes:
         if not self._accepting:
             raise QueueClosed
+        if upstream_id not in self._targets:
+            raise NoAvailableUpstream(f"Unknown upstream id: {upstream_id}")
         queue = self._queues.get(upstream_id)
         if queue is None:
             raise NoAvailableUpstream(f"Unknown upstream id: {upstream_id}")

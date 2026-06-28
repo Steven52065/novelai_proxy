@@ -75,9 +75,10 @@ async def generate_image(
         effective_image_format_config(user.image_format_policy, config.image_format),
     )
     try:
+        novelai_settings = request.app.state.upstream_runtime.get_settings()
         estimated_cost, cost_is_certainly_free = _generate_cost_estimator.calculate(
             cost_inputs,
-            is_opus=config.novelai.account_tier >= 3,
+            is_opus=novelai_settings.account_tier >= 3,
         )
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
@@ -101,7 +102,6 @@ async def upscale(
     req: Upscale,
     request: Request,
     user: UserContext = Depends(get_current_user),
-    config: AppConfig = Depends(get_config),
     proxy_service: ProxyRequestService = Depends(get_proxy_service),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_UPSCALE)
@@ -120,7 +120,7 @@ async def upscale(
             "n_samples": 1,
         },
         request_payload=dump_model_payload(req),
-        estimated_cost=config.novelai.upscale_anlas_cost,
+        estimated_cost=request.app.state.upstream_runtime.get_settings().upscale_anlas_cost,
         handler=lambda upstream: upstream.upscale_zip(req),
         proxy_service=proxy_service,
     )
@@ -131,7 +131,6 @@ async def augment_image(
     req: AugmentImageInfer,
     request: Request,
     user: UserContext = Depends(get_current_user),
-    config: AppConfig = Depends(get_config),
     proxy_service: ProxyRequestService = Depends(get_proxy_service),
 ):
     endpoint_denied = _reject_disallowed_endpoint(user, ENDPOINT_AUGMENT_IMAGE)
@@ -139,7 +138,8 @@ async def augment_image(
         return endpoint_denied
 
     try:
-        estimated_cost = int(req.calculate_cost(is_opus=config.novelai.account_tier >= 3))
+        novelai_settings = request.app.state.upstream_runtime.get_settings()
+        estimated_cost = int(req.calculate_cost(is_opus=novelai_settings.account_tier >= 3))
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sqlite3
 import threading
 import time
 import zipfile
@@ -164,6 +165,7 @@ def write_test_config(
     if upstream_interval_max_seconds is None:
         upstream_interval_max_seconds = upstream_interval_min_seconds
     db_path = tmp_path / "test.db"
+    _seed_novelai_db(db_path, ["default"])
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         f"""
@@ -179,9 +181,6 @@ queue:
   upstream_interval_max_seconds: {upstream_interval_max_seconds}
   upstream_error_extra_delay_seconds: {upstream_error_extra_delay_seconds}
   upstream_execution_timeout_seconds: {upstream_execution_timeout_seconds}
-novelai:
-  api_key: ""
-  account_tier: 3
 database:
   path: "{db_path.as_posix()}"
   hot_payload:
@@ -221,11 +220,8 @@ def write_test_config_with_upstreams(
     routing_adaptive_yaml: str = "",
 ) -> Path:
     db_path = tmp_path / "test.db"
+    _seed_novelai_db(db_path, upstream_ids)
     config_path = tmp_path / "config.yaml"
-    upstreams_yaml = "\n".join(
-        f"    - id: {upstream_id}\n      api_key: \"\"\n      enabled: true"
-        for upstream_id in upstream_ids
-    )
     dispatch_max_queue_size_yaml = "" if dispatch_max_queue_size is None else f"  dispatch_max_queue_size: {dispatch_max_queue_size}\n"
     config_path.write_text(
         f"""
@@ -246,10 +242,6 @@ queue:
 routing:
   strategy: {routing_strategy}
 {routing_adaptive_yaml.rstrip()}
-novelai:
-  upstreams:
-{upstreams_yaml}
-  account_tier: 3
 database:
   path: "{db_path.as_posix()}"
 logging:
@@ -269,6 +261,48 @@ cors:
         encoding="utf-8",
     )
     return config_path
+
+
+def _seed_novelai_db(db_path: Path, upstream_ids: list[str]) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS novelai_upstreams (
+                id TEXT PRIMARY KEY,
+                api_key TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS novelai_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                account_tier INTEGER NOT NULL DEFAULT 3,
+                upscale_anlas_cost INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO novelai_settings(id, account_tier, upscale_anlas_cost, created_at)
+            VALUES (1, 3, 0, datetime('now'))
+            ON CONFLICT(id) DO UPDATE SET account_tier = excluded.account_tier
+            """
+        )
+        for upstream_id in upstream_ids:
+            conn.execute(
+                """
+                INSERT INTO novelai_upstreams(id, api_key, enabled, created_at)
+                VALUES (?, ?, 1, datetime('now'))
+                ON CONFLICT(id) DO UPDATE SET enabled = 1
+                """,
+                (upstream_id, f"pst-test-token-{upstream_id}"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def write_test_config_with_image_format_policy(

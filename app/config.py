@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 RESERVED_UPSTREAM_IDS = {"__all__"}
@@ -34,39 +34,6 @@ class QueueConfig(BaseModel):
     def validate_upstream_interval_range(self):
         if self.upstream_interval_max_seconds < self.upstream_interval_min_seconds:
             raise ValueError("queue.upstream_interval_max_seconds must be greater than or equal to upstream_interval_min_seconds")
-        return self
-
-
-class NovelAIUpstreamConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    api_key: str = ""
-    enabled: bool = True
-
-    @model_validator(mode="after")
-    def validate_upstream(self):
-        if not self.id.strip():
-            raise ValueError("novelai.upstreams[].id must not be empty")
-        self.id = self.id.strip()
-        if self.id in RESERVED_UPSTREAM_IDS:
-            raise ValueError(f"novelai.upstreams[].id is reserved: {self.id}")
-        return self
-
-
-class NovelAIConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    api_key: str = ""
-    upstreams: list[NovelAIUpstreamConfig] = Field(default_factory=list)
-    account_tier: int = Field(default=3, ge=0, le=3)
-    upscale_anlas_cost: int = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def validate_novelai(self):
-        ids = [upstream.id for upstream in self.upstreams]
-        if len(ids) != len(set(ids)):
-            raise ValueError("novelai.upstreams[].id must be unique")
         return self
 
 
@@ -188,7 +155,6 @@ class AppConfig(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
-    novelai: NovelAIConfig = Field(default_factory=NovelAIConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -198,6 +164,13 @@ class AppConfig(BaseModel):
     self_service: SelfServiceConfig = Field(default_factory=SelfServiceConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_novelai_config(cls, data):
+        if isinstance(data, dict) and "novelai" in data:
+            raise ValueError("novelai config has been moved to the admin database")
+        return data
 
     def model_post_init(self, __context) -> None:
         if "log_level" in self.model_fields_set and "logging" not in self.model_fields_set:

@@ -22,9 +22,6 @@ queue:
   upstream_interval_max_seconds: 0
   upstream_error_extra_delay_seconds: 0
   upstream_execution_timeout_seconds: 60
-novelai:
-  api_key: ""
-  account_tier: 3
 database:
   path: "{db_path.as_posix()}"
 logging:

@@ -1,5 +1,5 @@
 # NovelAI Proxy 配置模板。
-# 使用方式：复制为 config.yaml，并填写真实 NovelAI API Key、管理后台密码等本地配置。
+# 使用方式：复制为 config.yaml，并填写管理后台密码等本地配置；NovelAI Token 在管理后台维护。
 # 注意：config.yaml 已被 .gitignore 忽略，不要把真实密钥、密码或运行数据库提交到 Git。
 
 # 管理后台登录配置。
@@ -72,27 +72,9 @@ routing:
     # 值越大，低分上游保留的流量越多；值越小，成功率高的上游获得的流量倾斜越明显。
     min_weight: 0.15
 
-# NovelAI 上游账号配置。
-novelai:
-  # 单 NovelAI API 凭据，支持 pst-... Persistent API Token 或 ey... JWT Bearer token。
-  # 必须只写在本地 config.yaml 中，不要提交，也不要共享给代理用户。
-  # 如果配置了下面的 upstreams 且存在 enabled: true 的条目，会优先使用 upstreams。
-  api_key: ""
-  # 多上游配置。id 会用于队列状态、日志记录和用户 allowed_upstreams 授权。
-  # 每个上游都通过 api_key 配置 pst-... 或 ey... token。
-  # upstreams:
-  #   - id: opus-1
-  #     api_key: ""
-  #     enabled: true
-  #   - id: opus-2
-  #     api_key: ""
-  #     enabled: true
-  # NovelAI 账号等级，用于估算图片生成 anlas 成本。
-  # 3 通常表示 Opus；其他等级按 NovelAI SDK 的成本计算逻辑处理。
-  account_tier: 3
-  # upscale 接口的固定 anlas 成本。
-  # NovelAI SDK 当前无法像普通生图一样自动估算 upscale 成本时，可用此值控制扣费。
-  upscale_anlas_cost: 0
+# NovelAI 上游账号和计费设置在管理后台维护：
+# http://127.0.0.1:8080/admin/upstreams
+# config.yaml 中不再支持 novelai: 配置段。
 
 # SQLite 数据库配置。
 database:

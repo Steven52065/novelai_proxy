@@ -29,10 +29,15 @@ def user_row_to_dict(row):
 
 
 def upstream_choices(request: Request) -> list[str]:
+    runtime = getattr(request.app.state, "upstream_runtime", None)
+    if runtime is not None:
+        upstream_ids = runtime.list_upstream_ids(include_disabled=True)
+        if upstream_ids:
+            return upstream_ids
     clients = getattr(request.app.state, "upstream_clients", None)
     if isinstance(clients, dict) and clients:
         return list(clients.keys())
-    return ["default"]
+    return []
 
 
 def validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:

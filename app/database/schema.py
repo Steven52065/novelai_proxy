@@ -193,6 +193,22 @@ CREATE TABLE IF NOT EXISTS dashboard_hourly_request_refs (
 
 CREATE INDEX IF NOT EXISTS idx_dashboard_hourly_refs_upstream_bucket
     ON dashboard_hourly_request_refs(upstream_id, bucket_hour, request_id);
+
+CREATE TABLE IF NOT EXISTS novelai_upstreams (
+    id TEXT PRIMARY KEY,
+    api_key TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS novelai_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    account_tier INTEGER NOT NULL DEFAULT 3,
+    upscale_anlas_cost INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
 """
 
 USAGE_LOGS_COLUMNS = (
@@ -273,6 +289,13 @@ def initialize_schema(db: Any) -> None:
         db.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_usage_hot_payload_created "
             "ON usage_logs(created_at, id) WHERE request_payload_bytes > 0"
+        )
+        db.conn.execute(
+            """
+            INSERT INTO novelai_settings(id, account_tier, upscale_anlas_cost, created_at)
+            VALUES (1, 3, 0, datetime('now'))
+            ON CONFLICT(id) DO NOTHING
+            """
         )
         db._clear_stored_user_api_keys()
         db._migrate_usage_log_size_fields()

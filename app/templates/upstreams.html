@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="section-header">
+    <div>
+      <h1>上游账号</h1>
+    </div>
+  </div>
+
+  <form id="settings-form" class="form-grid compact-form">
+    <label>
+      账号等级
+      <input type="number" name="account_tier" min="0" max="3" value="{{ settings.account_tier }}">
+    </label>
+    <label>
+      放大扣费
+      <input type="number" name="upscale_anlas_cost" min="0" value="{{ settings.upscale_anlas_cost }}">
+    </label>
+    <div class="form-actions">
+      <button type="submit">
+        <i data-lucide="save" style="width: 16px; height: 16px;"></i>保存
+      </button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-header">
+    <h2>新增账号</h2>
+  </div>
+  <form id="create-upstream-form" class="form-grid compact-form">
+    <label>
+      ID
+      <input type="text" name="id" required>
+    </label>
+    <label>
+      Token
+      <input type="password" name="api_key" required autocomplete="new-password">
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" name="enabled" checked>
+      启用
+    </label>
+    <div class="form-actions">
+      <button type="submit">
+        <i data-lucide="plus" style="width: 16px; height: 16px;"></i>新增
+      </button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-header">
+    <h2>账号列表</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Token</th>
+          <th>状态</th>
+          <th>更新</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for upstream in upstreams %}
+        <tr data-upstream-id="{{ upstream.id }}">
+          <td><code>{{ upstream.id }}</code></td>
+          <td><code>{{ upstream.api_key_masked }}</code></td>
+          <td>
+            {% if upstream.enabled %}
+              <span class="status-pill status-success">启用</span>
+            {% else %}
+              <span class="status-pill status-info">禁用</span>
+            {% endif %}
+          </td>
+          <td>{{ upstream.updated_at or upstream.created_at }}</td>
+          <td>
+            <div class="inline-actions">
+              <input class="token-input" type="password" placeholder="Token" autocomplete="new-password">
+              <button type="button" class="secondary update-token-btn" title="更新 Token">
+                <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+              </button>
+              <button type="button" class="secondary toggle-btn" data-enabled="{{ 'false' if upstream.enabled else 'true' }}" title="{{ '禁用' if upstream.enabled else '启用' }}">
+                {% if upstream.enabled %}
+                  <i data-lucide="pause" style="width: 16px; height: 16px;"></i>
+                {% else %}
+                  <i data-lucide="play" style="width: 16px; height: 16px;"></i>
+                {% endif %}
+              </button>
+              <button type="button" class="secondary test-btn" title="测试">
+                <i data-lucide="activity" style="width: 16px; height: 16px;"></i>
+              </button>
+              <button type="button" class="danger delete-btn" title="删除">
+                <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="5">暂无上游账号</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+  async function requestJson(url, options) {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options && options.headers ? options.headers : {})
+      }
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error((body && body.message) || (body && body.detail && body.detail.message) || "请求失败");
+    }
+    return body;
+  }
+
+  document.getElementById("settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await requestJson("/admin/api/novelai-settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          account_tier: Number(form.get("account_tier")),
+          upscale_anlas_cost: Number(form.get("upscale_anlas_cost"))
+        })
+      });
+      showToast("已保存");
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+
+  document.getElementById("create-upstream-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await requestJson("/admin/api/upstreams", {
+        method: "POST",
+        body: JSON.stringify({
+          id: String(form.get("id") || ""),
+          api_key: String(form.get("api_key") || ""),
+          enabled: form.get("enabled") === "on"
+        })
+      });
+      location.reload();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+
+  document.querySelectorAll("tr[data-upstream-id]").forEach((row) => {
+    const upstreamId = row.dataset.upstreamId;
+    row.querySelector(".update-token-btn").addEventListener("click", async () => {
+      const input = row.querySelector(".token-input");
+      try {
+        await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({api_key: input.value})
+        });
+        location.reload();
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    row.querySelector(".toggle-btn").addEventListener("click", async (event) => {
+      try {
+        await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({enabled: event.currentTarget.dataset.enabled === "true"})
+        });
+        location.reload();
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    row.querySelector(".test-btn").addEventListener("click", async () => {
+      try {
+        const result = await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}/test`, {
+          method: "POST",
+          body: "{}"
+        });
+        showToast(result.message || "测试完成");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    row.querySelector(".delete-btn").addEventListener("click", async () => {
+      try {
+        await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}`, {
+          method: "DELETE",
+          body: "{}"
+        });
+        location.reload();
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  });
+</script>
+{% endblock %}

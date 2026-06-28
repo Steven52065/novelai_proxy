@@ -39,7 +39,7 @@ from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
 from .self_service.discord import DiscordOAuthClient
 from .self_service.routes import router as self_service_router
-from .upstream import UpstreamClient
+from .upstreams import UpstreamRuntimeManager
 from .users.service import user_is_available
 from .usage_logs import UsageLogRepository
 
@@ -63,9 +63,9 @@ async def lifespan(app: FastAPI):
         hot_payload_config=config.database.hot_payload,
     )
     payload_archive_service = PayloadArchiveService(db)
-    upstream_clients = _build_upstream_clients(config)
-    default_upstream_id = next(iter(upstream_clients))
-    upstream = upstream_clients[default_upstream_id]
+    upstream_runtime = UpstreamRuntimeManager(db, app.state)
+    upstream_clients = upstream_runtime.sync()
+    default_upstream_id = next(iter(upstream_clients), None)
     proxy_queue = RoutingProxyQueue(
         targets=[
             UpstreamQueueTarget(
@@ -103,7 +103,8 @@ async def lifespan(app: FastAPI):
     app.state.usage_logs = usage_logs
     app.state.payload_archive_service = payload_archive_service
     app.state.rate_limiter = RateLimiter(db)
-    app.state.upstream = upstream
+    app.state.upstream_runtime = upstream_runtime
+    app.state.upstream = upstream_clients[default_upstream_id] if default_upstream_id is not None else None
     app.state.upstream_clients = upstream_clients
     app.state.default_upstream_id = default_upstream_id
     app.state.discord_oauth_client = DiscordOAuthClient(
@@ -120,6 +121,7 @@ async def lifespan(app: FastAPI):
         logging_config=config.logging,
     )
 
+    upstream_runtime.sync()
     proxy_queue.start()
     background_tasks: list[asyncio.Task] = []
     if config.database.payload_archive.enabled:
@@ -138,16 +140,6 @@ async def lifespan(app: FastAPI):
                 pass
         await proxy_queue.stop()
         db.close()
-
-
-def _build_upstream_clients(config) -> dict[str, UpstreamClient]:
-    enabled_upstreams = [upstream for upstream in config.novelai.upstreams if upstream.enabled]
-    if enabled_upstreams:
-        return {
-            upstream.id: UpstreamClient.from_config(upstream)
-            for upstream in enabled_upstreams
-        }
-    return {"default": UpstreamClient.from_config(config.novelai)}
 
 
 async def _payload_archive_loop(service: PayloadArchiveService, config) -> None:
