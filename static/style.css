@@ -3450,6 +3450,83 @@ pre {
     display: none;
   }
 
+  /* --- upstreams-table 移动端：账号列表卡片化 --- */
+  .upstreams-table {
+    width: 100%;
+    min-width: 0 !important;
+    table-layout: fixed;
+    font-size: 12px;
+  }
+  .upstreams-table thead { display: none; }
+  .upstreams-table,
+  .upstreams-table tbody,
+  .upstreams-table tr,
+  .upstreams-table td {
+    display: block;
+    width: 100%;
+  }
+  .upstreams-table tr {
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--panel-border-soft);
+    border-left: 4px solid var(--secondary);
+    border-radius: var(--radius-md);
+    background: var(--panel-bg-solid);
+    padding: var(--space-2) var(--space-3);
+  }
+  .upstreams-table tr:has(.status-success) { border-left-color: var(--success); }
+  .upstreams-table tr.empty-row {
+    border: 0;
+    background: transparent;
+    padding: 0;
+  }
+  .upstreams-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 7px 0;
+    border-bottom: 1px solid var(--panel-border-soft);
+    text-align: right;
+    max-width: none;
+  }
+  .upstreams-table td > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .upstreams-table td:last-child { border-bottom: 0; }
+  .upstreams-table td::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    text-align: left;
+  }
+  .upstreams-table td:not([data-label])::before { content: none; }
+  .upstreams-table td[colspan] {
+    display: block;
+    text-align: center;
+    padding: 12px 0;
+  }
+  .upstreams-table td[colspan]::before { display: none; }
+  .upstreams-table td[data-label="操作"] {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: left;
+  }
+  .upstreams-table .inline-actions {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) repeat(4, 40px);
+    justify-self: stretch;
+  }
+  .upstreams-table .token-input {
+    height: 40px;
+    min-height: 40px;
+  }
+
   .key-row {
     flex-direction: column;
     align-items: stretch;

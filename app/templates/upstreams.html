@@ -58,7 +58,7 @@
     <h2>账号列表</h2>
   </div>
   <div class="table-wrap">
-    <table>
+    <table class="upstreams-table">
       <thead>
         <tr>
           <th>ID</th>
@@ -71,17 +71,17 @@
       <tbody>
       {% for upstream in upstreams %}
         <tr data-upstream-id="{{ upstream.id }}">
-          <td><code>{{ upstream.id }}</code></td>
-          <td><code>{{ upstream.api_key_masked }}</code></td>
-          <td>
+          <td data-label="ID"><code>{{ upstream.id }}</code></td>
+          <td data-label="Token"><code>{{ upstream.api_key_masked }}</code></td>
+          <td data-label="状态">
             {% if upstream.enabled %}
               <span class="status-pill status-success">启用</span>
             {% else %}
               <span class="status-pill status-info">禁用</span>
             {% endif %}
           </td>
-          <td title="UTC 原始时间：{{ upstream.updated_at or upstream.created_at }}">{{ upstream.changed_at_display }}</td>
-          <td>
+          <td data-label="更新" title="UTC 原始时间：{{ upstream.updated_at or upstream.created_at }}">{{ upstream.changed_at_display }}</td>
+          <td data-label="操作">
             <div class="inline-actions">
               <input class="token-input" type="password" placeholder="Token" autocomplete="new-password">
               <button type="button" class="secondary update-token-btn" title="更新 Token">
@@ -104,7 +104,7 @@
           </td>
         </tr>
       {% else %}
-        <tr>
+        <tr class="empty-row">
           <td colspan="5">暂无上游账号</td>
         </tr>
       {% endfor %}
