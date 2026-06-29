@@ -439,17 +439,23 @@
   function applyUserSearch() {
     const query = normalizeSearchText(userSearchInput ? userSearchInput.value : "");
     let visibleCount = 0;
+    let lastVisibleRow = null;
     userRows.forEach((row) => {
       const name = normalizeSearchText(row.dataset.userName);
       const matches = !query || name.includes(query);
       row.hidden = !matches;
+      row.classList.remove("is-last-visible");
       if (matches) {
         visibleCount += 1;
+        lastVisibleRow = row;
       } else {
         const checkbox = row.querySelector(".user-select");
         if (checkbox) checkbox.checked = false;
       }
     });
+    if (lastVisibleRow) {
+      lastVisibleRow.classList.add("is-last-visible");
+    }
     if (usersEmptyRow) {
       usersEmptyRow.hidden = visibleCount > 0;
     }

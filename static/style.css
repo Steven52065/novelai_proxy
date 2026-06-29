@@ -3128,7 +3128,7 @@ pre {
   .users-table tr[data-user-row]:has(td:nth-child(6) .badge-active) {
     border-left-color: var(--success);
   }
-  .users-table tr[data-user-row]:last-of-type {
+  .users-table tr[data-user-row].is-last-visible {
     margin-bottom: 0;
   }
   .users-table tr[hidden] {
