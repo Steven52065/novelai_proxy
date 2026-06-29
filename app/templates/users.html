@@ -189,28 +189,28 @@
     <table class="users-table">
       <thead>
         <tr>
-          <th class="user-select-cell">
+          <th class="user-select-cell user-col-select">
             <input id="select-all-users" class="user-select-checkbox" type="checkbox" title="全选/取消全选">
           </th>
-          <th>ID</th>
-          <th>备注名</th>
-          <th>用户组</th>
-          <th>账号等级</th>
-          <th>状态</th>
-          <th>功能限制</th>
-          <th>Anlas额度 (已用 + 锁定 / 总额)</th>
-          <th>Anlas额度重置规则</th>
-          <th>操作选项</th>
+          <th class="user-col-id">ID</th>
+          <th class="user-col-name">备注名</th>
+          <th class="user-col-group">用户组</th>
+          <th class="user-col-tier">账号等级</th>
+          <th class="user-col-status">状态</th>
+          <th class="user-col-limits">功能限制</th>
+          <th class="user-col-anlas">Anlas额度 (已用 + 锁定 / 总额)</th>
+          <th class="user-col-reset">Anlas额度重置规则</th>
+          <th class="user-col-actions">操作选项</th>
         </tr>
       </thead>
       <tbody id="users-table-body">
         {% for user in users %}
         <tr data-user-row data-user-name="{{ user.name }}">
-          <td class="user-select-cell" data-label="选择">
+          <td class="user-select-cell user-col-select" data-label="选择">
             <input type="checkbox" class="user-select user-select-checkbox" value="{{ user.id }}" aria-label="选择用户 {{ user.name }}">
           </td>
-          <td class="cell-id" data-label="ID">#{{ user.id }}</td>
-          <td data-label="备注名">
+          <td class="cell-id user-col-id" data-label="ID">#{{ user.id }}</td>
+          <td class="user-col-name" data-label="备注名">
             <div class="cell-name">{{ user.name }}</div>
             <div class="mobile-only user-mobile-group">
               {% if user.group_id %}
@@ -226,7 +226,7 @@
               {% endif %}
             </div>
           </td>
-          <td data-label="用户组">
+          <td class="user-col-group" data-label="用户组">
             {% if user.group_id %}
             <a href="/admin/user-groups/{{ user.group_id }}" class="group-link">
               <i data-lucide="users-round" class="icon-sm"></i>
@@ -239,7 +239,7 @@
             <span class="muted muted-sm">未分组</span>
             {% endif %}
           </td>
-          <td data-label="账号等级">
+          <td class="user-col-tier" data-label="账号等级">
             {% if user.tier == 'vip' %}
             <span class="badge badge-vip">VIP</span>
             {% else %}
@@ -253,14 +253,14 @@
               {% endif %}
             </div>
           </td>
-          <td data-label="状态">
+          <td class="user-col-status" data-label="状态">
             {% if user.is_active %}
             <span class="badge badge-active">启用中</span>
             {% else %}
             <span class="badge badge-inactive">已禁用</span>
             {% endif %}
           </td>
-          <td data-label="功能限制">
+          <td class="user-col-limits" data-label="功能限制">
             {% if user.free_small_only %}
             <span class="badge badge-free">仅免费小图</span>
             {% else %}
@@ -291,7 +291,7 @@
               {% endif %}
             </div>
           </td>
-          <td class="mono anlas-cell" data-label="Anlas额度">
+          <td class="mono anlas-cell user-col-anlas" data-label="Anlas额度">
             {% if (user.anlas_total or 0) > 0 %}
             <span class="anlas-used">{{ user.anlas_used }}</span>
             <span class="anlas-sep">+</span>
@@ -309,7 +309,7 @@
             <span class="muted muted-sm">未配置Anlas额度</span>
             {% endif %}
           </td>
-          <td class="reset-cell" data-label="重置规则">
+          <td class="reset-cell user-col-reset" data-label="重置规则">
             {% if (user.anlas_total or 0) > 0 %}
             <div class="reset-rule">
               <i data-lucide="refresh-cw" class="icon-xs icon-primary"></i>
@@ -322,7 +322,7 @@
             <span class="muted muted-sm">未配置</span>
             {% endif %}
           </td>
-          <td data-label="操作">
+          <td class="user-col-actions" data-label="操作">
             <a href="/admin/users/{{ user.id }}" class="edit-link">
               <i data-lucide="edit" class="icon-edit"></i>
               编辑管理
