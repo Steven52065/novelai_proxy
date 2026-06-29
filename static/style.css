@@ -3064,7 +3064,7 @@ pre {
     justify-content: flex-end;
   }
 
-  /* --- users-table 移动端 --- */
+  /* --- users-table 移动端：用户卡片化 --- */
   .users-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .user-search { grid-column: 1 / -1; }
   .users-actions button {
@@ -3079,71 +3079,146 @@ pre {
     width: 100%;
     min-width: 0 !important;
     table-layout: fixed;
-    font-size: 11px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
   }
+  .users-table thead,
+  .users-table tbody,
+  .users-table tr,
   .users-table th,
-  .users-table td { padding: var(--space-2) 4px; }
-
-  /* 隐藏次要列：ID / 用户组 / 状态 / 重置规则（这些信息走 .mobile-only 附属行） */
-  .users-table th:nth-child(2),
-  .users-table td:nth-child(2),
-  .users-table th:nth-child(4),
-  .users-table td:nth-child(4),
-  .users-table th:nth-child(6),
-  .users-table td:nth-child(6),
-  .users-table th:nth-child(9),
-  .users-table td:nth-child(9) { display: none; }
-
-  .users-table .user-select-cell {
-    width: 34px;
-    min-width: 34px;
-    max-width: 34px;
-    padding-left: 4px;
-    padding-right: 4px;
+  .users-table td {
+    display: block;
+    width: 100%;
+  }
+  .users-table thead {
+    margin-bottom: var(--space-3);
+  }
+  .users-table thead tr {
+    border: 1px solid var(--panel-border-soft);
+    border-radius: var(--radius-md);
+    background: rgba(15, 23, 42, 0.38);
+    padding: var(--space-3);
+  }
+  .users-table thead th {
+    display: none;
+  }
+  .users-table thead .user-select-cell {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    padding: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-align: left;
+  }
+  .users-table thead .user-select-cell::after {
+    content: "全选当前筛选用户";
+  }
+  .users-table tr[data-user-row] {
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--panel-border-soft);
+    border-left: 4px solid var(--secondary);
+    border-radius: var(--radius-md);
+    background: var(--panel-bg-solid);
+    padding: var(--space-2) var(--space-3);
+  }
+  .users-table tr[data-user-row]:has(td:nth-child(6) .badge-active) {
+    border-left-color: var(--success);
+  }
+  .users-table tr[data-user-row]:last-of-type {
+    margin-bottom: 0;
+  }
+  .users-table tr[hidden] {
+    display: none !important;
+  }
+  .users-table tr.empty-row {
+    border: 0;
+    background: transparent;
+    padding: 0;
+  }
+  .users-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--panel-border-soft);
+    text-align: right;
+    max-width: none;
+  }
+  .users-table td:last-child {
+    border-bottom: 0;
+  }
+  .users-table td::before {
+    content: attr(data-label);
+    flex: 0 0 82px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: left;
+  }
+  .users-table td > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .users-table td[colspan] {
+    display: block;
+    text-align: center;
+    padding: 12px 0;
+  }
+  .users-table td[colspan]::before {
+    display: none;
+  }
+  .users-table tbody .user-select-cell {
+    justify-content: flex-start;
+    align-items: center;
+  }
+  .users-table tbody .user-select-cell::before {
+    flex: 0 0 auto;
   }
   .users-table input.user-select-checkbox {
-    width: 18px;
-    min-width: 18px;
-    max-width: 18px;
-    height: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    width: 20px;
+    min-width: 20px;
+    max-width: 20px;
+    height: 20px;
+    min-height: 20px;
+    max-height: 20px;
     border-radius: 5px;
   }
-
-  .users-table th:nth-child(3), .users-table td:nth-child(3) { width: 24%; }
-  .users-table th:nth-child(5), .users-table td:nth-child(5) { width: 54px; text-align: center; }
-  .users-table th:nth-child(7), .users-table td:nth-child(7) { width: auto; }
-  .users-table th:nth-child(8), .users-table td:nth-child(8) { width: 72px; }
-  .users-table th:nth-child(10), .users-table td:nth-child(10) { width: 48px; text-align: center; }
-
-  .users-table th:nth-child(5),
-  .users-table th:nth-child(7),
-  .users-table th:nth-child(8),
-  .users-table th:nth-child(10) { font-size: 0; }
-  .users-table th:nth-child(5)::after { content: "等级"; font-size: 10px; }
-  .users-table th:nth-child(7)::after { content: "限制"; font-size: 10px; }
-  .users-table th:nth-child(8)::after { content: "额度"; font-size: 10px; }
-  .users-table th:nth-child(10)::after { content: "操作"; font-size: 10px; }
-
+  .users-table td:nth-child(3),
+  .users-table td:nth-child(4),
+  .users-table td:nth-child(7),
+  .users-table td:nth-child(8),
+  .users-table td:nth-child(9),
+  .users-table td:nth-child(10) {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: left;
+  }
+  .users-table td:nth-child(3)::before,
+  .users-table td:nth-child(4)::before,
+  .users-table td:nth-child(7)::before,
+  .users-table td:nth-child(8)::before,
+  .users-table td:nth-child(9)::before,
+  .users-table td:nth-child(10)::before {
+    flex-basis: auto;
+  }
+  .users-table .mobile-only {
+    display: none;
+  }
+  .users-table .badge-cluster {
+    justify-content: flex-start;
+  }
+  .users-table .anlas-cell {
+    white-space: normal;
+  }
   .users-table td:nth-child(10) a {
     justify-content: center;
-    gap: 0;
-    font-size: 0;
-  }
-  .users-table td:nth-child(10) a svg { width: 16px; height: 16px; }
-
-  .user-mobile-group,
-  .user-mobile-status,
-  .user-mobile-reset {
-    margin-top: 6px;
-    font-size: 11px;
-    line-height: 1.3;
-  }
-  .user-mobile-group a {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+    width: 100%;
   }
 
   /* --- logs-table 移动端：竖排卡片化 --- */
