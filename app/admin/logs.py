@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import io
 import uuid
 import zipfile
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from novelai_python._exceptions import APIError
 
 from ..logging_utils import mark_request_total_duration
@@ -122,6 +123,73 @@ async def log_payload_by_id(log_id: int, request: Request):
         "request_payload": json_or_none(payload_text),
         "request_payload_text": payload_text,
     }
+
+
+@web_router.get("/logs/export", dependencies=[Depends(require_admin_page_session)])
+async def export_logs(
+    request: Request,
+    user_id: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    action: str | None = None,
+    status: str | None = None,
+):
+    usage_logs: UsageLogRepository = request.app.state.usage_logs
+    filters = _parse_log_filters(
+        user_id=user_id,
+        created_from=created_from,
+        created_to=created_to,
+        action=action,
+        status=status,
+    )
+    rows = usage_logs.list_logs(
+        user_id=filters.user_id,
+        created_from=filters.created_from_utc,
+        created_to=filters.created_to_utc,
+        action=filters.action,
+        status=filters.status,
+        limit=10000,
+        before_id=None,
+    )[:10000]
+    columns = [
+        "id",
+        "request_id",
+        "user_id",
+        "user_name",
+        "action",
+        "status",
+        "model",
+        "width",
+        "height",
+        "steps",
+        "n_samples",
+        "estimated_anlas_cost",
+        "final_anlas_cost",
+        "total_ms",
+        "error_code",
+        "error_message",
+        "upstream_id",
+        "created_at",
+    ]
+
+    def iter_csv():
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        for row in rows:
+            writer.writerow(usage_log_to_dict(row))
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    return StreamingResponse(
+        iter_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="usage_logs.csv"'},
+    )
 
 
 @api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])

@@ -187,6 +187,7 @@
       const form = event.currentTarget;
       if (form.dataset.confirmed === 'true') {
         delete form.dataset.confirmed;
+        form.dataset.loadingConfirmed = 'true';
         return true;
       }
       event.preventDefault();

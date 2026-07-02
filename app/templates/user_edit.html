@@ -392,10 +392,57 @@
       {% endfor %}
       {% endif %}
     </section>
+    <section class="panel panel-flush">
+      <div class="section-head section-head-flush">
+        <div>
+          <h2 class="h2-sm">
+            <i data-lucide="history" class="h2-icon"></i>
+            最近使用
+          </h2>
+        </div>
+        <a href="/admin/logs?user_id={{ user.id }}" class="edit-link">
+          <i data-lucide="external-link" class="icon-edit"></i>
+          查看全部日志
+        </a>
+      </div>
+      {% if recent_logs %}
+      <div class="recent-log-list">
+        {% for log in recent_logs %}
+        <a class="recent-log-item" href="/admin/logs?user_id={{ user.id }}">
+          <span class="muted muted-sm">{{ log.created_at_display }}</span>
+          <strong>{{ log.action }}</strong>
+          <span class="status-pill status-{{ 'success' if log.status == 'success' else 'error' if log.status == 'failed' else 'info' }}">{{ log.status }}</span>
+          <span class="muted muted-sm">{{ log.total_ms if log.total_ms is not none else '-' }} ms</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted muted-13 empty-hint">暂无使用记录</p>
+      {% endif %}
+    </section>
   </div>
 </div>
 
 <script>
+  const userSettingsForm = document.getElementById("user-settings-form");
+  let userSettingsDirty = false;
+  if (userSettingsForm) {
+    userSettingsForm.addEventListener("input", () => {
+      userSettingsDirty = true;
+    });
+    userSettingsForm.addEventListener("change", () => {
+      userSettingsDirty = true;
+    });
+    userSettingsForm.addEventListener("submit", () => {
+      userSettingsDirty = false;
+    });
+    window.addEventListener("beforeunload", (event) => {
+      if (!userSettingsDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  }
+
   // Dynamic API Key masked switching
   const apiKeyDisplay = document.getElementById("api-key-display");
   const toggleKeyBtn = document.getElementById("toggle-key-visibility");

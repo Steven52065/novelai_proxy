@@ -153,6 +153,11 @@
         <i data-lucide="rotate-ccw" class="btn-icon"></i>
         重置
       </a>
+
+      <a class="button-like secondary" href="/admin/logs/export?user_id={{ selected_user_id if selected_user_id is not none else '' }}&created_from={{ created_from|urlencode }}&created_to={{ created_to|urlencode }}&action={{ (selected_action or '')|urlencode }}&status={{ (selected_status or '')|urlencode }}">
+        <i data-lucide="download" class="btn-icon"></i>
+        导出 CSV
+      </a>
     </div>
 
     <div class="logs-column-filter">
@@ -266,6 +271,9 @@
 </div>
 
 <section class="panel logs-table-panel">
+  <button id="logs-new-banner" class="logs-new-banner" type="button" hidden>
+    有新日志，点击刷新
+  </button>
   <div class="table-wrap">
     <table class="logs-table">
       <thead>
@@ -539,12 +547,14 @@
   const tableBody = document.getElementById("logs-table-body");
   const infiniteStatus = document.getElementById("logs-infinite-status");
   const infiniteSentinel = document.getElementById("logs-infinite-sentinel");
+  const newLogsBanner = document.getElementById("logs-new-banner");
   const columnFilterToggle = document.getElementById("logs-column-filter-toggle");
   const columnFilterMenu = document.getElementById("logs-column-filter-menu");
   const columnToggles = Array.from(document.querySelectorAll("[data-log-column-toggle]"));
 
   // Stash large base64 values into a temporary cache map for copier and previewer
   const base64Cache = new Map();
+  let latestKnownLogId = Number(document.querySelector(".log-toggle-btn[data-log-id]")?.dataset.logId || 0);
   let cacheCounter = 0;
   let loadingMoreLogs = false;
   let selectedLogUserName = logUserPicker?.dataset.initialUserName || "";
@@ -563,6 +573,7 @@
   bindResponsiveColumnSync();
   bindLogInteractions();
   setupInfiniteScroll();
+  bindNewLogReminder();
 
   // Persisted "display log count": apply the saved value on first open by reloading
   // with an explicit limit so the server renders the desired number of rows.
@@ -1223,6 +1234,28 @@
       }
     }, {rootMargin: "320px 0px"});
     observer.observe(infiniteSentinel);
+  }
+
+  function bindNewLogReminder() {
+    if (!newLogsBanner) return;
+    newLogsBanner.addEventListener("click", () => {
+      window.location.reload();
+    });
+    window.setInterval(async () => {
+      try {
+        const response = await fetch("/admin/api/logs?limit=1", {headers: {"Accept": "application/json"}});
+        if (!response.ok) return;
+        const body = await response.json();
+        const latest = Number(body.logs?.[0]?.id || 0);
+        if (latestKnownLogId > 0 && latest > latestKnownLogId) {
+          newLogsBanner.hidden = false;
+        } else if (latest > 0) {
+          latestKnownLogId = Math.max(latestKnownLogId, latest);
+        }
+      } catch (error) {
+        // Polling is opportunistic; ignore transient failures.
+      }
+    }, 30000);
   }
 
   async function loadMoreLogs() {

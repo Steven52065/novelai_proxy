@@ -16,9 +16,13 @@
         创建用户组
       </h2>
     </div>
+    <button id="toggle-create-group" type="button" class="secondary">
+      <i data-lucide="plus" class="btn-icon"></i>
+      创建用户组
+    </button>
   </div>
 
-  <form method="post" action="/admin/user-groups" class="stack">
+  <form id="create-group-form" method="post" action="/admin/user-groups" class="stack" hidden>
     <div class="responsive-grid grid-14-1-1">
       <label>
         组名称
@@ -120,6 +124,18 @@
     </div>
   </form>
 </section>
+
+<script>
+  const toggleCreateGroup = document.getElementById("toggle-create-group");
+  const createGroupForm = document.getElementById("create-group-form");
+  toggleCreateGroup?.addEventListener("click", () => {
+    createGroupForm.hidden = !createGroupForm.hidden;
+    toggleCreateGroup.setAttribute("aria-expanded", String(!createGroupForm.hidden));
+    if (!createGroupForm.hidden) {
+      createGroupForm.querySelector('input[name="name"]')?.focus();
+    }
+  });
+</script>
 
 <section class="panel">
   <div class="section-head">

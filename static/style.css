@@ -1343,11 +1343,16 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 
 .users-actions {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) max-content max-content max-content;
+  grid-template-columns: minmax(240px, 320px) repeat(3, max-content) max-content max-content max-content;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
   min-width: 0;
+}
+
+.users-actions select {
+  width: auto;
+  min-width: 120px;
 }
 
 .user-search {
@@ -1373,6 +1378,89 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 }
 
 .users-actions button { white-space: nowrap; }
+
+.table-sort-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.table-sort-btn::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.35;
+}
+
+.table-sort-btn.active::after {
+  opacity: 0.9;
+}
+
+.table-sort-btn.active[data-direction="asc"]::after {
+  transform: rotate(180deg);
+}
+
+.recent-log-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.recent-log-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(90px, 1fr) max-content max-content;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, 0.42);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.recent-log-item:hover {
+  border-color: var(--primary-border);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.logs-new-banner {
+  width: 100%;
+  margin: 0 0 var(--space-3);
+  justify-content: center;
+  border-color: var(--info-border);
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.trend-summary-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.trend-summary-link:hover {
+  border-color: var(--danger-border);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .users-table {
   table-layout: fixed;
@@ -1588,7 +1676,8 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   gap: var(--space-3);
   margin: 4px 0 18px;
 }
-.trend-summary div {
+.trend-summary div,
+.trend-summary a {
   min-width: 0;
   padding: 14px var(--space-4);
   border: 1px solid var(--panel-border-soft);
@@ -2908,7 +2997,7 @@ pre {
   .layout-grid-3 { grid-template-columns: repeat(2, 1fr); }
   .users-page-head { flex-direction: column; align-items: stretch; }
   .users-actions {
-    grid-template-columns: minmax(220px, 1fr) max-content max-content max-content;
+    grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(120px, max-content));
     justify-content: stretch;
   }
   .logs-filter-form { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
@@ -3117,6 +3206,7 @@ pre {
   /* --- users-table 移动端：用户卡片化 --- */
   .users-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .user-search { grid-column: 1 / -1; }
+  .users-actions select { min-width: 0; }
   .users-actions button {
     min-width: 0;
     padding: var(--space-2) 10px;
@@ -3559,7 +3649,8 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
   }
-  .trend-summary div { padding: var(--space-3); }
+.trend-summary div,
+.trend-summary a { padding: var(--space-3); }
   .trend-summary strong { font-size: 20px; }
 
   .dashboard-page table:not(.users-table):not(.logs-table):not(.responsive-card-table),

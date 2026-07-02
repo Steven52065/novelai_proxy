@@ -28,6 +28,7 @@ from ..users import (
 )
 from .auth import require_admin, require_admin_or_session, require_admin_page_session
 from .common import (
+    format_display_time,
     normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
     notify_dashboard_change,
@@ -383,6 +384,19 @@ async def user_edit_page(user_id: int, request: Request):
         "SELECT id, period, max_requests, is_active FROM rate_limit_rules WHERE user_id = ? ORDER BY id",
         (user_id,),
     )
+    recent_logs = [
+        _recent_log_to_dict(row)
+        for row in db.query_all(
+            """
+            SELECT id, action, status, total_ms, created_at
+            FROM usage_logs
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+            (user_id,),
+        )
+    ]
     user_data = user_row_to_dict(user)
     user_data["free_small_daily"] = request.app.state.free_small_daily_limit_manager.get_snapshot(user_id)
     response = templates.TemplateResponse(
@@ -392,6 +406,7 @@ async def user_edit_page(user_id: int, request: Request):
             "active": "users",
             "user": user_data,
             "rules": [row_to_dict(row) for row in rules],
+            "recent_logs": recent_logs,
             "groups": _groups_for_select(db, active_only=False),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
@@ -402,6 +417,12 @@ async def user_edit_page(user_id: int, request: Request):
     if new_api_key is not None:
         response.delete_cookie(API_KEY_FLASH_COOKIE)
     return response
+
+
+def _recent_log_to_dict(row) -> dict:
+    data = row_to_dict(row)
+    data["created_at_display"] = format_display_time(data.get("created_at"))
+    return data
 
 
 @web_router.post("/users/{user_id}")

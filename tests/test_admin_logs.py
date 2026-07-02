@@ -529,6 +529,41 @@ def test_admin_logs_page_preserves_filter_controls(tmp_path: Path, monkeypatch):
         assert 'data-range-preset="today"' in page.text
         assert '<option value="generate" selected>generate</option>' in page.text
         assert '<option value="success" selected>成功</option>' in page.text
+        assert "/admin/logs/export?" in page.text
+
+
+def test_admin_logs_export_csv_uses_current_filters(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        alpha_id = _create_admin_user(client, "csv-alpha")
+        beta_id = _create_admin_user(client, "csv-beta")
+        _insert_usage_log(
+            client,
+            user_id=alpha_id,
+            request_id="csv-alpha-generate",
+            action="generate",
+            status="success",
+            created_at="2026-05-27T00:00:00+00:00",
+        )
+        _insert_usage_log(
+            client,
+            user_id=beta_id,
+            request_id="csv-beta-generate",
+            action="generate",
+            status="success",
+            created_at="2026-05-27T00:01:00+00:00",
+        )
+
+        client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        export = client.get(f"/admin/logs/export?user_id={alpha_id}&action=generate&status=success")
+
+        assert export.status_code == 200
+        assert export.headers["content-type"].startswith("text/csv")
+        assert "usage_logs.csv" in export.headers["content-disposition"]
+        assert "csv-alpha-generate" in export.text
+        assert "csv-beta-generate" not in export.text
 
 
 def test_admin_users_search_api_supports_session_and_excludes_deleted_users(tmp_path: Path, monkeypatch):

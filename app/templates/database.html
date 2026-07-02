@@ -273,4 +273,20 @@
     </table>
   </div>
 </section>
+
+<script>
+  document.querySelectorAll(".database-page form").forEach((form) => {
+    form.addEventListener("submit", () => {
+      if (form.dataset.loadingConfirmed !== "true") return;
+      const button = form.querySelector('button[type="submit"]');
+      if (!button) return;
+      button.disabled = true;
+      button.dataset.originalHtml = button.innerHTML;
+      button.innerHTML = '<i data-lucide="loader-circle" class="btn-icon spin"></i>处理中...';
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    });
+  });
+</script>
 {% endblock %}
