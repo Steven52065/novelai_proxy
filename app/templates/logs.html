@@ -405,7 +405,7 @@
                       <span>复制完整 JSON</span>
                     </button>
                   </div>
-                  <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload pretty-payload-initial">点击展开展开后载入数据...</pre>
+                  <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload pretty-payload-initial">点击展开后加载数据...</pre>
                 </div>
 
                 <div>
@@ -1477,6 +1477,9 @@
 
   async function replayLog(btn) {
     const logId = btn.dataset.logId;
+    if (!confirm(`确认重放日志 #${logId} 吗？重放会重新请求上游并可能消耗 Anlas。`)) {
+      return;
+    }
     const resultBox = document.getElementById(`replay-result-log-${logId}`);
     setLogDetailOpen(logId, true);
     setReplayButtonState(btn, true, "重放中");
@@ -1633,7 +1636,7 @@
                       <span>复制完整 JSON</span>
                     </button>
                   </div>
-                  <pre id="pretty-payload-log-${escapeAttr(logId)}" class="pretty-payload pretty-payload-initial">点击展开展开后载入数据...</pre>
+                  <pre id="pretty-payload-log-${escapeAttr(logId)}" class="pretty-payload pretty-payload-initial">点击展开后加载数据...</pre>
                 </div>
                 <div>
                   <span class="detail-label">图床图片：</span>

@@ -1,10 +1,20 @@
 {% extends "base.html" %}
 
 {% block content %}
+<div class="page-head">
+  <h1>
+    <i data-lucide="key-round" class="h1-icon"></i>
+    上游账号
+  </h1>
+</div>
+
 <section class="panel">
-  <div class="section-header">
+  <div class="section-head">
     <div>
-      <h1>上游账号</h1>
+      <h2>
+        <i data-lucide="settings" class="h2-icon h2-icon-info"></i>
+        基础设置
+      </h2>
     </div>
   </div>
 
@@ -17,7 +27,7 @@
       放大扣费
       <input type="number" name="upscale_anlas_cost" min="0" value="{{ settings.upscale_anlas_cost }}">
     </label>
-    <div class="form-actions">
+    <div class="responsive-actions">
       <button type="submit">
         <i data-lucide="save" style="width: 16px; height: 16px;"></i>保存
       </button>
@@ -26,8 +36,13 @@
 </section>
 
 <section class="panel">
-  <div class="section-header">
-    <h2>新增账号</h2>
+  <div class="section-head">
+    <div>
+      <h2>
+        <i data-lucide="plus" class="h2-icon h2-icon-success"></i>
+        新增账号
+      </h2>
+    </div>
   </div>
   <form id="create-upstream-form" class="form-grid compact-form">
     <label>
@@ -45,7 +60,7 @@
         <span class="upstream-switch-track" aria-hidden="true"></span>
       </span>
     </label>
-    <div class="form-actions">
+    <div class="responsive-actions">
       <button type="submit">
         <i data-lucide="plus" style="width: 16px; height: 16px;"></i>新增
       </button>
@@ -54,8 +69,13 @@
 </section>
 
 <section class="panel">
-  <div class="section-header">
-    <h2>账号列表</h2>
+  <div class="section-head">
+    <div>
+      <h2>
+        <i data-lucide="list" class="h2-icon"></i>
+        账号列表
+      </h2>
+    </div>
   </div>
   <div class="table-wrap">
     <table class="upstreams-table">
@@ -204,6 +224,9 @@
     });
 
     row.querySelector(".delete-btn").addEventListener("click", async () => {
+      if (!confirm(`确认删除上游账号 ${upstreamId} 吗？删除后该 Token 将不能再用于转发请求。`)) {
+        return;
+      }
       try {
         await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}`, {
           method: "DELETE",

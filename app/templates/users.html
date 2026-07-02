@@ -316,7 +316,15 @@
               {{ user.reset_period }}
             </div>
             {% if user.reset_period != 'never' %}
-            <span class="muted muted-sm reset-sub">每月第 {{ user.reset_day }} 天</span>
+              {% if user.reset_period == 'month' %}
+              <span class="muted muted-sm reset-sub">每月第 {{ user.reset_day }} 天</span>
+              {% elif user.reset_period == 'week' %}
+              <span class="muted muted-sm reset-sub">每周第 {{ user.reset_day }} 天</span>
+              {% elif user.reset_period == 'day' %}
+              <span class="muted muted-sm reset-sub">每天重置</span>
+              {% else %}
+              <span class="muted muted-sm reset-sub">{{ user.reset_period }} / {{ user.reset_day }}</span>
+              {% endif %}
             {% endif %}
             {% else %}
             <span class="muted muted-sm">未配置</span>

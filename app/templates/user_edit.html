@@ -46,7 +46,7 @@
         {% if user.api_key %}
         <div class="api-key-wrapper">
           <!-- Default masked state -->
-          <div id="api-key-display" class="api-key-code masked">••••••••••••••••••••••••••••••••</div>
+          <div id="api-key-display" class="api-key-code masked" data-api-key="{{ user.api_key }}">••••••••••••••••••••••••••••••••</div>
 
           <button id="toggle-key-visibility" class="secondary api-key-icon-btn" type="button" title="显示/隐藏密钥">
             <i data-lucide="eye" class="btn-icon"></i>
@@ -134,7 +134,15 @@
             <i data-lucide="calendar" class="icon-edit icon-primary"></i>
             周期：{{ user.reset_period }}
             {% if user.reset_period != 'never' %}
-            <span class="muted">/ 月度第 {{ user.reset_day }} 天</span>
+              {% if user.reset_period == 'month' %}
+              <span class="muted">/ 每月第 {{ user.reset_day }} 天</span>
+              {% elif user.reset_period == 'week' %}
+              <span class="muted">/ 每周第 {{ user.reset_day }} 天</span>
+              {% elif user.reset_period == 'day' %}
+              <span class="muted">/ 每天重置</span>
+              {% else %}
+              <span class="muted">/ {{ user.reset_day }}</span>
+              {% endif %}
             {% endif %}
           </span>
         </div>
@@ -393,7 +401,7 @@
   
   if (toggleKeyBtn && apiKeyDisplay) {
     let isMasked = true;
-    const rawKey = "{{ user.api_key }}";
+    const rawKey = apiKeyDisplay.dataset.apiKey || "";
     
     toggleKeyBtn.addEventListener("click", () => {
       isMasked = !isMasked;

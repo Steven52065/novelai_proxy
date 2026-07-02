@@ -8,7 +8,7 @@
  *   API / POST requests:               Network-only (never cached)
  */
 
-const CACHE_STATIC = "nai-proxy-static-v1";
+const CACHE_STATIC = "nai-proxy-static-v2";
 const CACHE_CDN = "nai-proxy-cdn-v1";
 
 // ── Assets to pre-cache immediately on install ──────────────────────
