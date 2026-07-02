@@ -1,0 +1,23 @@
+<div id="upstream-test-overlay" class="upstream-test-overlay" hidden></div>
+<div id="upstream-test-modal" class="upstream-test-modal" role="dialog" aria-modal="true" aria-labelledby="upstream-test-title" hidden>
+  <div class="panel upstream-test-panel">
+    <div class="section-head section-head-flush">
+      <div>
+        <h2 id="upstream-test-title" class="h2-sm">
+          <i data-lucide="flask-conical" class="h2-icon"></i>
+          上游渠道测试
+        </h2>
+        <p id="upstream-test-summary" class="muted section-subtitle"></p>
+      </div>
+      <span id="upstream-test-state" class="status-pill">待确认</span>
+    </div>
+    <div id="upstream-test-details" class="upstream-test-details"></div>
+    <div class="upstream-test-actions">
+      <button type="button" class="secondary" id="upstream-test-cancel">取消</button>
+      <button type="button" id="upstream-test-confirm">
+        <i data-lucide="play" class="btn-icon"></i>
+        开始测试
+      </button>
+    </div>
+  </div>
+</div>

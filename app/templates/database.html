@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}数据库管理 - NovelAI Proxy{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>
@@ -121,7 +122,7 @@
         <p class="muted section-subtitle">按 UTC+8 自然日压缩旧请求参数，保留日志详情和重放能力。</p>
       </div>
     </div>
-    <form method="post" action="/admin/database/archive-payloads" class="form-grid" onsubmit="return confirm('确认按当前条件归档旧 Payload？归档后仍可查看和重放，但需要 VACUUM 才会释放文件空间。')">
+    <form method="post" action="/admin/database/archive-payloads" class="form-grid" onsubmit="return confirmSubmit(event, '确认按当前条件归档旧 Payload？归档后仍可查看和重放，但需要 VACUUM 才会释放文件空间。', {danger: true})">
       <label>
         热数据保留天数
         <input name="hot_days" type="number" min="0" max="3650" value="{{ stats.payload_archives.hot_days }}">
@@ -147,7 +148,7 @@
         <p class="muted section-subtitle">保留日志、Anlas额度和限流统计，只清空占空间的请求参数字段。</p>
       </div>
     </div>
-    <form method="post" action="/admin/database/clear-payloads" class="form-grid" onsubmit="return confirm('确认清空符合条件日志的 Payload 字段？该操作不可恢复。')">
+    <form method="post" action="/admin/database/clear-payloads" class="form-grid" onsubmit="return confirmSubmit(event, '确认清空符合条件日志的 Payload 字段？该操作不可恢复。', {danger: true})">
       <label>
         早于多少天
         <input name="older_than_days" type="number" min="0" max="3650" value="7">
@@ -181,7 +182,7 @@
         <p class="muted section-subtitle">整条删除日志记录，会影响按日志统计的历史请求数。</p>
       </div>
     </div>
-    <form method="post" action="/admin/database/cleanup-logs" class="stack" onsubmit="return confirm('确认删除符合条件的日志记录？该操作不可恢复。')">
+    <form method="post" action="/admin/database/cleanup-logs" class="stack" onsubmit="return confirmSubmit(event, '确认删除符合条件的日志记录？该操作不可恢复。', {danger: true})">
       <div class="form-grid">
         <label>
           删除早于多少天的日志
@@ -216,7 +217,7 @@
       </h2>
       <p class="muted section-subtitle">清理数据后执行 VACUUM，并截断 WAL 文件，实际释放磁盘空间。</p>
     </div>
-    <form method="post" action="/admin/database/vacuum" onsubmit="return confirm('确认执行 VACUUM？执行期间数据库会短暂独占写入。')">
+    <form method="post" action="/admin/database/vacuum" onsubmit="return confirmSubmit(event, '确认执行 VACUUM？执行期间数据库会短暂独占写入。', {danger: true})">
       <button type="submit">
         <i data-lucide="minimize-2" class="btn-icon"></i>
         立即压缩

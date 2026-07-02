@@ -98,6 +98,20 @@
     </div>
   </div>
 
+  <div id="confirm-dialog-modal" class="admin-notification-modal confirm-dialog-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" hidden>
+    <div id="confirm-dialog-card" class="admin-notification-card confirm-dialog-card">
+      <div class="admin-notification-head">
+        <i id="confirm-dialog-icon" data-lucide="circle-help" class="admin-notification-icon"></i>
+        <h2 id="confirm-dialog-title">确认操作</h2>
+      </div>
+      <p id="confirm-dialog-message" class="admin-notification-content"></p>
+      <div class="admin-notification-actions">
+        <button id="confirm-dialog-cancel" type="button" class="secondary">取消</button>
+        <button id="confirm-dialog-ok" type="button">确认</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Lucide Icons Library -->
   <script src="https://unpkg.com/lucide@latest"></script>
   
@@ -106,15 +120,23 @@
     lucide.createIcons();
 
     // Global Toast Notification
-    function showToast(message) {
+    function showToast(message, type = 'info') {
+      const variants = {
+        info: {icon: 'info'},
+        success: {icon: 'check-circle-2'},
+        error: {icon: 'alert-circle'},
+      };
+      const variant = variants[type] || variants.info;
       let toast = document.getElementById('global-toast');
       if (!toast) {
         toast = document.createElement('div');
         toast.id = 'global-toast';
         toast.className = 'toast-msg';
-        toast.innerHTML = '<i data-lucide="info" style="width: 18px; height: 18px; stroke: #8b5cf6;"></i><span class="toast-text"></span>';
+        toast.innerHTML = '<i class="toast-icon" style="width: 18px; height: 18px;"></i><span class="toast-text"></span>';
         document.body.appendChild(toast);
       }
+      toast.className = `toast-msg toast-${type}`;
+      toast.querySelector('.toast-icon').setAttribute('data-lucide', variant.icon);
       toast.querySelector('.toast-text').textContent = message;
       toast.classList.add('show');
       
@@ -125,6 +147,69 @@
         toast.classList.remove('show');
       }, 2500);
     }
+
+    const confirmDialogModal = document.getElementById('confirm-dialog-modal');
+    const confirmDialogCard = document.getElementById('confirm-dialog-card');
+    const confirmDialogIcon = document.getElementById('confirm-dialog-icon');
+    const confirmDialogMessage = document.getElementById('confirm-dialog-message');
+    const confirmDialogCancel = document.getElementById('confirm-dialog-cancel');
+    const confirmDialogOk = document.getElementById('confirm-dialog-ok');
+    let confirmDialogResolve = null;
+
+    function closeConfirmDialog(result) {
+      confirmDialogModal.hidden = true;
+      const resolve = confirmDialogResolve;
+      confirmDialogResolve = null;
+      if (resolve) {
+        resolve(result);
+      }
+    }
+
+    function confirmDialog(message, options = {}) {
+      if (confirmDialogResolve) {
+        closeConfirmDialog(false);
+      }
+      confirmDialogMessage.textContent = message;
+      confirmDialogCard.classList.toggle('danger', Boolean(options.danger));
+      confirmDialogIcon.setAttribute('data-lucide', options.danger ? 'alert-triangle' : 'circle-help');
+      confirmDialogOk.className = options.danger ? 'danger' : '';
+      confirmDialogOk.textContent = options.confirmText || '确认';
+      confirmDialogCancel.textContent = options.cancelText || '取消';
+      confirmDialogModal.hidden = false;
+      lucide.createIcons();
+      confirmDialogOk.focus();
+      return new Promise((resolve) => {
+        confirmDialogResolve = resolve;
+      });
+    }
+
+    function confirmSubmit(event, message, options = {}) {
+      const form = event.currentTarget;
+      if (form.dataset.confirmed === 'true') {
+        delete form.dataset.confirmed;
+        return true;
+      }
+      event.preventDefault();
+      confirmDialog(message, options).then((confirmed) => {
+        if (!confirmed) return;
+        form.dataset.confirmed = 'true';
+        form.requestSubmit();
+      });
+      return false;
+    }
+
+    confirmDialogCancel.addEventListener('click', () => closeConfirmDialog(false));
+    confirmDialogOk.addEventListener('click', () => closeConfirmDialog(true));
+    confirmDialogModal.addEventListener('click', (event) => {
+      if (event.target === confirmDialogModal) {
+        closeConfirmDialog(false);
+      }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !confirmDialogModal.hidden) {
+        closeConfirmDialog(false);
+      }
+    });
 
     // Lightbox for Base64 Preview Setup
     const lightbox = document.getElementById('global-lightbox');
@@ -197,12 +282,12 @@
           credentials: 'same-origin'
         });
         if (!response.ok) {
-          showToast('通知状态更新失败');
+          showToast('通知状态更新失败', 'error');
           return;
         }
         closeAdminNotification();
       } catch (error) {
-        showToast('通知状态更新失败');
+        showToast('通知状态更新失败', 'error');
       } finally {
         adminNotificationDismiss.disabled = false;
       }

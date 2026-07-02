@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}仪表盘 - NovelAI Proxy{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>
@@ -173,29 +174,7 @@
   </div>
 </section>
 
-<div id="upstream-test-overlay" class="upstream-test-overlay" hidden></div>
-<div id="upstream-test-modal" class="upstream-test-modal" role="dialog" aria-modal="true" aria-labelledby="upstream-test-title" hidden>
-  <div class="panel upstream-test-panel">
-    <div class="section-head section-head-flush">
-      <div>
-        <h2 id="upstream-test-title" class="h2-sm">
-          <i data-lucide="flask-conical" class="h2-icon"></i>
-          上游渠道测试
-        </h2>
-        <p id="upstream-test-summary" class="muted section-subtitle"></p>
-      </div>
-      <span id="upstream-test-state" class="status-pill">待确认</span>
-    </div>
-    <div id="upstream-test-details" class="upstream-test-details"></div>
-    <div class="upstream-test-actions">
-      <button type="button" class="secondary" id="upstream-test-cancel">取消</button>
-      <button type="button" id="upstream-test-confirm">
-        <i data-lucide="play" class="btn-icon"></i>
-        开始测试
-      </button>
-    </div>
-  </div>
-</div>
+{% include "_upstream_test_modal.html" %}
 
 <script id="initial-queue" type="application/json">{{ queue | tojson }}</script>
 <script id="initial-upstream-weights" type="application/json">{{ upstream_weights | tojson }}</script>
@@ -770,146 +749,6 @@
   // ---- Upstream weights rendering ----
   const weightsBody = document.getElementById("weights-body");
   const weightsStrategyBadge = document.getElementById("weights-strategy-badge");
-  const upstreamTestOverlay = document.getElementById("upstream-test-overlay");
-  const upstreamTestModal = document.getElementById("upstream-test-modal");
-  const upstreamTestSummary = document.getElementById("upstream-test-summary");
-  const upstreamTestState = document.getElementById("upstream-test-state");
-  const upstreamTestDetails = document.getElementById("upstream-test-details");
-  const upstreamTestCancel = document.getElementById("upstream-test-cancel");
-  const upstreamTestConfirm = document.getElementById("upstream-test-confirm");
-  let activeUpstreamTestId = null;
-  let upstreamTestBusy = false;
-
-  function setUpstreamTestState(label, className) {
-    upstreamTestState.textContent = label;
-    upstreamTestState.className = className ? `status-pill ${className}` : "status-pill";
-  }
-
-  function setUpstreamTestDetails(rows) {
-    upstreamTestDetails.replaceChildren();
-    for (const [label, value] of rows) {
-      const row = document.createElement("div");
-      const labelEl = document.createElement("span");
-      const valueEl = document.createElement("strong");
-      row.className = "upstream-test-detail-row";
-      labelEl.textContent = label;
-      valueEl.textContent = value ?? "-";
-      row.append(labelEl, valueEl);
-      upstreamTestDetails.appendChild(row);
-    }
-  }
-
-  function openUpstreamTestModal(upstreamId) {
-    activeUpstreamTestId = upstreamId;
-    upstreamTestBusy = false;
-    upstreamTestSummary.textContent = `将向 ${upstreamId} 发起一次真实固定生图测试，可能消耗上游账号资源。`;
-    setUpstreamTestState("待确认", "");
-    setUpstreamTestDetails([
-      ["上游渠道", upstreamId],
-      ["模型", "nai-diffusion-4-5-full"],
-      ["规格", "512x512 / 28 步 / 1 张"],
-      ["提示词", "A simple red apple on a white plate."],
-    ]);
-    upstreamTestCancel.disabled = false;
-    upstreamTestCancel.textContent = "取消";
-    upstreamTestConfirm.disabled = false;
-    upstreamTestConfirm.innerHTML = `<i data-lucide="play" class="btn-icon"></i>开始测试`;
-    upstreamTestOverlay.hidden = false;
-    upstreamTestModal.hidden = false;
-    lucide.createIcons();
-    upstreamTestConfirm.focus();
-  }
-
-  function closeUpstreamTestModal() {
-    if (upstreamTestBusy) return;
-    upstreamTestOverlay.hidden = true;
-    upstreamTestModal.hidden = true;
-    activeUpstreamTestId = null;
-  }
-
-  function renderUpstreamTestSuccess(data) {
-    upstreamTestBusy = false;
-    upstreamTestSummary.textContent = "测试完成，上游返回了可预览图片。";
-    setUpstreamTestState("成功", "status-success");
-    setUpstreamTestDetails([
-      ["上游渠道", data.upstream_id],
-      ["耗时", `${data.elapsed_ms ?? 0} ms`],
-      ["Zip 大小", `${data.zip_bytes ?? 0} bytes`],
-      ["图片数量", String(data.image_count ?? 0)],
-      ["预览文件", data.preview_image?.filename || "-"],
-      ["消息", data.message || "Upstream test succeeded"],
-    ]);
-    if (data.preview_image?.data_url) {
-      const preview = document.createElement("figure");
-      const image = document.createElement("img");
-      const caption = document.createElement("figcaption");
-      preview.className = "upstream-test-preview";
-      image.src = data.preview_image.data_url;
-      image.alt = data.preview_image.filename || "Upstream test preview";
-      caption.textContent = data.preview_image.filename || "preview image";
-      preview.append(image, caption);
-      upstreamTestDetails.appendChild(preview);
-    }
-    upstreamTestCancel.disabled = false;
-    upstreamTestCancel.textContent = "关闭";
-    upstreamTestConfirm.disabled = true;
-    upstreamTestConfirm.textContent = "已完成";
-  }
-
-  function renderUpstreamTestFailure(data, fallbackStatus) {
-    upstreamTestBusy = false;
-    upstreamTestSummary.textContent = "测试失败，上游或队列返回了错误。";
-    setUpstreamTestState("失败", "status-error");
-    setUpstreamTestDetails([
-      ["上游渠道", data?.upstream_id || activeUpstreamTestId || "-"],
-      ["错误码", data?.error_code || `HTTP ${fallbackStatus}`],
-      ["错误类型", data?.error_type || "RequestError"],
-      ["错误消息", data?.message || "Upstream test failed"],
-      ["耗时", `${data?.elapsed_ms ?? 0} ms`],
-    ]);
-    upstreamTestCancel.disabled = false;
-    upstreamTestCancel.textContent = "关闭";
-    upstreamTestConfirm.disabled = false;
-    upstreamTestConfirm.innerHTML = `<i data-lucide="rotate-cw" class="btn-icon"></i>重试`;
-    lucide.createIcons();
-  }
-
-  async function runUpstreamTest() {
-    if (!activeUpstreamTestId || upstreamTestBusy) return;
-    upstreamTestBusy = true;
-    upstreamTestSummary.textContent = "测试请求已进入该上游队列，等待执行结果。";
-    setUpstreamTestState("测试中", "status-info");
-    setUpstreamTestDetails([
-      ["上游渠道", activeUpstreamTestId],
-      ["状态", "等待上游响应"],
-    ]);
-    upstreamTestCancel.disabled = true;
-    upstreamTestConfirm.disabled = true;
-    upstreamTestConfirm.textContent = "测试中...";
-    try {
-      const response = await fetch(`/admin/api/upstreams/${encodeURIComponent(activeUpstreamTestId)}/test`, {
-        method: "POST",
-        headers: {"Accept": "application/json"},
-      });
-      let data = null;
-      try {
-        data = await response.json();
-      } catch (error) {
-        data = {ok: false, message: `HTTP ${response.status}`};
-      }
-      if (response.ok && data?.ok) {
-        renderUpstreamTestSuccess(data);
-      } else {
-        renderUpstreamTestFailure(data, response.status);
-      }
-    } catch (error) {
-      renderUpstreamTestFailure(
-        {ok: false, error_code: "network_error", error_type: error.name || "NetworkError", message: error.message || "Network request failed"},
-        0,
-      );
-    }
-  }
-
   function renderWeights(data) {
     const strategyLabels = {
       "round_robin": "轮询",
@@ -1110,15 +949,7 @@
   weightsBody?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-upstream-test]");
     if (!button) return;
-    openUpstreamTestModal(button.dataset.upstreamTest);
-  });
-  upstreamTestCancel?.addEventListener("click", closeUpstreamTestModal);
-  upstreamTestOverlay?.addEventListener("click", closeUpstreamTestModal);
-  upstreamTestConfirm?.addEventListener("click", runUpstreamTest);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && upstreamTestModal && !upstreamTestModal.hidden) {
-      closeUpstreamTestModal();
-    }
+    window.openUpstreamTestModal?.(button.dataset.upstreamTest);
   });
 
   queueBody.addEventListener("click", (event) => {
@@ -1168,4 +999,5 @@
   connectDashboardSocket();
 })();
 </script>
+<script src="{{ static_url('upstream-test.js') }}"></script>
 {% endblock %}

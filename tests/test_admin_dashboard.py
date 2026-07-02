@@ -286,11 +286,15 @@ def test_admin_dashboard_includes_upstream_test_modal_and_fetch(tmp_path: Path, 
         assert dashboard.status_code == 200
         assert 'id="upstream-test-modal"' in dashboard.text
         assert "data-upstream-test" in dashboard.text
-        assert "upstream-test-preview" in dashboard.text
-        assert "nai-diffusion-4-5-full" in dashboard.text
-        assert "512x512 / 28 步 / 1 张" in dashboard.text
-        assert "/admin/api/upstreams/" in dashboard.text
-        assert "encodeURIComponent(activeUpstreamTestId)" in dashboard.text
+        assert "/static/upstream-test.js?v=" in dashboard.text
+
+        script = client.get("/static/upstream-test.js")
+        assert script.status_code == 200
+        assert "upstream-test-preview" in script.text
+        assert "nai-diffusion-4-5-full" in script.text
+        assert "512x512 / 28 步 / 1 张" in script.text
+        assert "/admin/api/upstreams/" in script.text
+        assert "encodeURIComponent(activeUpstreamId)" in script.text
 
 
 def test_admin_dashboard_treats_arbitrary_upstream_ids_as_text(tmp_path: Path, monkeypatch):

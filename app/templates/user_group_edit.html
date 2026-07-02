@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}编辑用户组 - NovelAI Proxy{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>
@@ -146,7 +147,7 @@
           <i data-lucide="save" class="btn-icon"></i>
           保存默认配置
         </button>
-        <form method="post" action="/admin/user-groups/{{ group.id }}/delete" onsubmit="return confirm('确认禁用此用户组吗？已有成员不会被移出。');" class="form-inline">
+        <form method="post" action="/admin/user-groups/{{ group.id }}/delete" onsubmit="return confirmSubmit(event, '确认禁用此用户组吗？已有成员不会被移出。', {danger: true});" class="form-inline">
           <button class="danger btn-h42 btn-pad-md" type="submit">
             <i data-lucide="ban" class="btn-icon"></i>
             禁用用户组
@@ -266,7 +267,7 @@
                 </button>
               </td>
               <td data-label="删除">
-                <form method="post" action="/admin/group-rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirm('确认要删除此组限流规则吗？');">
+                <form method="post" action="/admin/group-rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirmSubmit(event, '确认要删除此组限流规则吗？', {danger: true});">
                   <input type="hidden" name="group_id" value="{{ group.id }}">
                   <button class="danger log-btn-sm" type="submit">
                     <i data-lucide="trash-2" class="icon-12"></i>
@@ -464,7 +465,7 @@
           openModal();
         })
         .catch(function (error) {
-          alert(error.message || "无法获取覆盖预览，请重试。");
+          showToast(error.message || "无法获取覆盖预览，请重试。", "error");
         });
     });
 

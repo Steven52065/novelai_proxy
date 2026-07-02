@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}编辑用户 - NovelAI Proxy{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>
@@ -66,7 +67,7 @@
       </div>
 
       <div class="responsive-actions api-key-actions">
-        <form method="post" action="/admin/users/{{ user.id }}/reset-key" class="form-flex-1" onsubmit="return confirm('确认要重置此用户的 API Key 吗？重置后原 Key 将立即失效！');">
+        <form method="post" action="/admin/users/{{ user.id }}/reset-key" class="form-flex-1" onsubmit="return confirmSubmit(event, '确认要重置此用户的 API Key 吗？重置后原 Key 将立即失效！', {danger: true});">
           <button class="danger btn-block btn-h40 btn-no-shadow" type="submit">
             <i data-lucide="key-round" class="btn-icon"></i>
             重置并分发新密钥
@@ -146,7 +147,7 @@
             {% endif %}
           </span>
         </div>
-        <form method="post" action="/admin/users/{{ user.id }}/reset-quota" onsubmit="return confirm('确认手动重置此用户的 Anlas 消耗统计吗？这将清空已用和锁定Anlas额度！');">
+        <form method="post" action="/admin/users/{{ user.id }}/reset-quota" onsubmit="return confirmSubmit(event, '确认手动重置此用户的 Anlas 消耗统计吗？这将清空已用和锁定Anlas额度！', {danger: true});">
           <button class="secondary btn-h38" type="submit">
             <i data-lucide="rotate-ccw" class="icon-edit"></i>
             重置已用Anlas额度
@@ -286,7 +287,7 @@
           保存修改配置
         </button>
 
-        <form method="post" action="/admin/users/{{ user.id }}/delete" onsubmit="return confirm('警告：确定要删除此用户吗？用户将被禁用并撤销 Key，历史日志会保留。');" class="form-inline">
+        <form method="post" action="/admin/users/{{ user.id }}/delete" onsubmit="return confirmSubmit(event, '警告：确定要删除此用户吗？用户将被禁用并撤销 Key，历史日志会保留。', {danger: true});" class="form-inline">
           <button class="danger btn-h42 btn-pad-md" type="submit">
             <i data-lucide="user-x" class="btn-icon"></i>
             注销删除用户
@@ -373,7 +374,7 @@
                 </button>
               </td>
               <td data-label="删除">
-                <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirm('确认要删除此限制规则吗？');">
+                <form method="post" action="/admin/rate-limit-rules/{{ rule.id }}/delete" onsubmit="return confirmSubmit(event, '确认要删除此限制规则吗？', {danger: true});">
                   <input type="hidden" name="user_id" value="{{ user.id }}">
                   <button class="danger log-btn-sm" type="submit">
                     <i data-lucide="trash-2" class="icon-12"></i>

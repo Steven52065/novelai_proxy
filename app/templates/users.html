@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}用户管理 - NovelAI Proxy{% endblock %}
 {% block content %}
 <div class="page-head users-page-head">
   <h1>
@@ -470,13 +471,13 @@
     refreshBulkResetState();
   }
 
-  function submitBulkReset(action, confirmMessage) {
+  async function submitBulkReset(action, confirmMessage) {
     const ids = selectedUserIds();
     if (!ids.length) {
-      showToast("请先勾选要操作的用户。");
+      showToast("请先勾选要操作的用户。", "error");
       return;
     }
-    if (!confirm(confirmMessage)) return;
+    if (!await confirmDialog(confirmMessage, {danger: true})) return;
     bulkResetForm.innerHTML = "";
     ids.forEach((id) => {
       const input = document.createElement("input");

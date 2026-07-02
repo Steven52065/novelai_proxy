@@ -595,24 +595,38 @@ h2 .muted,
 }
 
 .upstreams-page .inline-actions {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) repeat(4, 40px);
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
-  min-width: 360px;
+  justify-content: flex-end;
+  min-width: 420px;
+}
+
+.upstreams-page .token-editor {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex: 1 1 100%;
+  order: 2;
+}
+
+.upstreams-page .token-editor[hidden] {
+  display: none;
 }
 
 .upstreams-page .inline-actions .token-input {
-  min-width: 0;
+  min-width: 180px;
+  height: 40px;
+  flex: 1 1 220px;
 }
 
 .upstreams-page .inline-actions button {
-  width: 40px;
-  height: 40px;
-  padding: 0;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: var(--space-2);
 }
 
 .responsive-grid {
@@ -1089,6 +1103,24 @@ option { background: #0f172a; color: #fff; }
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
   padding: var(--space-6);
+}
+
+.confirm-dialog-card {
+  border-color: var(--border);
+}
+
+.confirm-dialog-card.danger {
+  border-color: var(--danger-border);
+}
+
+.confirm-dialog-card.danger .admin-notification-icon {
+  stroke: var(--danger);
+}
+
+.confirm-dialog-modal {
+  background: rgba(3, 4, 9, 0.62);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
 .admin-notification-head {
@@ -2785,6 +2817,24 @@ pre {
   opacity: 0;
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
+.toast-info {
+  border-color: var(--info-border);
+}
+.toast-info .toast-icon {
+  stroke: var(--info);
+}
+.toast-success {
+  border-color: var(--success-border);
+}
+.toast-success .toast-icon {
+  stroke: var(--success);
+}
+.toast-error {
+  border-color: var(--danger-border);
+}
+.toast-error .toast-icon {
+  stroke: var(--danger);
+}
 .toast-msg.show { transform: translateY(0); opacity: 1; }
 
 .filter-panel {
@@ -3674,12 +3724,21 @@ pre {
   .upstreams-table .inline-actions {
     width: 100%;
     min-width: 0;
-    grid-template-columns: minmax(0, 1fr) repeat(4, 40px);
+    justify-content: stretch;
     justify-self: stretch;
+  }
+  .upstreams-table .inline-actions > button {
+    flex: 1 1 calc(50% - var(--space-2));
+  }
+  .upstreams-table .token-editor {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
   }
   .upstreams-table .token-input {
     height: 40px;
     min-height: 40px;
+    width: 100%;
   }
 
   .key-row {

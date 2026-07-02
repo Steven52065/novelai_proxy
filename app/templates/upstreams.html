@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}上游账号 - NovelAI Proxy{% endblock %}
 
 {% block content %}
 <div class="page-head">
@@ -95,30 +96,43 @@
           <td data-label="Token"><code>{{ upstream.api_key_masked }}</code></td>
           <td data-label="状态">
             {% if upstream.enabled %}
-              <span class="status-pill status-success">启用</span>
+              <span class="badge badge-active">启用</span>
+            {% elif upstream.id in auto_disabled_upstream_ids %}
+              <span class="badge badge-inactive">自动禁用</span>
             {% else %}
-              <span class="status-pill status-info">禁用</span>
+              <span class="badge badge-inactive">禁用</span>
             {% endif %}
           </td>
           <td data-label="更新" title="UTC 原始时间：{{ upstream.updated_at or upstream.created_at }}">{{ upstream.changed_at_display }}</td>
           <td data-label="操作">
             <div class="inline-actions">
-              <input class="token-input" type="password" placeholder="Token" autocomplete="new-password">
-              <button type="button" class="secondary update-token-btn" title="更新 Token">
-                <i data-lucide="save" style="width: 16px; height: 16px;"></i>
+              <button type="button" class="secondary edit-token-btn" title="更新 Token">
+                <i data-lucide="key-round" class="btn-icon"></i>
+                <span>更新 Token</span>
               </button>
+              <div class="token-editor" hidden>
+                <input class="token-input" type="password" placeholder="新 Token" autocomplete="new-password">
+                <button type="button" class="secondary update-token-btn" title="保存 Token">
+                  <i data-lucide="save" class="btn-icon"></i>
+                  <span>保存</span>
+                </button>
+              </div>
               <button type="button" class="secondary toggle-btn" data-enabled="{{ 'false' if upstream.enabled else 'true' }}" title="{{ '禁用' if upstream.enabled else '启用' }}">
                 {% if upstream.enabled %}
-                  <i data-lucide="pause" style="width: 16px; height: 16px;"></i>
+                  <i data-lucide="pause" class="btn-icon"></i>
+                  <span>禁用</span>
                 {% else %}
-                  <i data-lucide="play" style="width: 16px; height: 16px;"></i>
+                  <i data-lucide="play" class="btn-icon"></i>
+                  <span>启用</span>
                 {% endif %}
               </button>
-              <button type="button" class="secondary test-btn" title="测试">
-                <i data-lucide="activity" style="width: 16px; height: 16px;"></i>
+              <button type="button" class="secondary test-btn" data-upstream-test="{{ upstream.id }}" title="测试">
+                <i data-lucide="activity" class="btn-icon"></i>
+                <span>测试</span>
               </button>
               <button type="button" class="danger delete-btn" title="删除">
-                <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+                <i data-lucide="trash-2" class="btn-icon"></i>
+                <span>删除</span>
               </button>
             </div>
           </td>
@@ -132,6 +146,8 @@
     </table>
   </div>
 </section>
+
+{% include "_upstream_test_modal.html" %}
 
 <script>
   async function requestJson(url, options) {
@@ -149,6 +165,13 @@
     return body;
   }
 
+  function reloadAfterSuccess(message) {
+    showToast(message, "success");
+    window.setTimeout(() => {
+      location.reload();
+    }, 350);
+  }
+
   document.getElementById("settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -160,9 +183,9 @@
           upscale_anlas_cost: Number(form.get("upscale_anlas_cost"))
         })
       });
-      showToast("已保存");
+      showToast("已保存", "success");
     } catch (error) {
-      showToast(error.message);
+      showToast(error.message, "error");
     }
   });
 
@@ -178,53 +201,58 @@
           enabled: form.get("enabled") === "on"
         })
       });
-      location.reload();
+      reloadAfterSuccess("上游账号已新增");
     } catch (error) {
-      showToast(error.message);
+      showToast(error.message, "error");
     }
   });
 
   document.querySelectorAll("tr[data-upstream-id]").forEach((row) => {
     const upstreamId = row.dataset.upstreamId;
+    row.querySelector(".edit-token-btn").addEventListener("click", () => {
+      const editor = row.querySelector(".token-editor");
+      editor.hidden = !editor.hidden;
+      if (!editor.hidden) {
+        editor.querySelector(".token-input").focus();
+      }
+    });
+
     row.querySelector(".update-token-btn").addEventListener("click", async () => {
       const input = row.querySelector(".token-input");
+      if (!input.value.trim()) {
+        showToast("请先输入新 Token。", "error");
+        return;
+      }
       try {
         await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}`, {
           method: "PATCH",
           body: JSON.stringify({api_key: input.value})
         });
-        location.reload();
+        reloadAfterSuccess("Token 已更新");
       } catch (error) {
-        showToast(error.message);
+        showToast(error.message, "error");
       }
     });
 
     row.querySelector(".toggle-btn").addEventListener("click", async (event) => {
+      const enabled = event.currentTarget.dataset.enabled === "true";
       try {
         await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}`, {
           method: "PATCH",
-          body: JSON.stringify({enabled: event.currentTarget.dataset.enabled === "true"})
+          body: JSON.stringify({enabled})
         });
-        location.reload();
+        reloadAfterSuccess(enabled ? "上游账号已启用" : "上游账号已禁用");
       } catch (error) {
-        showToast(error.message);
+        showToast(error.message, "error");
       }
     });
 
-    row.querySelector(".test-btn").addEventListener("click", async () => {
-      try {
-        const result = await requestJson(`/admin/api/upstreams/${encodeURIComponent(upstreamId)}/test`, {
-          method: "POST",
-          body: "{}"
-        });
-        showToast(result.message || "测试完成");
-      } catch (error) {
-        showToast(error.message);
-      }
+    row.querySelector(".test-btn").addEventListener("click", (event) => {
+      window.openUpstreamTestModal?.(event.currentTarget.dataset.upstreamTest);
     });
 
     row.querySelector(".delete-btn").addEventListener("click", async () => {
-      if (!confirm(`确认删除上游账号 ${upstreamId} 吗？删除后该 Token 将不能再用于转发请求。`)) {
+      if (!await confirmDialog(`确认删除上游账号 ${upstreamId} 吗？删除后该 Token 将不能再用于转发请求。`, {danger: true})) {
         return;
       }
       try {
@@ -232,11 +260,12 @@
           method: "DELETE",
           body: "{}"
         });
-        location.reload();
+        reloadAfterSuccess("上游账号已删除");
       } catch (error) {
-        showToast(error.message);
+        showToast(error.message, "error");
       }
     });
   });
 </script>
+<script src="{{ static_url('upstream-test.js') }}"></script>
 {% endblock %}

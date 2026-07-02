@@ -100,6 +100,12 @@ async def update_novelai_settings(request: Request, payload: NovelAISettingsUpda
 async def upstreams_page(request: Request):
     runtime = request.app.state.upstream_runtime
     repo = runtime.repository
+    notification_repo = request.app.state.admin_notifications
+    auto_disabled_upstream_ids = {
+        str(notification.metadata.get("upstream_id"))
+        for notification in notification_repo.pending()
+        if notification.event_type == "upstream_auto_disabled" and notification.metadata.get("upstream_id")
+    }
     return templates.TemplateResponse(
         request,
         "upstreams.html",
@@ -107,6 +113,7 @@ async def upstreams_page(request: Request):
             "active": "upstreams",
             "upstreams": [_upstream_to_admin_dict(row) for row in repo.list(include_disabled=True)],
             "settings": _settings_to_dict(repo.get_settings()),
+            "auto_disabled_upstream_ids": auto_disabled_upstream_ids,
         },
     )
 

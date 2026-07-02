@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}使用日志 - NovelAI Proxy{% endblock %}
 {% block head_extra %}
 <script>
 (() => {
@@ -1477,7 +1478,7 @@
 
   async function replayLog(btn) {
     const logId = btn.dataset.logId;
-    if (!confirm(`确认重放日志 #${logId} 吗？重放会重新请求上游并可能消耗 Anlas。`)) {
+    if (!await confirmDialog(`确认重放日志 #${logId} 吗？重放会重新请求上游并可能消耗 Anlas。`, {danger: true})) {
       return;
     }
     const resultBox = document.getElementById(`replay-result-log-${logId}`);
