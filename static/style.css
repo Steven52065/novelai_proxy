@@ -113,6 +113,11 @@
   padding: 0;
 }
 
+:focus-visible {
+  outline: 2px solid var(--primary-soft);
+  outline-offset: 3px;
+}
+
 body {
   font-family: var(--font-sans);
   color: var(--text-main);
@@ -1462,6 +1467,17 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
 .users-table {
   table-layout: fixed;
   min-width: 1334px;
@@ -1590,6 +1606,19 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
 }
 .queue-table .queue-status-icon::before { flex: none; }
 
+.table-empty-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 24px 0;
+}
+
+.queue-elapsed-value {
+  font-weight: 500;
+}
+
 .queue-spec {
   position: relative;
   min-width: 0;
@@ -1601,6 +1630,47 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+}
+
+.queue-spec-model {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.queue-spec-value {
+  color: var(--text-soft);
+  font-weight: 500;
+}
+
+.queue-spec-separator {
+  color: rgba(255, 255, 255, 0.15);
+}
+
+.queue-position-badge {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning);
+}
+
+.queue-user-name {
+  color: #fff;
+  font-weight: 600;
+}
+
+.queue-action-badge {
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  background: rgba(139, 92, 246, 0.12);
+  color: #c084fc;
+}
+
+.queue-anlas-cost {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.queue-hidden-summary {
+  padding: 12px 0;
+  font-weight: 600;
 }
 
 .queue-spec-toggle,
@@ -1794,6 +1864,56 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   border-radius: var(--radius-pill);
   box-shadow: 0 0 10px currentColor;
 }
+.legend-dot-requests { background: #60a5fa; }
+.legend-dot-failed { background: #ef4444; }
+.legend-dot-rejected { background: #f59e0b; }
+.legend-dot-retry { background: #22c55e; }
+
+.weights-loading-cell {
+  padding: 32px 0;
+}
+
+.upstream-weight-id {
+  font-weight: 600;
+}
+
+.weight-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.weight-meter-track {
+  flex: 1;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.weight-meter-fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, #6366f1, #a5b4fc);
+  transition: width 0.5s ease;
+}
+
+.weight-meter-value {
+  min-width: 48px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.weight-score {
+  font-weight: 600;
+}
+
+.score-good { color: var(--success); }
+.score-warn { color: var(--warning); }
+.score-bad { color: var(--danger); }
+.queue-size-value { font-weight: 500; }
 
 /* ==========================================================================
    11. Logs — Filter / Calendar / Time Range Modal / Column Filter / Detail
@@ -2552,7 +2672,7 @@ pre {
   gap: 4px;
 }
 
-/* ---- logs.html 专属 utility（服务器模板与 renderLogEntry JS 字符串共用） ---- */
+/* ---- logs.html 专属 utility（服务器端日志行片段共用） ---- */
 .logs-column-filter-toggle { min-height: var(--control-h); padding: 0 var(--space-4); }
 
 .icon-12 { width: 12px; height: 12px; }
@@ -2565,6 +2685,19 @@ pre {
 .cell-request-id { font-weight: 600; color: var(--primary-soft); }
 .cell-user { font-weight: 700; color: #fff; }
 .cell-created { font-size: 13px; color: var(--text-muted); }
+
+.logs-table tr.log-row {
+  border-left: 4px solid var(--warning);
+}
+
+.logs-table tr.log-row.is-success { border-left-color: var(--success); }
+.logs-table tr.log-row.is-failed { border-left-color: var(--danger); }
+.logs-table tr.log-row.is-running { border-left-color: var(--info); }
+
+.logs-table tr.log-row.is-retry {
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
 
 .retry-mark {
   margin-left: 4px;
@@ -3481,6 +3614,9 @@ pre {
     padding: var(--space-2) var(--space-3);
   }
   .logs-table tr.log-row { border-left-width: 4px; }
+  .logs-table tr.log-row.is-success { border-left-color: var(--success); }
+  .logs-table tr.log-row.is-failed { border-left-color: var(--danger); }
+  .logs-table tr.log-row.is-running { border-left-color: var(--info); }
   .logs-table tr.log-detail-row {
     border: 0;
     background: transparent;

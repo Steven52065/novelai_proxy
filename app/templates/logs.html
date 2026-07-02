@@ -36,6 +36,7 @@
     created_at: 122,
     actions: 100,
   };
+  window.__LOG_COLUMNS = {columns, columnWidths};
 
   function readStoredColumns() {
     let raw = null;
@@ -305,171 +306,7 @@
         </tr>
         {% endif %}
 
-        {% for log in logs %}
-        <tr class="log-row {{ 'is-retry' if log.is_retry_success else '' }} is-{{ log.status }}" style="border-left: 4px solid {% if log.status == 'success' %}var(--success){% elif log.status == 'failed' %}var(--danger){% elif log.status == 'running' %}var(--info){% else %}var(--warning){% endif %};{% if log.is_retry_success %} background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);{% endif %}">
-          <td data-log-column="request_id" class="mono cell-request-id">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span class="retry-mark" title="重试后成功">⟳</span>{% endif %}</td>
-          <td data-log-column="log_level">
-            <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
-          </td>
-          <td data-log-column="user" class="cell-user">{{ log.user_name }}</td>
-          <td data-log-column="action">
-            <span class="badge badge-action">{{ log.action }}</span>
-          </td>
-          <td data-log-column="upstream" class="mono">
-            {% if log.upstream_id %}
-            <code>{{ log.upstream_id }}</code>
-            {% else %}
-            <span class="muted">-</span>
-            {% endif %}
-          </td>
-          <td data-log-column="model">
-            {% if log.model %}
-            <span class="badge badge-normal badge-sm">{{ log.model }}</span>
-            {% else %}
-            <span class="muted">-</span>
-            {% endif %}
-          </td>
-          <td data-log-column="size" class="mono">
-            {% if log.width and log.height %}
-            <code>{{ log.width }}x{{ log.height }}</code>
-            {% else %}
-            <span class="muted">-</span>
-            {% endif %}
-          </td>
-          <td data-log-column="anlas" class="mono">
-            <span class="anlas-sep">{{ log.estimated_anlas_cost }}</span>
-            <span class="anlas-slash">/</span>
-            <span class="anlas-total">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
-          </td>
-          <td data-log-column="status">
-            {% if log.status == 'success' %}
-            <span class="status-pill status-success">{% if log.is_retry_success %}<span class="retry-mark-inline" title="重试后成功">⟳</span>重试成功{% else %}成功{% endif %}</span>
-            {% elif log.status == 'failed' %}
-            <span class="status-pill status-error">失败</span>
-            {% elif log.status == 'running' %}
-            <span class="status-pill status-info">运行中</span>
-            {% else %}
-            <span class="status-pill">{{ log.status }}</span>
-            {% endif %}
-          </td>
-          <td data-log-column="total_ms" class="mono">
-            {% if log.total_ms is not none %}
-            <span title="{{ log.total_ms }} ms">{{ log.total_ms_display }}</span>
-            {% else %}
-            <span class="muted">-</span>
-            {% endif %}
-          </td>
-          <td data-log-column="upstream_ms" class="mono">
-            {% if log.upstream_ms is not none %}
-            <span title="{{ log.upstream_ms }} ms">{{ log.upstream_ms_display }}</span>
-            {% else %}
-            <span class="muted">-</span>
-            {% endif %}
-          </td>
-          <td data-log-column="created_at" class="cell-created" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
-          <td data-log-column="actions">
-            <div class="log-actions">
-              <button class="secondary log-toggle-btn log-btn-sm" data-log-id="{{ log.id }}" type="button" aria-expanded="false">
-                <span class="chevron"><i data-lucide="chevron-right" class="icon-13"></i></span>
-                <span>详情</span>
-              </button>
-              {% if log.has_request_payload %}
-              <button class="secondary btn-replay-log log-btn-sm" data-log-id="{{ log.id }}" type="button">
-                <i data-lucide="repeat-2" class="icon-13"></i>
-                <span>重放</span>
-              </button>
-              {% else %}
-              <span class="muted muted-sm">不可重放</span>
-              {% endif %}
-            </div>
-          </td>
-        </tr>
-        <tr class="log-detail-row" data-log-id="{{ log.id }}" hidden>
-          <td data-log-colspan colspan="13">
-            <div class="log-details-block" data-log-id="{{ log.id }}">
-              <div class="log-details-content">
-                <div id="replay-result-log-{{ log.id }}" class="replay-result" hidden></div>
-
-                {% if log.error_message %}
-                <div class="error error-flush">
-                  <div class="error-row">
-                    <i data-lucide="alert-octagon" class="btn-icon-lg"></i>
-                    <strong class="error-code">错误 {{ log.error_code }}：</strong>
-                    <span>{{ log.error_message }}</span>
-                  </div>
-                </div>
-                {% endif %}
-
-                <!-- Raw JSON payload store hidden -->
-                <script type="application/json" id="raw-payload-log-{{ log.id }}" data-has-payload="{{ 'true' if log.has_request_payload else 'false' }}" data-payload-archived="{{ 'true' if log.payload_archived else 'false' }}">{{ log.request_payload | tojson }}</script>
-
-                <div>
-                  <div class="payload-toolbar">
-                    <span class="detail-label-inline">
-                      <i data-lucide="braces" class="icon-edit"></i>
-                      请求与响应 Payload 数据 (含智能安全截断)
-                    </span>
-                    <button class="secondary btn-copy-raw-payload payload-copy-btn" data-log-id="{{ log.id }}" type="button">
-                      <i data-lucide="copy" class="icon-12"></i>
-                      <span>复制完整 JSON</span>
-                    </button>
-                  </div>
-                  <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload pretty-payload-initial">点击展开后加载数据...</pre>
-                </div>
-
-                <div>
-                  <span class="detail-label">图床图片：</span>
-                  {% if log.image_urls %}
-                  <div class="hosted-image-gallery">
-                    {% for image in log.image_urls %}
-                    {% set image_url = image.url if image is mapping else image %}
-                    {% set image_name = image.filename if image is mapping and image.filename else image_url %}
-                    <div class="hosted-image-card">
-                      <img class="hosted-image-preview" alt="{{ image_name }}" data-image-url="{{ image_url }}" title="点击放大查看">
-                      <span>
-                        <i data-lucide="image" class="icon-sm"></i>
-                        {{ image.provider if image is mapping and image.provider else "image-host" }}
-                      </span>
-                      <div class="hosted-image-url">
-                        <code>{{ image_url }}</code>
-                        <button class="hosted-image-copy" type="button" data-image-url="{{ image_url }}" title="复制图片链接" aria-label="复制图片链接">
-                          <i data-lucide="copy" class="icon-sm"></i>
-                        </button>
-                      </div>
-                    </div>
-                    {% endfor %}
-                  </div>
-                  {% else %}
-                  <p class="muted empty-hint">
-                    <i data-lucide="info" class="icon-edit"></i>
-                    未上传到图床
-                  </p>
-                  {% endif %}
-                </div>
-
-                <div>
-                  <span class="detail-label">本地生成的图片输出路径：</span>
-                  {% if log.output_files %}
-                  <ul class="file-list">
-                    {% for path in log.output_files %}
-                    <li class="file-item">
-                      <i data-lucide="image" class="icon-edit icon-success"></i>
-                      <code>{{ path }}</code>
-                    </li>
-                    {% endfor %}
-                  </ul>
-                  {% else %}
-                  <p class="muted empty-hint">
-                    <i data-lucide="info" class="icon-edit"></i>
-                    未留存本地文件 (例如小图直传或非生图请求)
-                  </p>
-                  {% endif %}
-                </div>
-              </div>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
+        {% include "_log_rows.html" %}
       </tbody>
     </table>
   </div>
@@ -483,40 +320,11 @@
   const logsLimitStorageKey = "novelai_proxy_logs_limit";
   const logsColumnStorageKey = "novelai_proxy_logs_visible_columns";
   const logsColumnVisibilityStyleId = "logs-column-visibility-style";
-  // 注意：这里的 logColumns / logColumnWidths 必须与 head_extra 中的
-  // columns / columnWidths 保持一致；head_extra 会在首屏渲染前生成列隐藏 CSS。
-  const logColumns = [
-    "request_id",
-    "log_level",
-    "user",
-    "action",
-    "upstream",
-    "model",
-    "size",
-    "anlas",
-    "status",
-    "total_ms",
-    "upstream_ms",
-    "created_at",
-    "actions",
-  ];
+  const logColumnConfig = window.__LOG_COLUMNS;
+  const logColumns = logColumnConfig.columns;
   const mobileBaseLogColumns = ["request_id", "user", "action", "status", "actions"];
   const mobileLogsMedia = window.matchMedia ? window.matchMedia("(max-width: 768px)") : null;
-  const logColumnWidths = {
-    request_id: 76,
-    log_level: 82,
-    user: 96,
-    action: 104,
-    upstream: 112,
-    model: 94,
-    size: 104,
-    anlas: 92,
-    status: 90,
-    total_ms: 78,
-    upstream_ms: 78,
-    created_at: 122,
-    actions: 100,
-  };
+  const logColumnWidths = logColumnConfig.columnWidths;
   const filterForm = document.getElementById("logs-filter-form");
   const limitInput = document.getElementById("logs-limit-input");
   const createdFromInput = document.getElementById("logs-created-from-input");
@@ -1285,7 +1093,7 @@
       }
 
       const logs = Array.isArray(body.logs) ? body.logs : [];
-      appendLogs(logs);
+      appendLogRowsHtml(body.rows_html || "", logs);
       tableBody.dataset.nextBeforeId = body.next_before_id ? String(body.next_before_id) : "";
       tableBody.dataset.hasMore = body.has_more ? "true" : "false";
       renderInfiniteStatus(body.has_more ? "" : "没有更多日志。", !body.has_more);
@@ -1296,15 +1104,13 @@
     }
   }
 
-  function appendLogs(logs) {
-    if (!tableBody || logs.length === 0) return;
+  function appendLogRowsHtml(rowsHtml, logs) {
+    if (!tableBody || (!rowsHtml && logs.length === 0)) return;
     tableBody.querySelector(".empty-row")?.remove();
     const fragment = document.createDocumentFragment();
-    logs.forEach((log) => {
-      const template = document.createElement("tbody");
-      template.innerHTML = renderLogEntry(log);
-      Array.from(template.children).forEach((row) => fragment.appendChild(row));
-    });
+    const template = document.createElement("tbody");
+    template.innerHTML = rowsHtml;
+    Array.from(template.children).forEach((row) => fragment.appendChild(row));
     tableBody.appendChild(fragment);
     applyVisibleColumns(readStoredColumns());
     lucide.createIcons();
@@ -1594,173 +1400,6 @@
     lucide.createIcons();
   }
 
-  // Build the same two-row markup the server renders, for logs appended via infinite scroll
-  function renderLogEntry(log) {
-    const requestId = String(log.request_id ?? "");
-    const logId = String(log.id ?? "");
-    const status = String(log.status ?? "");
-    const logLevel = log.log_level || "INFO";
-    const isRetrySuccess = log.is_retry_success ? true : false;
-    const retryIcon = isRetrySuccess ? `<span class="retry-mark" title="重试后成功">⟳</span>` : "";
-    const rowClass = isRetrySuccess ? ` is-retry` : "";
-    const rowStyle = isRetrySuccess ? ` background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);` : "";
-    const model = log.model
-      ? `<span class="badge badge-normal badge-sm">${escapeHtml(log.model)}</span>`
-      : `<span class="muted">-</span>`;
-    const size = (log.width && log.height)
-      ? `<code>${escapeHtml(log.width)}x${escapeHtml(log.height)}</code>`
-      : `<span class="muted">-</span>`;
-    const finalCost = (log.final_anlas_cost === null || log.final_anlas_cost === undefined) ? "-" : log.final_anlas_cost;
-    const totalDuration = renderDuration(log.total_ms_display, log.total_ms);
-    const upstreamDuration = renderDuration(log.upstream_ms_display, log.upstream_ms);
-    const replayCell = log.has_request_payload
-      ? `<button class="secondary btn-replay-log log-btn-sm" data-log-id="${escapeAttr(logId)}" type="button"><i data-lucide="repeat-2" class="icon-13"></i><span>重放</span></button>`
-      : `<span class="muted muted-sm">不可重放</span>`;
-    const errorHtml = log.error_message
-      ? `<div class="error error-flush"><div class="error-row"><i data-lucide="alert-octagon" class="btn-icon-lg"></i><strong class="error-code">错误 ${escapeHtml(log.error_code ?? "")}：</strong><span>${escapeHtml(log.error_message)}</span></div></div>`
-      : "";
-
-    return `
-        <tr class="log-row is-${escapeAttr(status)}${rowClass}" style="border-left: 4px solid ${borderColorFor(status)};${rowStyle}">
-          <td data-log-column="request_id" class="mono cell-request-id">${escapeHtml(requestId.slice(0, 8))}${retryIcon}</td>
-          <td data-log-column="log_level">
-            <span class="level level-${escapeAttr(String(logLevel).toLowerCase())}">${escapeHtml(logLevel)}</span>
-          </td>
-          <td data-log-column="user" class="cell-user">${escapeHtml(log.user_name ?? "")}</td>
-          <td data-log-column="action">
-            <span class="badge badge-action">${escapeHtml(log.action ?? "")}</span>
-          </td>
-          <td data-log-column="upstream" class="mono">${log.upstream_id ? `<code>${escapeHtml(log.upstream_id)}</code>` : `<span class="muted">-</span>`}</td>
-          <td data-log-column="model">${model}</td>
-          <td data-log-column="size" class="mono">${size}</td>
-          <td data-log-column="anlas" class="mono">
-            <span class="anlas-sep">${escapeHtml(log.estimated_anlas_cost ?? 0)}</span>
-            <span class="anlas-slash">/</span>
-            <span class="anlas-total">${escapeHtml(finalCost)}</span>
-          </td>
-          <td data-log-column="status">${renderStatusPill(status, isRetrySuccess)}</td>
-          <td data-log-column="total_ms" class="mono">${totalDuration}</td>
-          <td data-log-column="upstream_ms" class="mono">${upstreamDuration}</td>
-          <td data-log-column="created_at" class="cell-created" title="UTC 原始时间：${escapeAttr(log.created_at ?? "")}">${escapeHtml(log.created_at_display ?? "-")}</td>
-          <td data-log-column="actions">
-            <div class="log-actions">
-              <button class="secondary log-toggle-btn log-btn-sm" data-log-id="${escapeAttr(logId)}" type="button" aria-expanded="false">
-                <span class="chevron"><i data-lucide="chevron-right" class="icon-13"></i></span>
-                <span>详情</span>
-              </button>
-              ${replayCell}
-            </div>
-          </td>
-        </tr>
-        <tr class="log-detail-row" data-log-id="${escapeAttr(logId)}" hidden>
-          <td data-log-colspan colspan="13">
-            <div class="log-details-block" data-log-id="${escapeAttr(logId)}">
-              <div class="log-details-content">
-                <div id="replay-result-log-${escapeAttr(logId)}" class="replay-result" hidden></div>
-                ${errorHtml}
-                <script type="application/json" id="raw-payload-log-${escapeAttr(logId)}" data-has-payload="${log.has_request_payload ? "true" : "false"}" data-payload-archived="${log.payload_archived ? "true" : "false"}">${escapeScriptJson(log.request_payload)}<\/script>
-                <div>
-                  <div class="payload-toolbar">
-                    <span class="detail-label-inline">
-                      <i data-lucide="braces" class="icon-edit"></i>
-                      请求与响应 Payload 数据 (含智能安全截断)
-                    </span>
-                    <button class="secondary btn-copy-raw-payload payload-copy-btn" data-log-id="${escapeAttr(logId)}" type="button">
-                      <i data-lucide="copy" class="icon-12"></i>
-                      <span>复制完整 JSON</span>
-                    </button>
-                  </div>
-                  <pre id="pretty-payload-log-${escapeAttr(logId)}" class="pretty-payload pretty-payload-initial">点击展开后加载数据...</pre>
-                </div>
-                <div>
-                  <span class="detail-label">图床图片：</span>
-                  ${renderHostedImages(log.image_urls)}
-                </div>
-                <div>
-                  <span class="detail-label">本地生成的图片输出路径：</span>
-                  ${renderOutputFiles(log.output_files)}
-                </div>
-              </div>
-            </div>
-          </td>
-        </tr>`;
-  }
-
-  function borderColorFor(status) {
-    if (status === "success") return "var(--success)";
-    if (status === "failed") return "var(--danger)";
-    if (status === "running") return "var(--info)";
-    return "var(--warning)";
-  }
-
-  function renderStatusPill(status, isRetrySuccess = false) {
-    const retryIcon = isRetrySuccess ? `<span class="retry-mark-inline" title="重试后成功">⟳</span>` : "";
-    if (status === "success") {
-      return `<span class="status-pill status-success">${retryIcon}${isRetrySuccess ? "重试成功" : "成功"}</span>`;
-    }
-    if (status === "failed") {
-      return `<span class="status-pill status-error">失败</span>`;
-    }
-    if (status === "running") {
-      return `<span class="status-pill status-info">运行中</span>`;
-    }
-    return `<span class="status-pill">${escapeHtml(status)}</span>`;
-  }
-
-  function renderDuration(display, value) {
-    const label = display || formatDurationMs(value);
-    if (!label || label === "-") {
-      return `<span class="muted">-</span>`;
-    }
-    const raw = Number.parseInt(value, 10);
-    const title = Number.isFinite(raw) ? `${raw} ms` : label;
-    return `<span title="${escapeAttr(title)}">${escapeHtml(label)}</span>`;
-  }
-
-  function formatDurationMs(value) {
-    if (value === null || value === undefined || value === "") return "-";
-    const milliseconds = Number.parseInt(value, 10);
-    if (!Number.isFinite(milliseconds) || milliseconds < 0) return "-";
-    if (milliseconds < 1000) return `${milliseconds} ms`;
-    const seconds = milliseconds / 1000;
-    if (seconds < 60) return `${seconds.toFixed(2)} s`;
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes} min ${(seconds - minutes * 60).toFixed(1)} s`;
-  }
-
-  function renderHostedImages(images) {
-    if (!Array.isArray(images) || images.length === 0) {
-      return `<p class="muted empty-hint"><i data-lucide="info" class="icon-edit"></i>未上传到图床</p>`;
-    }
-    const cards = images.map((image) => {
-      const imageUrl = typeof image === "string" ? image : (image?.url ?? "");
-      const imageName = (typeof image === "object" && image?.filename) ? image.filename : imageUrl;
-      const provider = (typeof image === "object" && image?.provider) ? image.provider : "image-host";
-      return `
-                    <div class="hosted-image-card">
-                      <img class="hosted-image-preview" alt="${escapeAttr(imageName)}" data-image-url="${escapeAttr(imageUrl)}" title="点击放大查看">
-                      <span>
-                        <i data-lucide="image" class="icon-sm"></i>
-                        ${escapeHtml(provider)}
-                      </span>
-                      <div class="hosted-image-url">
-                        <code>${escapeHtml(imageUrl)}</code>
-                        <button class="hosted-image-copy" type="button" data-image-url="${escapeAttr(imageUrl)}" title="复制图片链接" aria-label="复制图片链接">
-                          <i data-lucide="copy" class="icon-sm"></i>
-                        </button>
-                      </div>
-                    </div>`;
-    }).join("");
-    return `<div class="hosted-image-gallery">${cards}</div>`;
-  }
-
-  function renderOutputFiles(files) {
-    if (!Array.isArray(files) || files.length === 0) {
-      return `<p class="muted empty-hint"><i data-lucide="info" class="icon-edit"></i>未留存本地文件 (例如小图直传或非生图请求)</p>`;
-    }
-    return `<ul class="file-list">${files.map((path) => `<li class="file-item"><i data-lucide="image" class="icon-edit icon-success"></i><code>${escapeHtml(path)}</code></li>`).join("")}</ul>`;
-  }
-
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -1774,9 +1413,6 @@
     return escapeHtml(value).replaceAll("`", "&#096;");
   }
 
-  function escapeScriptJson(value) {
-    return JSON.stringify(value ?? null).replaceAll("</", "<\\/");
-  }
 })();
 </script>
 {% endblock %}

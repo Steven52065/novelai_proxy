@@ -85,8 +85,10 @@ async def logs(
         before_id=before_id,
     )
     page_rows = rows[:limit]
+    log_dicts = [usage_log_to_dict(row) for row in page_rows]
     return {
-        "logs": [usage_log_to_dict(row) for row in page_rows],
+        "logs": log_dicts,
+        "rows_html": templates.env.get_template("_log_rows.html").render(logs=log_dicts),
         "limit": limit,
         "before_id": before_id,
         "next_before_id": int(page_rows[-1]["id"]) if page_rows else None,

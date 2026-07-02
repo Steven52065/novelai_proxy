@@ -322,6 +322,10 @@ def test_admin_logs_api_supports_session_pagination(tmp_path: Path, monkeypatch)
         assert first_page.status_code == 200
         first_body = first_page.json()
         assert [row["request_id"] for row in first_body["logs"]] == ["page-log-4", "page-log-3"]
+        assert "rows_html" in first_body
+        assert "page-log" in first_body["rows_html"]
+        assert "log-pagination-user" in first_body["rows_html"]
+        assert 'data-log-column="request_id"' in first_body["rows_html"]
         assert first_body["has_more"] is True
         first_cursor = first_body["next_before_id"]
         assert first_cursor == first_body["logs"][-1]["id"]

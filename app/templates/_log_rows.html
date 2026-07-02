@@ -1,0 +1,164 @@
+{% for log in logs %}
+<tr class="log-row {{ 'is-retry' if log.is_retry_success else '' }} is-{{ log.status }}">
+  <td data-log-column="request_id" class="mono cell-request-id">{{ log.request_id[:8] }}{% if log.is_retry_success %}<span class="retry-mark" title="重试后成功">⟳</span>{% endif %}</td>
+  <td data-log-column="log_level">
+    <span class="level level-{{ (log.log_level or 'INFO')|lower }}">{{ log.log_level or "INFO" }}</span>
+  </td>
+  <td data-log-column="user" class="cell-user">{{ log.user_name }}</td>
+  <td data-log-column="action">
+    <span class="badge badge-action">{{ log.action }}</span>
+  </td>
+  <td data-log-column="upstream" class="mono">
+    {% if log.upstream_id %}
+    <code>{{ log.upstream_id }}</code>
+    {% else %}
+    <span class="muted">-</span>
+    {% endif %}
+  </td>
+  <td data-log-column="model">
+    {% if log.model %}
+    <span class="badge badge-normal badge-sm">{{ log.model }}</span>
+    {% else %}
+    <span class="muted">-</span>
+    {% endif %}
+  </td>
+  <td data-log-column="size" class="mono">
+    {% if log.width and log.height %}
+    <code>{{ log.width }}x{{ log.height }}</code>
+    {% else %}
+    <span class="muted">-</span>
+    {% endif %}
+  </td>
+  <td data-log-column="anlas" class="mono">
+    <span class="anlas-sep">{{ log.estimated_anlas_cost }}</span>
+    <span class="anlas-slash">/</span>
+    <span class="anlas-total">{{ log.final_anlas_cost if log.final_anlas_cost is not none else "-" }}</span>
+  </td>
+  <td data-log-column="status">
+    {% if log.status == 'success' %}
+    <span class="status-pill status-success">{% if log.is_retry_success %}<span class="retry-mark-inline" title="重试后成功">⟳</span>重试成功{% else %}成功{% endif %}</span>
+    {% elif log.status == 'failed' %}
+    <span class="status-pill status-error">失败</span>
+    {% elif log.status == 'running' %}
+    <span class="status-pill status-info">运行中</span>
+    {% else %}
+    <span class="status-pill">{{ log.status }}</span>
+    {% endif %}
+  </td>
+  <td data-log-column="total_ms" class="mono">
+    {% if log.total_ms is not none %}
+    <span title="{{ log.total_ms }} ms">{{ log.total_ms_display }}</span>
+    {% else %}
+    <span class="muted">-</span>
+    {% endif %}
+  </td>
+  <td data-log-column="upstream_ms" class="mono">
+    {% if log.upstream_ms is not none %}
+    <span title="{{ log.upstream_ms }} ms">{{ log.upstream_ms_display }}</span>
+    {% else %}
+    <span class="muted">-</span>
+    {% endif %}
+  </td>
+  <td data-log-column="created_at" class="cell-created" title="UTC 原始时间：{{ log.created_at }}">{{ log.created_at_display }}</td>
+  <td data-log-column="actions">
+    <div class="log-actions">
+      <button class="secondary log-toggle-btn log-btn-sm" data-log-id="{{ log.id }}" type="button" aria-expanded="false">
+        <span class="chevron"><i data-lucide="chevron-right" class="icon-13"></i></span>
+        <span>详情</span>
+      </button>
+      {% if log.has_request_payload %}
+      <button class="secondary btn-replay-log log-btn-sm" data-log-id="{{ log.id }}" type="button">
+        <i data-lucide="repeat-2" class="icon-13"></i>
+        <span>重放</span>
+      </button>
+      {% else %}
+      <span class="muted muted-sm">不可重放</span>
+      {% endif %}
+    </div>
+  </td>
+</tr>
+<tr class="log-detail-row" data-log-id="{{ log.id }}" hidden>
+  <td data-log-colspan colspan="13">
+    <div class="log-details-block" data-log-id="{{ log.id }}">
+      <div class="log-details-content">
+        <div id="replay-result-log-{{ log.id }}" class="replay-result" hidden></div>
+
+        {% if log.error_message %}
+        <div class="error error-flush">
+          <div class="error-row">
+            <i data-lucide="alert-octagon" class="btn-icon-lg"></i>
+            <strong class="error-code">错误 {{ log.error_code }}：</strong>
+            <span>{{ log.error_message }}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        <script type="application/json" id="raw-payload-log-{{ log.id }}" data-has-payload="{{ 'true' if log.has_request_payload else 'false' }}" data-payload-archived="{{ 'true' if log.payload_archived else 'false' }}">{{ log.request_payload | tojson }}</script>
+
+        <div>
+          <div class="payload-toolbar">
+            <span class="detail-label-inline">
+              <i data-lucide="braces" class="icon-edit"></i>
+              请求与响应 Payload 数据 (含智能安全截断)
+            </span>
+            <button class="secondary btn-copy-raw-payload payload-copy-btn" data-log-id="{{ log.id }}" type="button">
+              <i data-lucide="copy" class="icon-12"></i>
+              <span>复制完整 JSON</span>
+            </button>
+          </div>
+          <pre id="pretty-payload-log-{{ log.id }}" class="pretty-payload pretty-payload-initial">点击展开后加载数据...</pre>
+        </div>
+
+        <div>
+          <span class="detail-label">图床图片：</span>
+          {% if log.image_urls %}
+          <div class="hosted-image-gallery">
+            {% for image in log.image_urls %}
+            {% set image_url = image.url if image is mapping else image %}
+            {% set image_name = image.filename if image is mapping and image.filename else image_url %}
+            <div class="hosted-image-card">
+              <img class="hosted-image-preview" alt="{{ image_name }}" data-image-url="{{ image_url }}" title="点击放大查看">
+              <span>
+                <i data-lucide="image" class="icon-sm"></i>
+                {{ image.provider if image is mapping and image.provider else "image-host" }}
+              </span>
+              <div class="hosted-image-url">
+                <code>{{ image_url }}</code>
+                <button class="hosted-image-copy" type="button" data-image-url="{{ image_url }}" title="复制图片链接" aria-label="复制图片链接">
+                  <i data-lucide="copy" class="icon-sm"></i>
+                </button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="muted empty-hint">
+            <i data-lucide="info" class="icon-edit"></i>
+            未上传到图床
+          </p>
+          {% endif %}
+        </div>
+
+        <div>
+          <span class="detail-label">本地生成的图片输出路径：</span>
+          {% if log.output_files %}
+          <ul class="file-list">
+            {% for path in log.output_files %}
+            <li class="file-item">
+              <i data-lucide="image" class="icon-edit icon-success"></i>
+              <code>{{ path }}</code>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted empty-hint">
+            <i data-lucide="info" class="icon-edit"></i>
+            未留存本地文件 (例如小图直传或非生图请求)
+          </p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </td>
+</tr>
+{% endfor %}
