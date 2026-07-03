@@ -33,7 +33,7 @@ from ..users import (
     sync_group_members,
     update_group_with_propagation,
 )
-from .auth import require_admin, require_admin_or_session, require_admin_page_session
+from .auth import require_admin_or_session, require_admin_page_session
 from .common import (
     normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
@@ -47,7 +47,7 @@ from .common import (
 )
 
 
-api_router = APIRouter(prefix="/admin/api")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 
 
@@ -102,13 +102,13 @@ class GroupRateLimitRuleRequest(BaseModel):
     is_active: bool = True
 
 
-@api_router.get("/user-groups", dependencies=[Depends(require_admin)])
+@api_router.get("/user-groups")
 async def list_user_groups(request: Request):
     db: Database = request.app.state.db
     return {"groups": [_group_row_to_dict(row) for row in list_groups(db)]}
 
 
-@api_router.post("/user-groups", dependencies=[Depends(require_admin)])
+@api_router.post("/user-groups")
 async def create_user_group(payload: CreateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
     validate_free_small_daily_limit(payload.free_small_daily_limit_enabled, payload.free_small_daily_limit)
@@ -136,13 +136,13 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
     return {"group_id": group_id, "group": _group_row_to_dict(get_group(db, group_id))}
 
 
-@api_router.get("/user-groups/{group_id}", dependencies=[Depends(require_admin)])
+@api_router.get("/user-groups/{group_id}")
 async def get_user_group(group_id: int, request: Request):
     db: Database = request.app.state.db
     return {"group": _group_row_to_dict(get_group(db, group_id))}
 
 
-@api_router.patch("/user-groups/{group_id}", dependencies=[Depends(require_admin)])
+@api_router.patch("/user-groups/{group_id}")
 async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
     update_input = _build_group_update_input(db, group_id, payload, request)
@@ -158,7 +158,7 @@ async def patch_user_group(group_id: int, payload: UpdateUserGroupRequest, reque
     return {"ok": True, "propagation": summary}
 
 
-@api_router.post("/user-groups/{group_id}/propagation-preview", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/user-groups/{group_id}/propagation-preview")
 async def preview_user_group_propagation(group_id: int, payload: UpdateUserGroupRequest, request: Request):
     db: Database = request.app.state.db
     update_input = _build_group_update_input(db, group_id, payload, request)
@@ -193,7 +193,7 @@ def _build_group_update_input(
     )
 
 
-@api_router.delete("/user-groups/{group_id}", dependencies=[Depends(require_admin)])
+@api_router.delete("/user-groups/{group_id}")
 async def delete_user_group(group_id: int, request: Request):
     db: Database = request.app.state.db
     delete_or_disable_group(db, group_id)
@@ -201,7 +201,7 @@ async def delete_user_group(group_id: int, request: Request):
     return {"ok": True}
 
 
-@api_router.post("/user-groups/{group_id}/sync-members", dependencies=[Depends(require_admin)])
+@api_router.post("/user-groups/{group_id}/sync-members")
 async def sync_user_group_members(group_id: int, payload: SyncGroupMembersRequest, request: Request):
     updated_users = sync_group_members(
         request.app.state.db,
@@ -214,7 +214,7 @@ async def sync_user_group_members(group_id: int, payload: SyncGroupMembersReques
     return {"ok": True, "updated_users": updated_users}
 
 
-@api_router.post("/user-groups/{group_id}/rate-limit-rules", dependencies=[Depends(require_admin)])
+@api_router.post("/user-groups/{group_id}/rate-limit-rules")
 async def add_group_rate_limit_rule(group_id: int, payload: GroupRateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
     get_group(db, group_id)
@@ -228,7 +228,7 @@ async def add_group_rate_limit_rule(group_id: int, payload: GroupRateLimitRuleRe
     return {"ok": True}
 
 
-@api_router.patch("/group-rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
+@api_router.patch("/group-rate-limit-rules/{rule_id}")
 async def update_group_rate_limit_rule(rule_id: int, payload: GroupRateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
     _ensure_group_rate_limit_rule_exists(db, rule_id)
@@ -243,7 +243,7 @@ async def update_group_rate_limit_rule(rule_id: int, payload: GroupRateLimitRule
     return {"ok": True}
 
 
-@api_router.delete("/group-rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
+@api_router.delete("/group-rate-limit-rules/{rule_id}")
 async def delete_group_rate_limit_rule(rule_id: int, request: Request):
     db: Database = request.app.state.db
     _ensure_group_rate_limit_rule_exists(db, rule_id)

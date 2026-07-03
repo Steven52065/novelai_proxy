@@ -32,8 +32,9 @@ from .common import (
 )
 
 
-api_router = APIRouter(prefix="/admin/api")
-web_router = APIRouter(prefix="/admin")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
+web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
+ws_router = APIRouter(prefix="/admin")
 DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
 DASHBOARD_QUEUE_DISPLAY_LIMIT = 80
 ADMIN_UPSTREAM_TEST_PAYLOAD = {
@@ -122,12 +123,12 @@ UPSTREAM_TEST_EXCEPTION_RULES = (
 )
 
 
-@api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/queue")
 async def queue_status(request: Request, upstream_id: str | None = None):
     return queue_status_payload(request, upstream_id=_normalize_upstream_filter(request, upstream_id))
 
 
-@api_router.get("/dashboard", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/dashboard")
 async def dashboard_snapshot(
     request: Request,
     queue_upstream_id: str | None = None,
@@ -142,23 +143,23 @@ async def dashboard_snapshot(
     )
 
 
-@api_router.get("/request-trends", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/request-trends")
 async def request_trends(request: Request, upstream_id: str | None = None):
     db: Database = request.app.state.db
     return _request_trend_stats(db, upstream_id=_normalize_upstream_filter(request, upstream_id))
 
 
-@api_router.get("/stats", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/stats")
 async def admin_stats(request: Request):
     return _dashboard_stats(request)
 
 
-@api_router.get("/upstream-weights", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/upstream-weights")
 async def upstream_weights(request: Request):
     return _upstream_weights_payload(request)
 
 
-@api_router.post("/upstreams/{upstream_id:path}/test", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/upstreams/{upstream_id:path}/test")
 async def test_upstream(request: Request, upstream_id: str):
     started_at = time.monotonic()
     try:
@@ -229,13 +230,13 @@ async def test_upstream(request: Request, upstream_id: str):
     }
 
 
-# websocket 路由与页面共用本 router，会话依赖挂在各 HTML 路由上而非 router 级。
-@web_router.get("", response_class=HTMLResponse, dependencies=[Depends(require_admin_page_session)])
+# websocket 使用独立 router，避免普通页面依赖误套到 WebSocket 握手。
+@web_router.get("", response_class=HTMLResponse)
 async def dashboard_alias(request: Request):
     return await dashboard(request)
 
 
-@web_router.websocket("/ws/dashboard")
+@ws_router.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
     if not _is_same_origin_websocket(websocket):
         logger.warning(
@@ -316,7 +317,7 @@ async def dashboard_ws(websocket: WebSocket):
             await asyncio.gather(event_task, return_exceptions=True)
 
 
-@web_router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_admin_page_session)])
+@web_router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     db: Database = request.app.state.db
     snapshot = dashboard_snapshot_payload(request, include_trends=False)

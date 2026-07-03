@@ -26,7 +26,7 @@ from ..users import (
     reset_api_key,
     update_user as update_user_record,
 )
-from .auth import require_admin, require_admin_or_session, require_admin_page_session
+from .auth import require_admin_or_session, require_admin_page_session
 from .common import (
     format_display_time,
     normalize_image_format_policy_or_400,
@@ -42,7 +42,7 @@ from .common import (
 )
 
 
-api_router = APIRouter(prefix="/admin/api")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 API_KEY_FLASH_COOKIE = "novelai_proxy_api_key_flash"
 _api_key_flash = ApiKeyFlashStore(cookie_name=API_KEY_FLASH_COOKIE, state_attr="admin_api_key_flash_store")
@@ -90,7 +90,7 @@ class BulkUserIdsRequest(BaseModel):
     user_ids: list[int] = Field(..., min_length=1)
 
 
-@api_router.get("/users", dependencies=[Depends(require_admin)])
+@api_router.get("/users")
 async def list_users(request: Request):
     db: Database = request.app.state.db
     rows = db.query_all(
@@ -113,7 +113,7 @@ async def list_users(request: Request):
     return {"users": [user_row_to_dict(row) for row in rows]}
 
 
-@api_router.get("/users/search", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/users/search")
 async def search_users(request: Request, q: str = "", limit: int = 20):
     db: Database = request.app.state.db
     normalized_limit = max(1, min(int(limit), 50))
@@ -137,7 +137,7 @@ async def search_users(request: Request, q: str = "", limit: int = 20):
     return {"users": [row_to_dict(row) for row in rows], "q": query, "limit": normalized_limit}
 
 
-@api_router.post("/users", dependencies=[Depends(require_admin)])
+@api_router.post("/users")
 async def create_user(payload: CreateUserRequest, request: Request):
     db: Database = request.app.state.db
     create_input = _build_create_user_input(db, payload)
@@ -152,7 +152,7 @@ async def create_user(payload: CreateUserRequest, request: Request):
     return {"user_id": created.user_id, "api_key": created.api_key}
 
 
-@api_router.post("/users/bulk-reset-anlas", dependencies=[Depends(require_admin)])
+@api_router.post("/users/bulk-reset-anlas")
 async def bulk_reset_anlas(payload: BulkUserIdsRequest, request: Request):
     db: Database = request.app.state.db
     user_ids = _normalize_bulk_user_ids(db, payload.user_ids)
@@ -164,7 +164,7 @@ async def bulk_reset_anlas(payload: BulkUserIdsRequest, request: Request):
     return {"ok": True, "user_ids": user_ids}
 
 
-@api_router.post("/users/bulk-reset-free-small-daily", dependencies=[Depends(require_admin)])
+@api_router.post("/users/bulk-reset-free-small-daily")
 async def bulk_reset_free_small_daily(payload: BulkUserIdsRequest, request: Request):
     db: Database = request.app.state.db
     user_ids = _normalize_bulk_user_ids(db, payload.user_ids)
@@ -175,7 +175,7 @@ async def bulk_reset_free_small_daily(payload: BulkUserIdsRequest, request: Requ
     return {"ok": True, "user_ids": user_ids}
 
 
-@api_router.patch("/users/{user_id}", dependencies=[Depends(require_admin)])
+@api_router.patch("/users/{user_id}")
 async def update_user(user_id: int, payload: UpdateUserRequest, request: Request):
     db: Database = request.app.state.db
     ensure_user_exists(db, user_id)
@@ -195,7 +195,7 @@ async def update_user(user_id: int, payload: UpdateUserRequest, request: Request
     return {"ok": True}
 
 
-@api_router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])
+@api_router.delete("/users/{user_id}")
 async def delete_user(user_id: int, request: Request):
     db: Database = request.app.state.db
     delete_user_record(db, user_id)
@@ -203,7 +203,7 @@ async def delete_user(user_id: int, request: Request):
     return {"ok": True}
 
 
-@api_router.post("/users/{user_id}/reset-quota", dependencies=[Depends(require_admin)])
+@api_router.post("/users/{user_id}/reset-quota")
 async def reset_user_quota(user_id: int, request: Request):
     ensure_user_exists(request.app.state.db, user_id)
     request.app.state.quota_manager.reset_usage(user_id)
@@ -211,14 +211,14 @@ async def reset_user_quota(user_id: int, request: Request):
     return {"ok": True}
 
 
-@api_router.post("/users/{user_id}/reset-key", dependencies=[Depends(require_admin)])
+@api_router.post("/users/{user_id}/reset-key")
 async def reset_user_key(user_id: int, request: Request):
     db: Database = request.app.state.db
     api_key = reset_api_key(db, user_id)
     return {"user_id": user_id, "api_key": api_key}
 
 
-@api_router.post("/users/{user_id}/rate-limit-rules", dependencies=[Depends(require_admin)])
+@api_router.post("/users/{user_id}/rate-limit-rules")
 async def add_rate_limit_rule(user_id: int, payload: RateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
     ensure_user_exists(db, user_id)
@@ -233,7 +233,7 @@ async def add_rate_limit_rule(user_id: int, payload: RateLimitRuleRequest, reque
     return {"ok": True}
 
 
-@api_router.patch("/rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
+@api_router.patch("/rate-limit-rules/{rule_id}")
 async def update_rate_limit_rule(rule_id: int, payload: RateLimitRuleRequest, request: Request):
     db: Database = request.app.state.db
     _ensure_rate_limit_rule_exists(db, rule_id)
@@ -248,7 +248,7 @@ async def update_rate_limit_rule(rule_id: int, payload: RateLimitRuleRequest, re
     return {"ok": True}
 
 
-@api_router.delete("/rate-limit-rules/{rule_id}", dependencies=[Depends(require_admin)])
+@api_router.delete("/rate-limit-rules/{rule_id}")
 async def delete_rate_limit_rule(rule_id: int, request: Request):
     db: Database = request.app.state.db
     _ensure_rate_limit_rule_exists(db, rule_id)

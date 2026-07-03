@@ -41,6 +41,24 @@ def test_proxy_api_key_cannot_access_admin_api(tmp_path: Path, monkeypatch):
         assert resp.status_code in {401, 403}
 
 
+def test_admin_json_apis_accept_session_cookie(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        for path in (
+            "/admin/api/users",
+            "/admin/api/user-groups",
+            "/admin/api/upstreams",
+            "/admin/api/database/stats",
+            "/admin/api/notifications/pending",
+        ):
+            assert client.get(path).status_code == 200
+
+
 def test_admin_web_pages_redirect_without_session_and_after_logout(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

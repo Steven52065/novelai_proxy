@@ -7,10 +7,10 @@ from .auth import require_admin_or_session
 from .common import format_display_time
 
 
-api_router = APIRouter(prefix="/admin/api")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
 
 
-@api_router.get("/notifications/pending", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/notifications/pending")
 async def pending_notifications(request: Request):
     repo = request.app.state.admin_notifications
     return {
@@ -21,7 +21,7 @@ async def pending_notifications(request: Request):
     }
 
 
-@api_router.post("/notifications/{notification_id}/dismiss", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/notifications/{notification_id}/dismiss")
 async def dismiss_notification(request: Request, notification_id: int):
     repo = request.app.state.admin_notifications
     if not repo.dismiss(notification_id):

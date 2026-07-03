@@ -10,8 +10,8 @@ from .auth import require_admin_or_session, require_admin_page_session
 from .common import format_display_time
 
 
-api_router = APIRouter(prefix="/admin/api")
-web_router = APIRouter(prefix="/admin")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
+web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 
 
 class UpstreamCreateInput(BaseModel):
@@ -30,7 +30,7 @@ class NovelAISettingsUpdateInput(BaseModel):
     upscale_anlas_cost: int | None = Field(default=None, ge=0)
 
 
-@api_router.get("/upstreams", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/upstreams")
 async def list_upstreams(request: Request):
     runtime = request.app.state.upstream_runtime
     repo = runtime.repository
@@ -40,7 +40,7 @@ async def list_upstreams(request: Request):
     }
 
 
-@api_router.post("/upstreams", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/upstreams")
 async def create_upstream(request: Request, payload: UpstreamCreateInput):
     runtime = request.app.state.upstream_runtime
     record = runtime.repository.create(
@@ -52,7 +52,7 @@ async def create_upstream(request: Request, payload: UpstreamCreateInput):
     return {"upstream": _upstream_to_admin_dict(record)}
 
 
-@api_router.patch("/upstreams/{upstream_id:path}", dependencies=[Depends(require_admin_or_session)])
+@api_router.patch("/upstreams/{upstream_id:path}")
 async def update_upstream(request: Request, upstream_id: str, payload: UpstreamUpdateInput):
     runtime = request.app.state.upstream_runtime
     record = runtime.repository.update(
@@ -64,7 +64,7 @@ async def update_upstream(request: Request, upstream_id: str, payload: UpstreamU
     return {"upstream": _upstream_to_admin_dict(record)}
 
 
-@api_router.delete("/upstreams/{upstream_id:path}", dependencies=[Depends(require_admin_or_session)])
+@api_router.delete("/upstreams/{upstream_id:path}")
 async def delete_upstream(request: Request, upstream_id: str):
     runtime = request.app.state.upstream_runtime
     runtime.repository.delete(upstream_id)
@@ -72,7 +72,7 @@ async def delete_upstream(request: Request, upstream_id: str):
     return {"ok": True}
 
 
-@api_router.patch("/novelai-settings", dependencies=[Depends(require_admin_or_session)])
+@api_router.patch("/novelai-settings")
 async def update_novelai_settings(request: Request, payload: NovelAISettingsUpdateInput):
     runtime = request.app.state.upstream_runtime
     settings = runtime.repository.update_settings(
@@ -82,7 +82,7 @@ async def update_novelai_settings(request: Request, payload: NovelAISettingsUpda
     return {"settings": _settings_to_dict(settings)}
 
 
-@web_router.get("/upstreams", response_class=HTMLResponse, dependencies=[Depends(require_admin_page_session)])
+@web_router.get("/upstreams", response_class=HTMLResponse)
 async def upstreams_page(request: Request):
     runtime = request.app.state.upstream_runtime
     repo = runtime.repository

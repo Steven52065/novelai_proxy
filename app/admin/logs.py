@@ -25,7 +25,7 @@ from .auth import require_admin_or_session, require_admin_page_session
 from .common import json_or_none, optional_query_int, row_to_dict, usage_log_to_dict
 
 
-api_router = APIRouter(prefix="/admin/api")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 LOG_STATUS_LABELS = {
     "queued": "排队中",
@@ -47,7 +47,7 @@ class LogFilters:
     status: str | None
 
 
-@api_router.get("/logs", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/logs")
 async def logs(
     request: Request,
     user_id: str | None = None,
@@ -89,7 +89,7 @@ async def logs(
     }
 
 
-@api_router.post("/logs/by-id/{log_id}/replay", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/logs/by-id/{log_id}/replay")
 async def replay_log_by_id(log_id: int, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
     source = usage_logs.get_by_id(log_id)
@@ -98,7 +98,7 @@ async def replay_log_by_id(log_id: int, request: Request):
     return await _replay_log_source(source, request)
 
 
-@api_router.get("/logs/by-id/{log_id}/payload", dependencies=[Depends(require_admin_or_session)])
+@api_router.get("/logs/by-id/{log_id}/payload")
 async def log_payload_by_id(log_id: int, request: Request):
     payload_archive: PayloadArchiveService = request.app.state.payload_archive_service
     usage_logs: UsageLogRepository = request.app.state.usage_logs
@@ -120,7 +120,7 @@ async def log_payload_by_id(log_id: int, request: Request):
     }
 
 
-@web_router.get("/logs/export", dependencies=[Depends(require_admin_page_session)])
+@web_router.get("/logs/export")
 async def export_logs(
     request: Request,
     user_id: str | None = None,
@@ -183,7 +183,7 @@ async def export_logs(
     )
 
 
-@api_router.post("/logs/{request_id}/replay", dependencies=[Depends(require_admin_or_session)])
+@api_router.post("/logs/{request_id}/replay")
 async def replay_log_request(request_id: str, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
     source = usage_logs.get_by_request_id(request_id)

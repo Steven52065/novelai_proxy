@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from .auth import web_router as auth_web_router
 from .dashboard import api_router as dashboard_api_router
 from .dashboard import web_router as dashboard_web_router
+from .dashboard import ws_router as dashboard_ws_router
 from .database import api_router as database_api_router
 from .database import web_router as database_web_router
 from .groups import api_router as groups_api_router
@@ -30,6 +31,7 @@ for child_router in (
     upstreams_api_router,
     notifications_api_router,
     dashboard_web_router,
+    dashboard_ws_router,
     auth_web_router,
     upstreams_web_router,
     users_web_router,

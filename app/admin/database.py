@@ -11,11 +11,11 @@ from pydantic import BaseModel, Field
 from ..database import Database
 from ..payload_archive import PayloadArchiveService
 from ..templating import templates
-from .auth import require_admin, require_admin_page_session
+from .auth import require_admin_or_session, require_admin_page_session
 from .common import format_bytes, format_display_time, row_to_dict
 
 
-api_router = APIRouter(prefix="/admin/api")
+api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 
 
@@ -50,17 +50,17 @@ class ArchivePayloadsRequest(BaseModel):
     max_rows: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
-@api_router.get("/database/stats", dependencies=[Depends(require_admin)])
+@api_router.get("/database/stats")
 async def database_stats(request: Request):
     return await asyncio.to_thread(_database_stats, request)
 
 
-@api_router.post("/database/cleanup-logs", dependencies=[Depends(require_admin)])
+@api_router.post("/database/cleanup-logs")
 async def cleanup_logs(payload: CleanupLogsRequest, request: Request):
     return await asyncio.to_thread(_cleanup_logs, request, payload.older_than_days, payload.statuses)
 
 
-@api_router.post("/database/clear-payloads", dependencies=[Depends(require_admin)])
+@api_router.post("/database/clear-payloads")
 async def clear_payloads(payload: ClearPayloadsRequest, request: Request):
     return await asyncio.to_thread(
         _clear_payloads,
@@ -72,12 +72,12 @@ async def clear_payloads(payload: ClearPayloadsRequest, request: Request):
     )
 
 
-@api_router.post("/database/archive-payloads", dependencies=[Depends(require_admin)])
+@api_router.post("/database/archive-payloads")
 async def archive_payloads(payload: ArchivePayloadsRequest, request: Request):
     return await asyncio.to_thread(_archive_payloads, request, hot_days=payload.hot_days, max_rows=payload.max_rows)
 
 
-@api_router.post("/database/vacuum", dependencies=[Depends(require_admin)])
+@api_router.post("/database/vacuum")
 async def vacuum_database(request: Request):
     return await asyncio.to_thread(_vacuum_database, request)
 
