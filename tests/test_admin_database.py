@@ -570,6 +570,67 @@ def test_admin_database_cleanup_deletes_logs_in_batches_and_updates_dashboard_st
         assert int(after_stats["count"]) == 0
 
 
+def test_admin_database_cleanup_uses_same_batch_for_archive_scan_and_delete(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    archive_select_sql: list[str] = []
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-cleanup-target-batch", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        _insert_precomputed_usage_log(
+            app.state.db,
+            request_id="cleanup-target-batch",
+            user_id=user_id,
+            status="failed",
+            request_payload='{"input":"cleanup target batch","parameters":{"steps":1}}',
+            created_at=old_time,
+        )
+        archive_result = app.state.payload_archive_service.archive_due_payloads(
+            now=datetime.now(timezone.utc),
+            hot_days=7,
+        )
+        assert archive_result["archived_payloads"] == 1
+
+        original_transaction = app.state.db.transaction
+
+        class RecordingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, params=()):
+                if "SELECT DISTINCT r.archive_id" in sql:
+                    archive_select_sql.append(sql)
+                return self._conn.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        @contextmanager
+        def transaction_with_recording(*args, **kwargs):
+            with original_transaction(*args, **kwargs) as conn:
+                yield RecordingConnection(conn)
+
+        monkeypatch.setattr(app.state.db, "transaction", transaction_with_recording)
+
+        cleanup_resp = client.post(
+            "/admin/api/database/cleanup-logs",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 30, "statuses": ["failed"]},
+        )
+
+        assert cleanup_resp.status_code == 200
+        assert cleanup_resp.json()["deleted_logs"] == 1
+        assert archive_select_sql
+        assert all("temp_log_cleanup_targets" in sql for sql in archive_select_sql)
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_logs")["count"] == 0
+
+
 def test_admin_database_cleanup_prevents_archive_insert_between_scan_and_delete(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

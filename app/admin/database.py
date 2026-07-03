@@ -255,34 +255,46 @@ def _cleanup_logs(request: Request, older_than_days: int, statuses: list[str]) -
     while True:
         batch_params = (*params, batch_size)
         with db.transaction() as conn:
-            archive_rows = conn.execute(
-                f"""
-                SELECT DISTINCT r.archive_id
-                FROM usage_logs l
-                JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
-                WHERE l.id IN (
-                    SELECT id
-                    FROM usage_logs
-                    WHERE {where_sql}
-                    LIMIT ?
+            conn.execute(
+                """
+                CREATE TEMP TABLE IF NOT EXISTS temp_log_cleanup_targets (
+                    log_id INTEGER PRIMARY KEY
                 )
-                """,
-                batch_params,
-            ).fetchall()
-            archive_ids.update(int(row["archive_id"]) for row in archive_rows)
-            cursor = conn.execute(
+                """
+            )
+            conn.execute("DELETE FROM temp_log_cleanup_targets")
+            conn.execute(
                 f"""
-                DELETE FROM usage_logs
-                WHERE id IN (
-                    SELECT id
-                    FROM usage_logs
-                    WHERE {where_sql}
-                    LIMIT ?
-                )
+                INSERT OR IGNORE INTO temp_log_cleanup_targets (log_id)
+                SELECT id
+                FROM usage_logs
+                WHERE {where_sql}
+                ORDER BY id
+                LIMIT ?
                 """,
                 batch_params,
             )
-            batch_deleted = int(cursor.rowcount)
+            target_row = conn.execute("SELECT COUNT(*) AS count FROM temp_log_cleanup_targets").fetchone()
+            target_count = int(target_row["count"] or 0)
+            if target_count <= 0:
+                batch_deleted = 0
+            else:
+                archive_rows = conn.execute(
+                    """
+                    SELECT DISTINCT r.archive_id
+                    FROM usage_log_payload_archive_refs r
+                    JOIN temp_log_cleanup_targets t ON t.log_id = r.log_id
+                    """
+                ).fetchall()
+                archive_ids.update(int(row["archive_id"]) for row in archive_rows)
+                cursor = conn.execute(
+                    """
+                    DELETE FROM usage_logs
+                    WHERE id IN (SELECT log_id FROM temp_log_cleanup_targets)
+                    """
+                )
+                batch_deleted = int(cursor.rowcount)
+            conn.execute("DELETE FROM temp_log_cleanup_targets")
         if batch_deleted <= 0:
             break
         deleted_logs += batch_deleted

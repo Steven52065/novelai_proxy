@@ -18,7 +18,11 @@ def verify_payload(token: str | None, secret: str) -> dict[str, Any] | None:
     if not token or "." not in token:
         return None
     body, signature = token.rsplit(".", 1)
-    expected = _b64(hmac.new(secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256).digest())
+    try:
+        body_bytes = body.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+    expected = _b64(hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).digest())
     if not hmac.compare_digest(signature, expected):
         return None
     try:

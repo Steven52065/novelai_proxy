@@ -97,6 +97,10 @@ def test_admin_session_rejects_legacy_expired_and_tampered_tokens(tmp_path: Path
             assert resp.headers["location"] == "/admin/login"
 
 
+def test_signed_token_rejects_non_ascii_body_without_error():
+    assert verify_payload("\u00e9.signature", "secret") is None
+
+
 def test_admin_session_refresh_extends_expiration(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     import app.signed_tokens as signed_tokens
