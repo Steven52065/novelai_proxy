@@ -63,18 +63,22 @@ class Database:
             return self.conn.execute(sql, params).fetchall()
 
     def vacuum(self) -> dict[str, int | bool]:
-        with self._lock:
-            before = self._total_file_size()
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            self.conn.execute("VACUUM")
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            after = self._total_file_size()
-            return {
-                "ok": True,
-                "before_bytes": before,
-                "after_bytes": after,
-                "reclaimed_bytes": max(before - after, 0),
-            }
+        before = self._total_file_size()
+        conn = sqlite3.connect(self.path)
+        try:
+            conn.execute("PRAGMA busy_timeout = 60000")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+        after = self._total_file_size()
+        return {
+            "ok": True,
+            "before_bytes": before,
+            "after_bytes": after,
+            "reclaimed_bytes": max(before - after, 0),
+        }
 
     def close(self) -> None:
         with self._lock:
