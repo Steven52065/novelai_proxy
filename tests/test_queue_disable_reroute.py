@@ -112,7 +112,7 @@ def test_disabled_upstream_pending_user_request_reroutes_to_enabled_target():
 
             queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=lambda: upstream_b)])
 
-            assert queue._queues["opus-a"].qsize() == 0
+            assert "opus-a" not in queue._queues
             assert await asyncio.wait_for(second, timeout=1) == b"rerouted-to-b"
             assert upstream_b.started_labels == ["rerouted-to-b"]
 
@@ -121,6 +121,116 @@ def test_disabled_upstream_pending_user_request_reroutes_to_enabled_target():
             assert upstream_a.started_labels == ["running-on-a"]
         finally:
             release_a.set()
+            await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_removed_upstream_queue_worker_is_stopped():
+    async def run_test():
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=LabelUpstream)],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        old_queue = queue._queues["opus-a"]
+        assert old_queue._worker is not None
+
+        queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=LabelUpstream)])
+
+        assert "opus-a" not in queue._queues
+        await _wait_until_async(lambda: old_queue._worker is not None and old_queue._worker.done())
+        await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_removed_upstream_inflight_request_completes_before_worker_stops():
+    async def run_test():
+        release_a = threading.Event()
+        upstream_a = FirstRequestBlockingLabelUpstream(release_a)
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream_a)],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        old_queue = queue._queues["opus-a"]
+        try:
+            first = asyncio.create_task(
+                queue.submit(
+                    request_id="removed-inflight",
+                    user_id=1,
+                    tier="normal",
+                    action="generate",
+                    logging_config=object(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({"label": "removed-inflight"}),
+                    process_zip_response=False,
+                    manage_quota=False,
+                )
+            )
+            await _wait_until_async(lambda: upstream_a.started_labels == ["removed-inflight"])
+
+            queue.sync_targets([])
+
+            assert "opus-a" not in queue._queues
+            release_a.set()
+            assert await asyncio.wait_for(first, timeout=1) == b"removed-inflight"
+            await _wait_until_async(lambda: old_queue._worker is not None and old_queue._worker.done())
+        finally:
+            release_a.set()
+            await queue.stop()
+
+    asyncio.run(run_test())
+
+
+def test_removed_upstream_can_be_readded_with_new_queue():
+    async def run_test():
+        upstream_a_old = LabelUpstream()
+        upstream_a_new = LabelUpstream()
+        queue = RoutingProxyQueue(
+            targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream_a_old)],
+            quota_manager=object(),
+            usage_logs=_NoopUsageLogs(),
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+        )
+        queue.start()
+        old_queue = queue._queues["opus-a"]
+        try:
+            queue.sync_targets([])
+            await _wait_until_async(lambda: old_queue._worker is not None and old_queue._worker.done())
+
+            queue.sync_targets([UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream_a_new)])
+
+            assert queue._queues["opus-a"] is not old_queue
+            result = await queue.submit(
+                request_id="readded-upstream",
+                user_id=1,
+                tier="normal",
+                action="generate",
+                logging_config=object(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({"label": "readded-upstream"}),
+                process_zip_response=False,
+                manage_quota=False,
+            )
+            assert result == b"readded-upstream"
+            assert upstream_a_old.started_labels == []
+            assert upstream_a_new.started_labels == ["readded-upstream"]
+        finally:
             await queue.stop()
 
     asyncio.run(run_test())
@@ -176,6 +286,7 @@ def test_disabled_upstream_pending_user_request_fails_when_only_allowed_target_i
 
             queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=lambda: upstream_b)])
 
+            assert "opus-a" not in queue._queues
             with pytest.raises(NoAvailableUpstream):
                 await asyncio.wait_for(second, timeout=1)
             assert upstream_b.started_labels == []
@@ -236,6 +347,7 @@ def test_disabled_upstream_pending_user_request_fails_when_no_upstream_remains()
 
             queue.sync_targets([])
 
+            assert "opus-a" not in queue._queues
             with pytest.raises(NoAvailableUpstream):
                 await asyncio.wait_for(second, timeout=1)
 
@@ -310,6 +422,7 @@ def test_disabled_upstream_pending_user_request_fails_when_dispatch_queue_is_ful
 
         queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=LabelUpstream)])
 
+        assert "opus-a" not in queue._queues
         with pytest.raises(QueueFull):
             await original_future
         with pytest.raises(UpstreamItemRerouted):
@@ -361,6 +474,7 @@ def test_disabled_upstream_pending_admin_probe_fails_without_reroute():
 
             queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=lambda: upstream_b)])
 
+            assert "opus-a" not in queue._queues
             with pytest.raises(NoAvailableUpstream):
                 await asyncio.wait_for(probe, timeout=1)
             assert upstream_b.started_labels == []
@@ -441,6 +555,7 @@ def test_disabled_upstream_rerouted_retry_attempt_does_not_duplicate_retry_log()
 
             queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=lambda: upstream_b)])
 
+            assert "opus-a" not in queue._queues
             assert await asyncio.wait_for(original_future, timeout=1) == b"retry-reroute"
             assert upstream_b.started_labels == ["retry-reroute"]
             assert usage_logs.retry_attempts == [
@@ -520,6 +635,7 @@ def test_disabled_upstream_rerouted_retry_attempt_is_rejected_when_no_upstream_r
 
             queue.sync_targets([])
 
+            assert "opus-a" not in queue._queues
             with pytest.raises(APIError):
                 await asyncio.wait_for(original_future, timeout=1)
             assert usage_logs.retry_attempts == [
@@ -610,6 +726,7 @@ def test_disabled_upstream_rerouted_retry_attempt_is_rejected_when_dispatch_queu
 
         queue.sync_targets([UpstreamQueueTarget(id="opus-b", client_provider=LabelUpstream)])
 
+        assert "opus-a" not in queue._queues
         with pytest.raises(QueueFull):
             await original_future
         with pytest.raises(UpstreamItemRerouted):

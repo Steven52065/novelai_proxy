@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import dataclasses
 import itertools
 import random
@@ -91,6 +92,9 @@ class RoutingProxyQueue:
         self._dispatch_queue = PriorityWorkQueue(maxsize=dispatch_max_queue_size)
         self._dispatch_worker: asyncio.Task | None = None
         self._dispatch_running_item: QueueItem | None = None
+        self._removed_queue_stop_tasks: set[asyncio.Task] = set()
+        self._removed_queue_stop_futures: set[concurrent.futures.Future] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._accepting = True
         self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
@@ -113,6 +117,7 @@ class RoutingProxyQueue:
 
     def start(self) -> None:
         self._started = True
+        self._loop = asyncio.get_running_loop()
         if self._dispatch_worker is None or self._dispatch_worker.done():
             self._dispatch_worker = asyncio.create_task(self._run_dispatcher())
         for queue in self._queues.values():
@@ -128,7 +133,13 @@ class RoutingProxyQueue:
                 await self._dispatch_worker
             except asyncio.CancelledError:
                 pass
-        await asyncio.gather(*(queue.stop(drain=drain) for queue in self._queues.values()))
+        stop_tasks = [queue.stop(drain=drain) for queue in self._queues.values()]
+        if self._removed_queue_stop_tasks:
+            stop_tasks.extend(asyncio.shield(task) for task in tuple(self._removed_queue_stop_tasks))
+        if self._removed_queue_stop_futures:
+            stop_tasks.extend(asyncio.wrap_future(future) for future in tuple(self._removed_queue_stop_futures))
+        if stop_tasks:
+            await asyncio.gather(*stop_tasks)
         self._started = False
 
     def sync_targets(self, targets: list[UpstreamQueueTarget]) -> None:
@@ -151,6 +162,9 @@ class RoutingProxyQueue:
 
         for upstream_id in removed_target_ids:
             self._reroute_pending_from_disabled_upstream(upstream_id)
+            queue = self._queues.pop(upstream_id, None)
+            if queue is not None:
+                self._track_removed_queue_stop(queue)
 
         self._notify_change()
 
@@ -234,6 +248,31 @@ class RoutingProxyQueue:
             on_change=self._on_change,
             on_api_error=self._on_upstream_api_error,
         )
+
+    def _track_removed_queue_stop(self, queue: ProxyQueue) -> None:
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not None:
+            task = running_loop.create_task(queue.stop(drain=True))
+            self._removed_queue_stop_tasks.add(task)
+            task.add_done_callback(self._discard_removed_queue_stop_task)
+            return
+        if self._loop is not None and self._loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(queue.stop(drain=True), self._loop)
+            self._removed_queue_stop_futures.add(future)
+            future.add_done_callback(self._discard_removed_queue_stop_future)
+
+    def _discard_removed_queue_stop_task(self, task: asyncio.Task) -> None:
+        self._removed_queue_stop_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    def _discard_removed_queue_stop_future(self, future: concurrent.futures.Future) -> None:
+        self._removed_queue_stop_futures.discard(future)
+        if not future.cancelled():
+            future.exception()
 
     def _get_total_queue_length(self) -> int:
         return sum(
