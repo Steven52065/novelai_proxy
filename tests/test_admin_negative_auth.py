@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.admin.auth import SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SECONDS
+from app.signed_tokens import sign_payload, verify_payload
 from helpers import write_test_config
 
 
@@ -74,3 +78,62 @@ def test_admin_login_failure_does_not_set_session_cookie(tmp_path: Path, monkeyp
 
         assert resp.status_code == 401
         assert "novelai_proxy_admin" not in resp.headers.get("set-cookie", "")
+
+
+def test_admin_session_rejects_legacy_expired_and_tampered_tokens(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    secret = _admin_session_secret("admin123")
+    expired = sign_payload({"exp": 1, "sub": "admin"}, secret)
+    valid = sign_payload({"exp": 4_102_444_800, "sub": "admin"}, secret)
+    tampered = f"{valid[:-1]}{'a' if valid[-1] != 'a' else 'b'}"
+
+    with TestClient(app) as client:
+        for token in ("admin:legacy-signature", expired, tampered):
+            client.cookies.set(SESSION_COOKIE, token)
+            resp = client.get("/admin/users", follow_redirects=False)
+            assert resp.status_code == 303
+            assert resp.headers["location"] == "/admin/login"
+
+
+def test_admin_session_refresh_extends_expiration(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    import app.signed_tokens as signed_tokens
+    from app.main import app
+
+    now = 1_700_000_000
+    monkeypatch.setattr(signed_tokens.time, "time", lambda: now)
+    secret = _admin_session_secret("admin123")
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"}, follow_redirects=False)
+        assert login.status_code == 303
+        first_payload = verify_payload(client.cookies.get(SESSION_COOKIE), secret)
+        assert first_payload["exp"] == now + SESSION_COOKIE_MAX_AGE_SECONDS
+
+        now += 60
+        resp = client.get("/admin/users")
+        assert resp.status_code == 200
+        refreshed_payload = verify_payload(client.cookies.get(SESSION_COOKIE), secret)
+        assert refreshed_payload["exp"] == now + SESSION_COOKIE_MAX_AGE_SECONDS
+        assert refreshed_payload["exp"] > first_payload["exp"]
+
+
+def test_admin_session_cookie_sets_secure_on_https(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app, base_url="https://testserver") as client:
+        resp = client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert "secure" in resp.headers["set-cookie"].lower()
+
+
+def _admin_session_secret(password: str) -> str:
+    return hmac.new(password.encode("utf-8"), b"novelai-proxy-admin-session-v1", hashlib.sha256).hexdigest()

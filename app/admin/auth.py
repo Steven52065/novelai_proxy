@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
@@ -7,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from ..security import constant_time_equal
+from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 
 
@@ -73,9 +75,10 @@ async def logout():
 
 def session_value(request: Request) -> str:
     config = request.app.state.config
-    payload = config.admin.username
-    signature = hmac.digest(config.admin.password.encode(), payload.encode(), "sha256").hex()
-    return f"{payload}:{signature}"
+    return sign_payload(
+        expiring_payload(SESSION_COOKIE_MAX_AGE_SECONDS, sub=config.admin.username),
+        _admin_session_secret(request),
+    )
 
 
 def set_admin_session_cookie(response: Response, request: Request) -> None:
@@ -85,6 +88,7 @@ def set_admin_session_cookie(response: Response, request: Request) -> None:
         max_age=SESSION_COOKIE_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
+        secure=request.url.scheme == "https",
     )
 
 
@@ -94,6 +98,15 @@ def valid_admin_session(request: Request) -> bool:
 
 def has_admin_session(request: Request) -> bool:
     cookie = request.cookies.get(SESSION_COOKIE)
-    if not cookie:
+    payload = verify_payload(cookie, _admin_session_secret(request))
+    if payload is None:
         return False
-    return hmac.compare_digest(cookie, session_value(request))
+    sub = payload.get("sub")
+    return isinstance(sub, str) and hmac.compare_digest(sub, request.app.state.config.admin.username)
+
+
+def _admin_session_secret(request: Request) -> str:
+    # Admin sessions are intentionally derived from the current admin password:
+    # changing that password revokes every outstanding admin cookie.
+    password = request.app.state.config.admin.password.encode("utf-8")
+    return hmac.new(password, b"novelai-proxy-admin-session-v1", hashlib.sha256).hexdigest()

@@ -25,9 +25,15 @@ def verify_payload(token: str | None, secret: str) -> dict[str, Any] | None:
         payload = json.loads(_unb64(body))
     except (ValueError, json.JSONDecodeError):
         return None
-    if int(payload.get("exp", 0)) < int(time.time()):
+    if not isinstance(payload, dict):
         return None
-    return payload if isinstance(payload, dict) else None
+    try:
+        expires_at = int(payload.get("exp", 0))
+    except (TypeError, ValueError):
+        return None
+    if expires_at < int(time.time()):
+        return None
+    return payload
 
 
 def expiring_payload(seconds: int, **values: Any) -> dict[str, Any]:

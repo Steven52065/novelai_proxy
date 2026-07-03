@@ -30,11 +30,11 @@ from ..image_format_policies import (
 )
 from ..logging_utils import json_dumps, logger
 from ..quota_manager import QuotaManager
+from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 from ..users import reset_api_key
 from .accounts import DiscordProfile, login_or_register_discord_user
 from .discord import DiscordOAuthClient
-from .session import expiring_payload, sign_payload, verify_payload
 
 
 router = APIRouter()
