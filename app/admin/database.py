@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -56,7 +57,7 @@ async def database_stats(request: Request):
 
 @api_router.post("/database/cleanup-logs", dependencies=[Depends(require_admin)])
 async def cleanup_logs(payload: CleanupLogsRequest, request: Request):
-    return _cleanup_logs(request, payload.older_than_days, payload.statuses)
+    return await asyncio.to_thread(_cleanup_logs, request, payload.older_than_days, payload.statuses)
 
 
 @api_router.post("/database/clear-payloads", dependencies=[Depends(require_admin)])
@@ -100,7 +101,7 @@ async def cleanup_logs_form(
     older_than_days: int = Form(30),
     statuses: list[str] | None = Form(None),
 ):
-    result = _cleanup_logs(request, older_than_days, statuses or [])
+    result = await asyncio.to_thread(_cleanup_logs, request, older_than_days, statuses or [])
     return RedirectResponse(f"/admin/database?message=已删除 {result['deleted_logs']} 条日志记录", status_code=303)
 
 
@@ -244,19 +245,44 @@ def _cleanup_logs(request: Request, older_than_days: int, statuses: list[str]) -
     if valid_statuses:
         where.append(f"status IN ({','.join('?' for _ in valid_statuses)})")
         params.extend(valid_statuses)
-    with db.transaction() as conn:
-        archive_rows = conn.execute(
-            f"""
-            SELECT DISTINCT r.archive_id
-            FROM usage_logs l
-            JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
-            WHERE {' AND '.join(where)}
-            """,
-            tuple(params),
-        ).fetchall()
-        archive_ids = [int(row["archive_id"]) for row in archive_rows]
-        cursor = conn.execute(f"DELETE FROM usage_logs WHERE {' AND '.join(where)}", tuple(params))
-        deleted_logs = int(cursor.rowcount)
+    where_sql = " AND ".join(where)
+    archive_ids: set[int] = set()
+    deleted_logs = 0
+    batch_size = 500
+    while True:
+        batch_params = (*params, batch_size)
+        with db.transaction() as conn:
+            archive_rows = conn.execute(
+                f"""
+                SELECT DISTINCT r.archive_id
+                FROM usage_logs l
+                JOIN usage_log_payload_archive_refs r ON r.log_id = l.id
+                WHERE l.id IN (
+                    SELECT id
+                    FROM usage_logs
+                    WHERE {where_sql}
+                    LIMIT ?
+                )
+                """,
+                batch_params,
+            ).fetchall()
+            archive_ids.update(int(row["archive_id"]) for row in archive_rows)
+            cursor = conn.execute(
+                f"""
+                DELETE FROM usage_logs
+                WHERE id IN (
+                    SELECT id
+                    FROM usage_logs
+                    WHERE {where_sql}
+                    LIMIT ?
+                )
+                """,
+                batch_params,
+            )
+            batch_deleted = int(cursor.rowcount)
+        if batch_deleted <= 0:
+            break
+        deleted_logs += batch_deleted
     compact_result = payload_archive.compact_archives(archive_ids)
     return {
         "ok": True,

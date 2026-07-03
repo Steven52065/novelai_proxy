@@ -521,6 +521,55 @@ def test_admin_database_management_deletes_old_logs_by_status(tmp_path: Path, mo
         assert {"old-success-log", "recent-rejected-log"} <= remaining_ids
 
 
+def test_admin_database_cleanup_deletes_logs_in_batches_and_updates_dashboard_stats(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+
+    with TestClient(app) as client:
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "db-batch-delete-user", "tier": "normal", "anlas_total": 100},
+        ).json()["user_id"]
+        with app.state.db.transaction() as conn:
+            conn.executemany(
+                """
+                INSERT INTO usage_logs (
+                    request_id, user_id, action, estimated_anlas_cost, status, log_level, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (f"old-batch-log-{index}", user_id, "generate", 0, "failed", "INFO", old_time)
+                    for index in range(1200)
+                ],
+            )
+
+        before_stats = app.state.db.query_one(
+            "SELECT COALESCE(SUM(request_count), 0) AS count FROM dashboard_hourly_stats"
+        )
+        assert int(before_stats["count"]) == 1200
+
+        cleanup_resp = client.post(
+            "/admin/api/database/cleanup-logs",
+            auth=("admin", "admin123"),
+            json={"older_than_days": 30, "statuses": ["failed"]},
+        )
+
+        assert cleanup_resp.status_code == 200
+        assert cleanup_resp.json()["deleted_logs"] == 1200
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_logs")["count"] == 0
+        after_stats = app.state.db.query_one(
+            "SELECT COALESCE(SUM(request_count), 0) AS count FROM dashboard_hourly_stats"
+        )
+        assert int(after_stats["count"]) == 0
+
+
 def test_admin_database_cleanup_prevents_archive_insert_between_scan_and_delete(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
