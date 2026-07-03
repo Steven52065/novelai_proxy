@@ -35,7 +35,7 @@ from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dum
 from .payload_archive import PayloadArchiveService
 from .proxy.routes import router as proxy_router
 from .proxy.service import ProxyRequestService
-from .queue_manager import RoutingProxyQueue, UpstreamQueueTarget
+from .queue_manager import RoutingProxyQueue
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
 from .self_service.discord import DiscordOAuthClient
@@ -79,17 +79,9 @@ async def lifespan(app: FastAPI):
         notifications=admin_notifications,
     )
     upstream_clients = upstream_runtime.sync()
-    default_upstream_id = next(iter(upstream_clients), None)
+    default_upstream_id = app.state.default_upstream_id
     proxy_queue = RoutingProxyQueue(
-        targets=[
-            UpstreamQueueTarget(
-                id=upstream_id,
-                client_provider=lambda upstream_id=upstream_id: app.state.upstream
-                if upstream_id == app.state.default_upstream_id
-                else app.state.upstream_clients[upstream_id],
-            )
-            for upstream_id in upstream_clients
-        ],
+        targets=upstream_runtime.queue_targets(),
         quota_manager=quota_manager,
         usage_logs=usage_logs,
         max_queue_size=config.queue.max_queue_size,
@@ -138,7 +130,6 @@ async def lifespan(app: FastAPI):
         logging_config=config.logging,
     )
 
-    upstream_runtime.sync()
     proxy_queue.start()
     background_tasks: list[asyncio.Task] = []
     if config.database.payload_archive.enabled:

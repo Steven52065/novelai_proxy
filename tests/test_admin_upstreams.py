@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
-from helpers import PAYLOAD, FakeUpstream, write_test_config
+from helpers import PAYLOAD, FakeUpstream, write_test_config, write_test_config_with_upstreams
 
 
 def test_admin_upstreams_list_masks_tokens(tmp_path: Path, monkeypatch):
@@ -51,6 +51,25 @@ def test_admin_upstream_update_replaces_runtime_client_without_restarting(tmp_pa
         assert "pst-new-runtime-token" not in resp.text
         assert app.state.upstream_clients["default"].api_key == "pst-new-runtime-token"
         assert app.state.upstream_clients["default"] is not before
+
+
+def test_upstream_runtime_client_provider_reads_current_app_state(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))
+    from app.main import app
+
+    with TestClient(app):
+        runtime = app.state.upstream_runtime
+        default_provider = runtime.client_provider_for("opus-a")
+        secondary_provider = runtime.client_provider_for("opus-b")
+        default_fake = FakeUpstream()
+        secondary_fake = FakeUpstream()
+
+        app.state.upstream = default_fake
+        app.state.upstream_clients["opus-b"] = secondary_fake
+
+        assert app.state.default_upstream_id == "opus-a"
+        assert default_provider() is default_fake
+        assert secondary_provider() is secondary_fake
 
 
 def test_admin_upstream_create_registers_queue_target_immediately(tmp_path: Path, monkeypatch):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException
 
@@ -291,6 +291,24 @@ class UpstreamRuntimeManager:
     def get_settings(self) -> NovelAISettings:
         return self.repository.get_settings()
 
+    def client_provider_for(self, upstream_id: str) -> Callable[[], Any]:
+        def provider() -> Any:
+            # Keep runtime app.state lookup compatibility for tests and admin hot-swaps.
+            if upstream_id == self._app_state.default_upstream_id:
+                return self._app_state.upstream
+            return self._app_state.upstream_clients[upstream_id]
+
+        return provider
+
+    def queue_targets(self) -> list[UpstreamQueueTarget]:
+        return [
+            UpstreamQueueTarget(
+                id=upstream_id,
+                client_provider=self.client_provider_for(upstream_id),
+            )
+            for upstream_id in getattr(self._app_state, "upstream_clients", {})
+        ]
+
     def _replace_state_clients(self, clients: dict[str, UpstreamClient]) -> None:
         self._app_state.upstream_clients = clients
         default_upstream_id = next(iter(clients), None)
@@ -302,14 +320,4 @@ class UpstreamRuntimeManager:
         sync_targets = getattr(queue, "sync_targets", None)
         if not callable(sync_targets):
             return
-        sync_targets(
-            [
-                UpstreamQueueTarget(
-                    id=upstream_id,
-                    client_provider=lambda upstream_id=upstream_id: self._app_state.upstream
-                    if upstream_id == self._app_state.default_upstream_id
-                    else self._app_state.upstream_clients[upstream_id],
-                )
-                for upstream_id in getattr(self._app_state, "upstream_clients", {})
-            ]
-        )
+        sync_targets(self.queue_targets())
