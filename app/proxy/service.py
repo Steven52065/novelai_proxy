@@ -16,17 +16,17 @@ from ..free_small_daily_limit import (
     FreeSmallDailyReservation,
 )
 from ..logging_utils import json_dumps, logger
-from ..queue_manager import (
+from ..queue_errors import (
     NoAvailableUpstream,
     QueueClosed,
     QueueFull,
-    RoutingProxyQueue,
     UpstreamExecutionTimeout,
     UserUnavailable,
 )
 from ..quota_manager import InsufficientQuota, QuotaManager
 from ..rate_limiter import RateLimiter
 from ..request_accounting import RequestAccounting
+from ..routing_queue import RoutingProxyQueue
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 

@@ -11,7 +11,8 @@ from novelai_python._exceptions import APIError
 import pytest
 
 from helpers import PAYLOAD, BlockingFakeUpstream, FakeUpstream, write_test_config_with_upstreams
-from app.queue_manager import RoutingProxyQueue, UpstreamQueueTarget
+from app.queue_models import UpstreamQueueTarget
+from app.routing_queue import RoutingProxyQueue
 
 
 def test_multi_upstream_round_robin_routes_requests(tmp_path: Path, monkeypatch):
@@ -177,7 +178,7 @@ def test_adaptive_weighted_random_lowers_failed_upstream_weight(monkeypatch):
             adaptive_alpha=0.5,
             adaptive_min_weight=0.15,
         )
-        monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.56)
+        monkeypatch.setattr("app.routing_queue.random.uniform", lambda _start, _end: 0.56)
 
         assert queue._candidate_upstreams(None, advance_round_robin=True)[0] == "opus-a"
 
@@ -204,7 +205,7 @@ def test_adaptive_weighted_random_keeps_minimum_weight_for_failed_upstream(monke
         adaptive_min_weight=0.15,
     )
     queue._adaptive_scores["opus-b"].score = 1
-    monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.1)
+    monkeypatch.setattr("app.routing_queue.random.uniform", lambda _start, _end: 0.1)
 
     assert queue._candidate_upstreams(None, advance_round_robin=True)[0] == "opus-a"
 
@@ -223,7 +224,7 @@ def test_select_client_does_not_use_adaptive_weighted_random_for_query_routes(mo
         adaptive_min_weight=0.15,
     )
     queue._adaptive_scores["opus-b"].score = 1
-    monkeypatch.setattr("app.queue_manager.random.uniform", lambda _start, _end: 0.2)
+    monkeypatch.setattr("app.routing_queue.random.uniform", lambda _start, _end: 0.2)
 
     assert queue.select_client() == "client-a"
 

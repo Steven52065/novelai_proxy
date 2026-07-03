@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from helpers import PAYLOAD, FailingThenSuccessfulUpstream, FakeUpstream, write_test_config
-from app.queue_manager import ProxyQueue
+from app.upstream_queue import ProxyQueue
 from queue_manager_helpers import _NoopUsageLogs
 
 
@@ -70,7 +70,6 @@ def test_interval_delay_counts_idle_time():
     async def run_test():
         queue = ProxyQueue(
             upstream_id="opus-a",
-            quota_manager=object(),
             usage_logs=_NoopUsageLogs(),
             max_queue_size=2,
             upstream_interval_min_seconds=0.05,
@@ -91,7 +90,6 @@ def test_error_extra_delay_counts_idle_time():
     async def run_test():
         queue = ProxyQueue(
             upstream_id="opus-a",
-            quota_manager=object(),
             usage_logs=_NoopUsageLogs(),
             max_queue_size=2,
             upstream_interval_min_seconds=0.05,

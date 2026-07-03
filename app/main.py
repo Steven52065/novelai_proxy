@@ -16,11 +16,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .admin.routes import (
+from .admin.auth import (
     AdminLoginRequired,
     admin_login_required_handler,
-    router as admin_router,
 )
+from .admin.router import router as admin_router
 from .admin.session_middleware import AdminSessionRefreshMiddleware
 from .admin_notifications import AdminNotificationRepository
 from .config import load_config
@@ -35,9 +35,9 @@ from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dum
 from .payload_archive import PayloadArchiveService
 from .proxy.routes import router as proxy_router
 from .proxy.service import ProxyRequestService
-from .queue_manager import RoutingProxyQueue
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
+from .routing_queue import RoutingProxyQueue
 from .self_service.discord import DiscordOAuthClient
 from .self_service.routes import router as self_service_router
 from .upstreams import UpstreamRuntimeManager

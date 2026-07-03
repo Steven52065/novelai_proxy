@@ -17,7 +17,7 @@ from novelai_python._exceptions import APIError
 from ..logging_utils import mark_request_total_duration
 from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..payload_archive import PayloadArchiveError, PayloadArchiveService, PayloadNotFoundError
-from ..queue_manager import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
+from ..queue_errors import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..queue_tiers import TIER_REPLAY
 from ..templating import templates
 from ..timezones import DISPLAY_TIMEZONE

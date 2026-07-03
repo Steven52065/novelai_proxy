@@ -19,7 +19,7 @@ from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger
-from ..queue_manager import NoAvailableUpstream, QueueClosed, QueueFull, UpstreamExecutionTimeout
+from ..queue_errors import NoAvailableUpstream, QueueClosed, QueueFull, UpstreamExecutionTimeout
 from ..templating import templates
 from .auth import has_admin_session, require_admin_or_session, require_admin_page_session
 from .common import (
@@ -48,8 +48,6 @@ ADMIN_UPSTREAM_TEST_PAYLOAD = {
         "n_samples": 1,
         "ucPreset": 0,
         "qualityToggle": False,
-        "sm": False,
-        "sm_dyn": False,
     },
 }
 

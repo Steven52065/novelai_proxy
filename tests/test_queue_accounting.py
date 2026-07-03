@@ -6,9 +6,10 @@ from pathlib import Path
 from app.config import LoggingConfig
 from app.database import Database, utc_now_iso
 from app.free_small_daily_limit import FreeSmallDailyLimitManager
-from app.queue_manager import RoutingProxyQueue, UpstreamQueueTarget
 from app.quota_manager import QuotaManager
 from app.request_accounting import RequestAccounting
+from app.queue_models import UpstreamQueueTarget
+from app.routing_queue import RoutingProxyQueue
 from app.usage_logs import UsageLogCreate, UsageLogRepository
 from queue_manager_helpers import _wait_until_async
 

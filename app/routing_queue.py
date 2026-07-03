@@ -233,7 +233,6 @@ class RoutingProxyQueue:
     def _create_upstream_queue(self, target: UpstreamQueueTarget) -> ProxyQueue:
         return ProxyQueue(
             upstream_id=target.id,
-            quota_manager=self._quota_manager,
             usage_logs=self._usage_logs,
             max_queue_size=self._max_queue_size,
             client_provider=target.client_provider,

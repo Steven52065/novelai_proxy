@@ -4,7 +4,9 @@ import asyncio
 import threading
 
 from helpers import PAYLOAD, BlockingFakeUpstream, FakeUpstream
-from app.queue_manager import QueueFull, RoutingProxyQueue, UpstreamExecutionTimeout, UpstreamQueueTarget
+from app.queue_errors import QueueFull, UpstreamExecutionTimeout
+from app.queue_models import UpstreamQueueTarget
+from app.routing_queue import RoutingProxyQueue
 from queue_manager_helpers import (
     CancellationResistantTimeoutUpstream,
     TimeoutByLabelUpstream,

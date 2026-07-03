@@ -160,11 +160,6 @@ class QuotaManager:
         self.reset_usage(user_id)
         return True
 
-    def reset_all_due(self) -> int:
-        rows = self.db.query_all("SELECT user_id FROM user_anlas_quota")
-        return sum(1 for row in rows if self.reset_if_due(int(row["user_id"])))
-
-
 def _parse_iso(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:

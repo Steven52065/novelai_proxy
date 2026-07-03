@@ -92,10 +92,6 @@ def set_admin_session_cookie(response: Response, request: Request) -> None:
     )
 
 
-def valid_admin_session(request: Request) -> bool:
-    return has_admin_session(request)
-
-
 def has_admin_session(request: Request) -> bool:
     cookie = request.cookies.get(SESSION_COOKIE)
     payload = verify_payload(cookie, _admin_session_secret(request))

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
 
 import pytest
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
@@ -76,7 +75,7 @@ def test_upstream_reuses_api_key_credential_instance():
 
 
 def test_upstream_config_uses_jwt_credential_for_ey_token():
-    client = UpstreamClient.from_config(SimpleNamespace(api_key="eyJhbGciOiJIUzI1NiJ9.payload.signature"))
+    client = UpstreamClient("eyJhbGciOiJIUzI1NiJ9.payload.signature")
 
     credential = client._credential()
 

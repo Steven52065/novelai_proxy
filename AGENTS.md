@@ -17,9 +17,11 @@
 
 - `app/main.py`：FastAPI 应用入口、生命周期初始化。
 - `app/proxy/routes.py`：代理接口、鉴权后请求提交、额度与日志处理。
-- `app/admin/routes.py`：管理后台页面和管理 API。
-- `app/database.py`：SQLite 数据库封装与表结构初始化。
-- `app/queue_manager.py`：上游请求队列。
+- `app/admin/router.py`：管理后台页面和管理 API 的路由聚合。
+- `app/admin/`：管理后台各功能模块。
+- `app/database/`：SQLite 数据库连接、表结构、迁移和维护逻辑。
+- `app/routing_queue.py`：多上游路由队列与调度。
+- `app/upstream_queue.py`：单个上游的串行执行队列。
 - `app/quota_manager.py`：anlas 额度管理。
 - `app/rate_limiter.py`：用户请求频率限制。
 - `app/upstream.py`：NovelAI 上游 SDK 调用封装。

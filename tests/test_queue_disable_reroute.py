@@ -7,15 +7,17 @@ import time
 import pytest
 from novelai_python._exceptions import APIError
 
-from app.queue_manager import (
+from app.queue_errors import (
     NoAvailableUpstream,
     QueueFull,
-    QueueItem,
-    RoutingProxyQueue,
     UpstreamItemRerouted,
+)
+from app.queue_models import (
+    QueueItem,
     UpstreamQueueTarget,
 )
 from app.request_accounting import RequestAccounting
+from app.routing_queue import RoutingProxyQueue
 from queue_manager_helpers import FirstRequestBlockingLabelUpstream, _NoopUsageLogs, _wait_until_async
 
 

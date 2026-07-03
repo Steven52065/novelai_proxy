@@ -9,7 +9,6 @@ from typing import Any, Callable
 from novelai_python._exceptions import APIError
 
 from .logging_utils import archive_zip_images, logger
-from .quota_manager import QuotaManager
 from .queue_errors import QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable
 from .queue_models import ImageHostingServiceLike, QueueItem
 from .queue_snapshot import ProxyQueueSnapshot
@@ -23,7 +22,6 @@ class ProxyQueue:
     def __init__(
         self,
         upstream_id: str,
-        quota_manager: QuotaManager,
         usage_logs: UsageLogRepository,
         max_queue_size: int,
         client_provider: Callable[[], Any] | None = None,

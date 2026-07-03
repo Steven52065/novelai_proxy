@@ -4,7 +4,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
-from .auth import set_admin_session_cookie, valid_admin_session
+from .auth import has_admin_session, set_admin_session_cookie
 
 
 class AdminSessionRefreshMiddleware(BaseHTTPMiddleware):
@@ -20,6 +20,6 @@ def _should_refresh_admin_session(request: Request, response: Response) -> bool:
         request.url.path.startswith("/admin")
         and request.url.path != "/admin/login"
         and request.url.path != "/admin/logout"
-        and valid_admin_session(request)
+        and has_admin_session(request)
         and response.status_code < 400
     )

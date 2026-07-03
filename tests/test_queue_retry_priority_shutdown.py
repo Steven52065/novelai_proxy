@@ -6,8 +6,10 @@ import time
 
 from helpers import PAYLOAD, FakeUpstream
 from app.free_small_daily_limit import FreeSmallDailyReservation
-from app.queue_manager import QueueClosed, QueueItem, Retry429Error, RoutingProxyQueue, UpstreamQueueTarget
+from app.queue_errors import QueueClosed, Retry429Error
+from app.queue_models import QueueItem, UpstreamQueueTarget
 from app.request_accounting import RequestAccounting
+from app.routing_queue import RoutingProxyQueue
 from queue_manager_helpers import (
     FirstRequestBlockingLabelUpstream,
     One429ThenSuccessfulUpstream,

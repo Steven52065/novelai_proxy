@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from novelai_python._exceptions import APIError
 
 from helpers import FakeImageHosting, FakeUpstream, write_test_config, write_test_config_with_upstreams
-from app.queue_manager import QueueFull
+from app.queue_errors import QueueFull
 
 
 class FailingAPIErrorUpstream(FakeUpstream):

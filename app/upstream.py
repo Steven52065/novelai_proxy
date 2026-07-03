@@ -8,7 +8,6 @@ from typing import Any, Protocol
 from novelai_python._exceptions import APIError, AuthError, DataSerializationError
 from novelai_python.credential import ApiCredential, JwtCredential, SecretStr
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
-from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 from novelai_python.sdk.ai.generate_image.suggest_tags import SuggestTags
 from novelai_python.sdk.ai.upscale import Upscale
 
@@ -25,10 +24,6 @@ class UpstreamClient:
         self.api_key = api_key
         self._credential_instance = self._api_key_credential(api_key)
 
-    @classmethod
-    def from_config(cls, config) -> "UpstreamClient":
-        return cls(config.api_key)
-
     def _credential(self) -> _Credential:
         return self._credential_instance
 
@@ -38,10 +33,6 @@ class UpstreamClient:
         if token.startswith("ey"):
             return JwtCredential(jwt_token=SecretStr(token))
         return ApiCredential(api_token=SecretStr(token))
-
-    async def generate_image_zip(self, req: GenerateImageInfer) -> bytes:
-        result = await req.request(session=self._credential())
-        return _files_to_zip(result.files or [])
 
     async def generate_image_payload_zip(self, payload: dict[str, Any]) -> bytes:
         return await self._post_binary(GENERATE_IMAGE_ENDPOINT, payload)
