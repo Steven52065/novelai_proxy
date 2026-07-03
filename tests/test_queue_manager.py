@@ -64,7 +64,9 @@ def test_queue_adds_extra_delay_after_upstream_api_error(tmp_path: Path, monkeyp
         assert first.status_code == 201
         assert second.status_code == 201
         assert len(fake_upstream.generate_started_at) == 3
-        assert fake_upstream.generate_started_at[1] - fake_upstream.generate_started_at[0] >= 0.065
+        retry_gap = fake_upstream.generate_started_at[1] - fake_upstream.generate_started_at[0]
+        # Keep enough tolerance for Windows scheduler jitter while still proving the 0.05s error delay was applied.
+        assert retry_gap >= 0.055
 
 def test_interval_delay_counts_idle_time():
     async def run_test():
