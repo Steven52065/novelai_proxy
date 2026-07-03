@@ -97,23 +97,7 @@ class RoutingProxyQueue:
         self._on_upstream_api_error = on_upstream_api_error
         self._is_user_available = is_user_available or (lambda _user_id: True)
         self._queues = {
-            target.id: ProxyQueue(
-                upstream_id=target.id,
-                quota_manager=quota_manager,
-                usage_logs=usage_logs,
-                max_queue_size=max_queue_size,
-                client_provider=target.client_provider,
-                upstream_interval_min_seconds=upstream_interval_min_seconds,
-                upstream_interval_max_seconds=upstream_interval_max_seconds,
-                upstream_error_extra_delay_seconds=upstream_error_extra_delay_seconds,
-                upstream_execution_timeout_seconds=upstream_execution_timeout_seconds,
-                retry_policy=self._retry_policy,
-                get_total_queue_length=self._get_total_queue_length,
-                is_user_available=self._is_user_available,
-                image_hosting=image_hosting,
-                on_change=on_change,
-                on_api_error=on_upstream_api_error,
-            )
+            target.id: self._create_upstream_queue(target)
             for target in enabled_targets
         }
 
@@ -156,29 +140,13 @@ class RoutingProxyQueue:
         removed_target_ids = [upstream_id for upstream_id in previous_target_order if upstream_id not in self._targets]
         for target in enabled_targets:
             if target.id not in self._queues:
-                queue = ProxyQueue(
-                    upstream_id=target.id,
-                    quota_manager=self._quota_manager,
-                    usage_logs=self._usage_logs,
-                    max_queue_size=self._max_queue_size,
-                    client_provider=target.client_provider,
-                    upstream_interval_min_seconds=self._upstream_interval_min_seconds,
-                    upstream_interval_max_seconds=self._upstream_interval_max_seconds,
-                    upstream_error_extra_delay_seconds=self._upstream_error_extra_delay_seconds,
-                    upstream_execution_timeout_seconds=self._upstream_execution_timeout_seconds,
-                    retry_policy=self._retry_policy,
-                    get_total_queue_length=self._get_total_queue_length,
-                    is_user_available=self._is_user_available,
-                    image_hosting=self._image_hosting,
-                    on_change=self._on_change,
-                    on_api_error=self._on_upstream_api_error,
-                )
+                queue = self._create_upstream_queue(target)
                 self._queues[target.id] = queue
                 if self._started:
                     queue.start()
             else:
                 self._queues[target.id].client_provider = target.client_provider
-                self._queues[target.id]._on_api_error = self._on_upstream_api_error
+                self._queues[target.id].on_api_error = self._on_upstream_api_error
             self._adaptive_scores.setdefault(target.id, AdaptiveUpstreamScore(score=self._adaptive_initial_score))
 
         for upstream_id in removed_target_ids:
@@ -241,12 +209,31 @@ class RoutingProxyQueue:
                 "score": round(score.score, 4) if score else 0.0,
                 "weight": round(weight, 4),
                 "queue_size": self._queues[upstream_id].qsize(),
-                "running": self._queues[upstream_id]._running_item is not None,
+                "running": self._queues[upstream_id].running_item is not None,
             })
         return {
             "strategy": self.routing_strategy,
             "upstreams": upstreams,
         }
+
+    def _create_upstream_queue(self, target: UpstreamQueueTarget) -> ProxyQueue:
+        return ProxyQueue(
+            upstream_id=target.id,
+            quota_manager=self._quota_manager,
+            usage_logs=self._usage_logs,
+            max_queue_size=self._max_queue_size,
+            client_provider=target.client_provider,
+            upstream_interval_min_seconds=self._upstream_interval_min_seconds,
+            upstream_interval_max_seconds=self._upstream_interval_max_seconds,
+            upstream_error_extra_delay_seconds=self._upstream_error_extra_delay_seconds,
+            upstream_execution_timeout_seconds=self._upstream_execution_timeout_seconds,
+            retry_policy=self._retry_policy,
+            get_total_queue_length=self._get_total_queue_length,
+            is_user_available=self._is_user_available,
+            image_hosting=self._image_hosting,
+            on_change=self._on_change,
+            on_api_error=self._on_upstream_api_error,
+        )
 
     def _get_total_queue_length(self) -> int:
         return sum(

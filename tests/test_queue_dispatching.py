@@ -40,7 +40,7 @@ def test_dispatcher_does_not_wait_for_upstream_completion():
                     manage_quota=False,
                 )
             )
-            await _wait_until_async(lambda: queue._queues["opus-a"]._running_item is not None)
+            await _wait_until_async(lambda: queue._queues["opus-a"].running_item is not None)
 
             second = await asyncio.wait_for(
                 queue.submit(

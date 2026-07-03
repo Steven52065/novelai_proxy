@@ -106,8 +106,8 @@ def test_cancel_during_upstream_interval_does_not_execute_or_charge(tmp_path: Pa
                 accounting=_accounting(context, "cancel-during-interval"),
             )
             await _wait_until_async(
-                lambda: queue._queues["opus-a"]._running_item is not None
-                and queue._queues["opus-a"]._running_item.request_id == "cancel-during-interval"
+                lambda: queue._queues["opus-a"].running_item is not None
+                and queue._queues["opus-a"].running_item.request_id == "cancel-during-interval"
             )
 
             second.cancel()

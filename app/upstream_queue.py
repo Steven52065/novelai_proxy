@@ -64,6 +64,18 @@ class ProxyQueue:
         self._on_change = on_change
         self._on_api_error = on_api_error
 
+    @property
+    def on_api_error(self) -> Callable[[str, APIError], None] | None:
+        return self._on_api_error
+
+    @on_api_error.setter
+    def on_api_error(self, value: Callable[[str, APIError], None] | None) -> None:
+        self._on_api_error = value
+
+    @property
+    def running_item(self) -> QueueItem | None:
+        return self._running_item
+
     def start(self) -> None:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run())
