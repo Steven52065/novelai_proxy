@@ -10,6 +10,7 @@ from novelai_python._exceptions import APIError
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
+from ..api_errors import api_error_status_code
 from ..allowlists import (
     ENDPOINT_AUGMENT_IMAGE,
     ENDPOINT_ENCODE_VIBE,
@@ -33,7 +34,7 @@ from ..queue_tiers import is_vip_tier
 from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
 from ..quota_manager import QuotaManager
 from ..routing_queue import RoutingProxyQueue
-from .service import MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
+from .service import MESSAGE_PROXY_REQUEST_FAILED, MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 
 
 router = APIRouter()
@@ -66,6 +67,8 @@ async def generate_image(
     try:
         request_payload = _normalize_generate_image_payload(payload)
         cost_inputs = _generate_cost_estimator.extract_inputs(request_payload)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("generate-image payload validation failed errors=%s", str(exc))
         return JSONResponse(status_code=400, content={"message": "Invalid request"})
@@ -74,8 +77,8 @@ async def generate_image(
         request_payload,
         effective_image_format_config(user.image_format_policy, config.image_format),
     )
+    novelai_settings = _load_novelai_settings(request)
     try:
-        novelai_settings = request.app.state.upstream_runtime.get_settings()
         estimated_cost, cost_is_certainly_free = _generate_cost_estimator.calculate(
             cost_inputs,
             is_opus=novelai_settings.account_tier >= 3,
@@ -120,7 +123,7 @@ async def upscale(
             "n_samples": 1,
         },
         request_payload=dump_model_payload(req),
-        estimated_cost=request.app.state.upstream_runtime.get_settings().upscale_anlas_cost,
+        estimated_cost=_load_novelai_settings(request).upscale_anlas_cost,
         handler=lambda upstream: upstream.upscale_zip(req),
         proxy_service=proxy_service,
     )
@@ -137,8 +140,8 @@ async def augment_image(
     if endpoint_denied is not None:
         return endpoint_denied
 
+    novelai_settings = _load_novelai_settings(request)
     try:
-        novelai_settings = request.app.state.upstream_runtime.get_settings()
         estimated_cost = int(req.calculate_cost(is_opus=novelai_settings.account_tier >= 3))
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
@@ -279,15 +282,14 @@ async def suggest_tags(
         upstream = proxy_queue.select_client(user.allowed_upstreams)
         return await upstream.suggest_tags(model=model, prompt=prompt, lang=lang)
     except APIError as exc:
-        status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
         logger.error("suggest-tags upstream API error code=%s message=%s", exc.code, exc.message)
         return JSONResponse(
-            status_code=status_code,
+            status_code=api_error_status_code(exc),
             content={"message": MESSAGE_UPSTREAM_REQUEST_FAILED},
         )
     except Exception as exc:
         logger.exception("suggest-tags request failed")
-        return JSONResponse(status_code=503, content={"message": "Suggest tags request failed"})
+        return JSONResponse(status_code=502, content={"message": MESSAGE_PROXY_REQUEST_FAILED})
 
 
 @router.get("/ai/generate-image/suggest_tags")
@@ -356,6 +358,14 @@ async def _read_json_payload(request: Request, endpoint: str) -> tuple[Any, JSON
     except (JSONDecodeError, UnicodeDecodeError) as exc:
         logger.error("%s JSON parsing failed errors=%s", endpoint, str(exc))
         return None, JSONResponse(status_code=400, content={"message": "Invalid request"})
+
+
+def _load_novelai_settings(request: Request):
+    try:
+        return request.app.state.upstream_runtime.get_settings()
+    except Exception as exc:
+        logger.exception("failed to load NovelAI settings")
+        raise HTTPException(status_code=500, detail={"message": "Failed to load NovelAI settings"}) from exc
 
 
 def _task_result_to_response(request: Request, result: ProxyTaskResult) -> Response | JSONResponse:

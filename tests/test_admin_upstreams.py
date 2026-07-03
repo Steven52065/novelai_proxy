@@ -209,6 +209,38 @@ def test_admin_upstream_delete_conflicts_when_referenced(tmp_path: Path, monkeyp
         assert resp.json()["references"]["users"]
 
 
+def test_admin_upstream_domain_errors_return_json(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        duplicate = client.post(
+            "/admin/api/upstreams",
+            auth=("admin", "admin123"),
+            json={"id": "default", "api_key": "pst-duplicate"},
+        )
+        missing_update = client.patch(
+            "/admin/api/upstreams/missing",
+            auth=("admin", "admin123"),
+            json={"enabled": False},
+        )
+        missing_delete = client.delete("/admin/api/upstreams/missing", auth=("admin", "admin123"))
+        invalid = client.post(
+            "/admin/api/upstreams",
+            auth=("admin", "admin123"),
+            json={"id": "new-upstream", "api_key": " "},
+        )
+
+        assert duplicate.status_code == 409
+        assert duplicate.json()["message"] == "upstream id already exists: default"
+        assert missing_update.status_code == 404
+        assert missing_update.json()["message"] == "Upstream not found"
+        assert missing_delete.status_code == 404
+        assert missing_delete.json()["message"] == "Upstream not found"
+        assert invalid.status_code == 400
+        assert invalid.json()["message"] == "api_key must not be empty"
+
+
 def test_novelai_settings_drive_proxy_costing(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from sqlite3 import IntegrityError
 from typing import Any, Callable
-
-from fastapi import HTTPException
 
 from .allowlists import AllowedUpstreams
 from .config import RESERVED_UPSTREAM_IDS
 from .database import Database
+from .domain_errors import InvalidDomainInput, UpstreamConflict, UpstreamNotFound
 from .queue_models import UpstreamQueueTarget
 from .upstream import UpstreamClient
 
@@ -46,16 +46,16 @@ def mask_token(token: str) -> str:
 def validate_upstream_id(upstream_id: str) -> str:
     normalized = upstream_id.strip()
     if not normalized:
-        raise ValueError("upstream id must not be empty")
+        raise InvalidDomainInput("upstream id must not be empty")
     if normalized in RESERVED_UPSTREAM_IDS:
-        raise ValueError(f"upstream id is reserved: {normalized}")
+        raise InvalidDomainInput(f"upstream id is reserved: {normalized}")
     return normalized
 
 
 def validate_api_key(api_key: str) -> str:
     normalized = api_key.strip()
     if not normalized:
-        raise ValueError("api_key must not be empty")
+        raise InvalidDomainInput("api_key must not be empty")
     return normalized
 
 
@@ -108,10 +108,8 @@ class NovelAIUpstreamRepository:
                 """,
                 (upstream_id, api_key, 1 if enabled else 0, timestamp),
             )
-        except Exception as exc:
-            if "UNIQUE" in str(exc).upper():
-                raise ValueError(f"upstream id already exists: {upstream_id}") from exc
-            raise
+        except IntegrityError as exc:
+            raise UpstreamConflict(f"upstream id already exists: {upstream_id}") from exc
         created = self.get(upstream_id)
         assert created is not None
         return created
@@ -125,7 +123,7 @@ class NovelAIUpstreamRepository:
     ) -> NovelAIUpstreamRecord:
         existing = self.get(upstream_id)
         if existing is None:
-            raise KeyError(upstream_id)
+            raise UpstreamNotFound()
 
         fields: list[str] = []
         params: list[Any] = []
@@ -151,12 +149,12 @@ class NovelAIUpstreamRepository:
 
     def delete(self, upstream_id: str) -> None:
         if self.get(upstream_id) is None:
-            raise KeyError(upstream_id)
+            raise UpstreamNotFound()
         conflicts = self.find_allowed_upstream_references(upstream_id)
         if conflicts:
-            raise HTTPException(
-                status_code=409,
-                detail={"message": "Upstream is still referenced by users or groups", "references": conflicts},
+            raise UpstreamConflict(
+                "Upstream is still referenced by users or groups",
+                details={"references": conflicts},
             )
         self.db.execute("DELETE FROM novelai_upstreams WHERE id = ?", (upstream_id,))
 
@@ -222,12 +220,12 @@ class NovelAIUpstreamRepository:
         params: list[Any] = []
         if account_tier is not None:
             if account_tier < 0 or account_tier > 3:
-                raise ValueError("account_tier must be between 0 and 3")
+                raise InvalidDomainInput("account_tier must be between 0 and 3")
             fields.append("account_tier = ?")
             params.append(int(account_tier))
         if upscale_anlas_cost is not None:
             if upscale_anlas_cost < 0:
-                raise ValueError("upscale_anlas_cost must be >= 0")
+                raise InvalidDomainInput("upscale_anlas_cost must be >= 0")
             fields.append("upscale_anlas_cost = ?")
             params.append(int(upscale_anlas_cost))
         if not fields:

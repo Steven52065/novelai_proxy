@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from novelai_python._exceptions import APIError
 
+from ..api_errors import api_error_status_code
 from ..logging_utils import mark_request_total_duration
 from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..payload_archive import PayloadArchiveError, PayloadArchiveService, PayloadNotFoundError
@@ -264,8 +265,7 @@ async def _replay_log_source(source, request: Request):
         )
         raise HTTPException(status_code=503, detail={"message": "No enabled upstream is available for this replay"}) from exc
     except APIError as exc:
-        status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
-        raise HTTPException(status_code=status_code, detail={"message": exc.message}) from exc
+        raise HTTPException(status_code=api_error_status_code(exc), detail={"message": exc.message}) from exc
     except UpstreamExecutionTimeout as exc:
         raise HTTPException(status_code=504, detail={"message": str(exc)}) from exc
     except Exception as exc:

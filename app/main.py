@@ -200,7 +200,9 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(DomainError)
 async def domain_error_handler(request: Request, exc: DomainError):
     logger.warning("domain error path=%s status=%s message=%s", request.url.path, exc.status_code, exc.message)
-    return JSONResponse(status_code=exc.status_code, content={"message": exc.message})
+    content = {"message": exc.message}
+    content.update(exc.details)
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(RequestValidationError)

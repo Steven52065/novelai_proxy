@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from typing import Any
+
 
 class DomainError(Exception):
     status_code = 400
     default_message = "Invalid request"
 
-    def __init__(self, message: str | None = None):
+    def __init__(self, message: str | None = None, *, details: dict[str, Any] | None = None):
         self.message = message or self.default_message
+        self.details = details or {}
         super().__init__(self.message)
 
 
@@ -37,3 +40,12 @@ class SelfServiceAccountDeleted(DomainError):
 class SelfServiceAccountDisabled(DomainError):
     status_code = 403
     default_message = "Account is disabled"
+
+
+class UpstreamNotFound(DomainError):
+    status_code = 404
+    default_message = "Upstream not found"
+
+
+class UpstreamConflict(DomainError):
+    status_code = 409

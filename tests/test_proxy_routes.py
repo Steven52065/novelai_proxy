@@ -242,6 +242,31 @@ def test_generate_internal_error_returns_generic_message(tmp_path: Path, monkeyp
         assert resp.json() == {"message": "Proxy request failed"}
         assert "secret" not in resp.text
 
+
+def test_generate_settings_load_error_returns_500(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "settings-load-error-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+
+        def fail_settings():
+            raise RuntimeError("secret settings database detail")
+
+        monkeypatch.setattr(app.state.upstream_runtime, "get_settings", fail_settings)
+
+        resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
+
+        assert resp.status_code == 500
+        assert resp.json() == {"message": "Failed to load NovelAI settings"}
+        assert "secret" not in resp.text
+
+
 def test_generate_upstream_execution_timeout_returns_504_and_releases_quota(tmp_path: Path, monkeypatch):
     monkeypatch.setenv(
         "NOVELAI_PROXY_CONFIG",
@@ -324,8 +349,8 @@ def test_suggest_tags_internal_error_returns_generic_message(tmp_path: Path, mon
             params={"model": "nai-diffusion-3", "prompt": "1girl"},
         )
 
-        assert resp.status_code == 503
-        assert resp.json() == {"message": "Suggest tags request failed"}
+        assert resp.status_code == 502
+        assert resp.json() == {"message": "Proxy request failed"}
         assert "secret" not in resp.text
 
 def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: Path, monkeypatch):

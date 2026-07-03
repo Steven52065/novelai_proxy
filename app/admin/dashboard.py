@@ -16,6 +16,7 @@ from novelai_python._exceptions import APIError
 from novelai_python.sdk.ai._enum import Model, Sampler
 from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 
+from ..api_errors import api_error_status_code
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger
@@ -158,7 +159,7 @@ async def test_upstream(request: Request, upstream_id: str):
         )
     except APIError as exc:
         return _upstream_test_failure_response(
-            status_code=_api_error_status_code(exc),
+            status_code=api_error_status_code(exc),
             upstream_id=normalized_upstream_id,
             started_at=started_at,
             error_code=str(exc.code or "upstream_error"),
@@ -425,10 +426,6 @@ def _image_content_type(filename: str) -> str | None:
     if lower.endswith(".webp"):
         return "image/webp"
     return None
-
-
-def _api_error_status_code(exc: APIError) -> int:
-    return int(exc.code) if str(exc.code or "").isdigit() else 502
 
 
 def _api_error_type(exc: APIError) -> str:

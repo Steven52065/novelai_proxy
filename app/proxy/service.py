@@ -8,6 +8,7 @@ from typing import Any
 
 from novelai_python._exceptions import APIError
 
+from ..api_errors import api_error_status_code
 from ..auth import UserContext
 from ..config import LoggingConfig
 from ..free_small_daily_limit import (
@@ -214,10 +215,9 @@ class ProxyRequestService:
                 request_id=request_id,
             )
         except APIError as exc:
-            status_code = int(exc.code) if str(exc.code or "").isdigit() else 502
             logger.error("upstream API error request_id=%s code=%s message=%s", request_id, exc.code, exc.message)
             return ProxyTaskResult(
-                status_code=status_code,
+                status_code=api_error_status_code(exc),
                 content={"message": MESSAGE_UPSTREAM_REQUEST_FAILED},
                 request_id=request_id,
             )
