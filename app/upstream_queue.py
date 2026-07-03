@@ -274,7 +274,8 @@ class ProxyQueue:
                 saved_files = []
                 if item.process_zip_response and not item.is_admin_probe:
                     try:
-                        saved_files = archive_zip_images(
+                        saved_files = await asyncio.to_thread(
+                            archive_zip_images,
                             zip_payload=payload,
                             request_id=item.request_id,
                             action=item.action,

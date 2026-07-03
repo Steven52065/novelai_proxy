@@ -52,7 +52,7 @@ class ArchivePayloadsRequest(BaseModel):
 
 @api_router.get("/database/stats", dependencies=[Depends(require_admin)])
 async def database_stats(request: Request):
-    return _database_stats(request)
+    return await asyncio.to_thread(_database_stats, request)
 
 
 @api_router.post("/database/cleanup-logs", dependencies=[Depends(require_admin)])
@@ -62,7 +62,8 @@ async def cleanup_logs(payload: CleanupLogsRequest, request: Request):
 
 @api_router.post("/database/clear-payloads", dependencies=[Depends(require_admin)])
 async def clear_payloads(payload: ClearPayloadsRequest, request: Request):
-    return _clear_payloads(
+    return await asyncio.to_thread(
+        _clear_payloads,
         request,
         older_than_days=payload.older_than_days,
         min_payload_kb=payload.min_payload_kb,
@@ -73,22 +74,23 @@ async def clear_payloads(payload: ClearPayloadsRequest, request: Request):
 
 @api_router.post("/database/archive-payloads", dependencies=[Depends(require_admin)])
 async def archive_payloads(payload: ArchivePayloadsRequest, request: Request):
-    return _archive_payloads(request, hot_days=payload.hot_days, max_rows=payload.max_rows)
+    return await asyncio.to_thread(_archive_payloads, request, hot_days=payload.hot_days, max_rows=payload.max_rows)
 
 
 @api_router.post("/database/vacuum", dependencies=[Depends(require_admin)])
 async def vacuum_database(request: Request):
-    return _vacuum_database(request)
+    return await asyncio.to_thread(_vacuum_database, request)
 
 
 @web_router.get("/database", response_class=HTMLResponse)
 async def database_page(request: Request, message: str | None = None):
+    stats = await asyncio.to_thread(_database_stats, request)
     return templates.TemplateResponse(
         request,
         "database.html",
         {
             "active": "database",
-            "stats": _database_stats(request),
+            "stats": stats,
             "message": message,
             "status_choices": ["success", "failed", "rejected", "queued", "running"],
         },
@@ -113,7 +115,8 @@ async def clear_payloads_form(
     clear_output_files: str | None = Form(None),
     clear_image_urls: str | None = Form(None),
 ):
-    result = _clear_payloads(
+    result = await asyncio.to_thread(
+        _clear_payloads,
         request,
         older_than_days=older_than_days,
         min_payload_kb=min_payload_kb,
@@ -129,7 +132,7 @@ async def archive_payloads_form(
     hot_days: int | None = Form(None),
     max_rows: int | None = Form(None),
 ):
-    result = _archive_payloads(request, hot_days=hot_days, max_rows=max_rows)
+    result = await asyncio.to_thread(_archive_payloads, request, hot_days=hot_days, max_rows=max_rows)
     return RedirectResponse(
         f"/admin/database?message=已归档 {result['archived_payloads']} 条 Payload，生成 {result['archived_parts']} 个压缩块",
         status_code=303,
@@ -138,7 +141,7 @@ async def archive_payloads_form(
 
 @web_router.post("/database/vacuum")
 async def vacuum_database_form(request: Request):
-    result = _vacuum_database(request)
+    result = await asyncio.to_thread(_vacuum_database, request)
     before = format_bytes(result["before_bytes"])
     after = format_bytes(result["after_bytes"])
     return RedirectResponse(f"/admin/database?message=数据库压缩完成：{before} -> {after}", status_code=303)

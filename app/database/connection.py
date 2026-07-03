@@ -38,6 +38,10 @@ class Database:
         with self._lock:
             rebuild_dashboard_hourly_stats(self.conn)
 
+    # Sync DB access is intentional for small indexed point operations such as auth,
+    # quota settlement, usage-log status writes, and queue done-callback accounting.
+    # Table-size maintenance or exports must run via asyncio.to_thread and, for
+    # writes, use bounded batches so the process-wide SQLite lock is released often.
     @contextmanager
     def transaction(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:
         with self._lock:

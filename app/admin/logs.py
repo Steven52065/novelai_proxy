@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import csv
 import io
@@ -144,14 +145,17 @@ async def export_logs(
         action=action,
         status=status,
     )
-    rows = usage_logs.list_logs(
-        user_id=filters.user_id,
-        created_from=filters.created_from_utc,
-        created_to=filters.created_to_utc,
-        action=filters.action,
-        status=filters.status,
-        limit=10000,
-        before_id=None,
+    rows = (
+        await asyncio.to_thread(
+            usage_logs.list_logs,
+            user_id=filters.user_id,
+            created_from=filters.created_from_utc,
+            created_to=filters.created_to_utc,
+            action=filters.action,
+            status=filters.status,
+            limit=10000,
+            before_id=None,
+        )
     )[:10000]
     columns = [
         "id",
