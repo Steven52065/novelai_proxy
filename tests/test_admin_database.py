@@ -984,3 +984,115 @@ def test_usage_logs_unique_constraint_migration_allows_retry_attempts(tmp_path: 
         "request_payload_compressed_bytes",
     } <= columns
     db.close()
+
+
+def test_usage_logs_unique_constraint_migration_preserves_archive_refs(tmp_path: Path):
+    db_path = tmp_path / "old-schema-with-refs.db"
+    _create_legacy_usage_logs_schema_with_archive_ref(db_path)
+
+    db = Database(str(db_path))
+    db.init_schema()
+
+    refs = db.query_all("SELECT log_id, archive_id, payload_key, payload_bytes FROM usage_log_payload_archive_refs")
+    assert [dict(row) for row in refs] == [{"log_id": 1, "archive_id": 1, "payload_key": "1", "payload_bytes": 123}]
+    assert db.query_all("PRAGMA foreign_key_check") == []
+
+    db.init_schema()
+    assert db.query_one("SELECT COUNT(*) AS count FROM usage_log_payload_archive_refs")["count"] == 1
+    db.close()
+
+
+def test_usage_logs_unique_constraint_migration_rolls_back_on_midway_failure(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from app.database import migrations
+    from app.database import schema
+
+    db_path = tmp_path / "old-schema-rollback.db"
+    _create_legacy_usage_logs_schema_with_archive_ref(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        for column, definition in schema.USAGE_LOGS_COLUMNS:
+            migrations.add_column_if_missing(conn, "usage_logs", column, definition)
+        before_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage_logs'"
+        ).fetchone()["sql"]
+        monkeypatch.setattr(
+            migrations,
+            "USAGE_LOGS_INDEX_SQL",
+            (*migrations.USAGE_LOGS_INDEX_SQL, "CREATE INDEX broken_usage_logs_index ON missing_table(id)"),
+        )
+
+        with pytest.raises(sqlite3.OperationalError):
+            migrations.migrate_usage_logs_unique_constraint(conn)
+
+        after_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage_logs'"
+        ).fetchone()["sql"]
+        assert after_sql == before_sql
+        assert conn.execute("SELECT COUNT(*) AS count FROM usage_logs").fetchone()["count"] == 1
+        assert conn.execute("SELECT COUNT(*) AS count FROM usage_log_payload_archive_refs").fetchone()["count"] == 1
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_logs_new'").fetchone() is None
+    finally:
+        conn.close()
+
+
+def _create_legacy_usage_logs_schema_with_archive_ref(db_path: Path) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                api_key_hash TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE usage_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                action TEXT NOT NULL,
+                estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                request_payload TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE usage_log_payload_archives (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                archive_date TEXT NOT NULL,
+                part_number INTEGER NOT NULL,
+                compression TEXT NOT NULL,
+                compression_level INTEGER NOT NULL,
+                payload_count INTEGER NOT NULL,
+                raw_bytes INTEGER NOT NULL,
+                compressed_bytes INTEGER NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                payload_blob BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(archive_date, part_number)
+            );
+            CREATE TABLE usage_log_payload_archive_refs (
+                log_id INTEGER PRIMARY KEY REFERENCES usage_logs(id) ON DELETE CASCADE,
+                archive_id INTEGER NOT NULL REFERENCES usage_log_payload_archives(id) ON DELETE CASCADE,
+                payload_key TEXT NOT NULL,
+                payload_bytes INTEGER NOT NULL
+            );
+            INSERT INTO users(api_key_hash, name, created_at)
+            VALUES ('hash', 'user', '2026-01-01T00:00:00+00:00');
+            INSERT INTO usage_logs(request_id, user_id, action, estimated_anlas_cost, status, request_payload, created_at)
+            VALUES ('archived-retry-request', 1, 'generate', 0, 'success', '{"input":"legacy"}', '2026-01-01T00:00:00+00:00');
+            INSERT INTO usage_log_payload_archives (
+                id, archive_date, part_number, compression, compression_level, payload_count,
+                raw_bytes, compressed_bytes, payload_sha256, payload_blob, created_at
+            )
+            VALUES (1, '2026-01-01', 1, 'zlib', 6, 1, 10, 10, 'sha', X'00', '2026-01-01T00:00:00+00:00');
+            INSERT INTO usage_log_payload_archive_refs(log_id, archive_id, payload_key, payload_bytes)
+            VALUES (1, 1, '1', 123);
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
