@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from .schema import USAGE_LOGS_INDEX_SQL, usage_logs_create_table_sql
+
 
 def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -55,45 +57,10 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
     if "request_id text not null unique" not in normalized_sql:
         return
 
+    usage_logs_index_script = ";\n".join(USAGE_LOGS_INDEX_SQL) + ";"
     conn.executescript(
-        """
-        CREATE TABLE usage_logs_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id TEXT NOT NULL,
-            attempt_number INTEGER NOT NULL DEFAULT 0,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            action TEXT NOT NULL,
-            model TEXT,
-            width INTEGER,
-            height INTEGER,
-            steps INTEGER,
-            n_samples INTEGER,
-            estimated_anlas_cost INTEGER NOT NULL DEFAULT 0,
-            final_anlas_cost INTEGER,
-            queued_ms INTEGER,
-            upstream_ms INTEGER,
-            total_ms INTEGER,
-            status TEXT NOT NULL,
-            error_code TEXT,
-            error_message TEXT,
-            log_level TEXT NOT NULL DEFAULT 'INFO',
-            upstream_id TEXT,
-            request_payload TEXT,
-            request_payload_encoding TEXT NOT NULL DEFAULT 'json',
-            request_payload_blob BLOB,
-            request_payload_bytes INTEGER NOT NULL DEFAULT 0,
-            request_payload_available_bytes INTEGER NOT NULL DEFAULT 0,
-            request_payload_compressed_bytes INTEGER NOT NULL DEFAULT 0,
-            output_files TEXT,
-            output_files_bytes INTEGER NOT NULL DEFAULT 0,
-            image_urls TEXT,
-            image_urls_bytes INTEGER NOT NULL DEFAULT 0,
-            is_retry_success INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            completed_at TEXT,
-            UNIQUE(request_id, attempt_number)
-        );
-
+        f"""
+        {usage_logs_create_table_sql("usage_logs_new", if_not_exists=False)};
         INSERT INTO usage_logs_new (
             id, request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
             estimated_anlas_cost, final_anlas_cost, queued_ms, upstream_ms, total_ms, status, error_code, error_message,
@@ -131,23 +98,7 @@ def migrate_usage_logs_unique_constraint(conn: sqlite3.Connection) -> None:
 
         ALTER TABLE usage_logs_new RENAME TO usage_logs;
 
-        CREATE INDEX IF NOT EXISTS idx_usage_user_created
-            ON usage_logs(user_id, created_at);
-        CREATE INDEX IF NOT EXISTS idx_usage_created_at
-            ON usage_logs(created_at);
-        CREATE INDEX IF NOT EXISTS idx_usage_action_created
-            ON usage_logs(action, created_at);
-        CREATE INDEX IF NOT EXISTS idx_usage_status_created
-            ON usage_logs(status, created_at);
-        CREATE INDEX IF NOT EXISTS idx_usage_status
-            ON usage_logs(status);
-        CREATE INDEX IF NOT EXISTS idx_usage_request_id
-            ON usage_logs(request_id);
-        CREATE INDEX IF NOT EXISTS idx_usage_size_report
-            ON usage_logs(request_payload_available_bytes DESC, output_files_bytes DESC, image_urls_bytes DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_usage_hot_payload_created
-            ON usage_logs(created_at, id)
-            WHERE request_payload_bytes > 0;
+        {usage_logs_index_script}
         """
     )
 
