@@ -163,164 +163,211 @@ class ProxyQueue:
             queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
             upstream_ms: int | None = None
             try:
-                if item.cancel_future is not None and item.cancel_future.done():
-                    item.accounting.settle_failure(
-                        queued_ms=queued_ms,
-                        error_code="client_cancelled",
-                        error_message="Client cancelled before upstream execution",
-                        attempt_number=item.attempt_number,
-                    )
-                    if not item.future.done():
-                        item.future.cancel()
-                    logger.info(
-                        "proxy request skipped because caller cancelled request_id=%s upstream_id=%s attempt_number=%s",
-                        item.request_id,
-                        item.upstream_id,
-                        item.attempt_number,
-                    )
+                if self._cancel_if_caller_done(item, queued_ms, after_interval=False):
                     continue
-                if item.accounting.manage_quota and not self._is_user_available(item.user_id):
-                    item.accounting.settle_rejected(
-                        error_code="user_unavailable",
-                        error_message="User is no longer active",
-                        log_level="INFO",
-                        attempt_number=item.attempt_number,
-                    )
-                    if not item.future.done():
-                        item.future.set_exception(UserUnavailable("User is no longer active"))
-                    logger.info(
-                        "proxy request skipped because user is unavailable request_id=%s user_id=%s attempt_number=%s",
-                        item.request_id,
-                        item.user_id,
-                        item.attempt_number,
-                    )
+                if self._reject_if_user_unavailable(item):
                     continue
-                if not item.is_admin_probe:
-                    self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
-                logger.info(
-                    "proxy request running request_id=%s upstream_id=%s queued_ms=%s attempt_number=%s",
-                    item.request_id,
-                    item.upstream_id,
-                    queued_ms,
-                    item.attempt_number,
-                )
+                self._mark_item_running(item, queued_ms)
                 await self._wait_for_upstream_interval(item.request_id)
-                if item.cancel_future is not None and item.cancel_future.done():
-                    item.accounting.settle_failure(
-                        queued_ms=queued_ms,
-                        error_code="client_cancelled",
-                        error_message="Client cancelled before upstream execution",
-                        attempt_number=item.attempt_number,
-                    )
-                    if not item.future.done():
-                        item.future.cancel()
-                    logger.info(
-                        "proxy request skipped after interval because caller cancelled request_id=%s upstream_id=%s attempt_number=%s",
-                        item.request_id,
-                        item.upstream_id,
-                        item.attempt_number,
-                    )
+                if self._cancel_if_caller_done(item, queued_ms, after_interval=True):
                     continue
-                upstream_started_at = time.monotonic()
-                try:
-                    payload = await self._execute_handler_with_timeout(item)
-                finally:
-                    upstream_ms = int((time.monotonic() - upstream_started_at) * 1000)
+                payload, upstream_ms = await self._execute_item(item)
                 self._last_upstream_completed_at = time.monotonic()
             except Exception as exc:
-                self._last_upstream_completed_at = time.monotonic()
-                if isinstance(exc, APIError) and self._on_api_error is not None:
-                    try:
-                        self._on_api_error(self.upstream_id, exc)
-                    except Exception:
-                        logger.exception("upstream API error callback failed upstream_id=%s", self.upstream_id)
-
-                if not item.is_admin_probe and isinstance(exc, APIError) and str(exc.code) == "429":
-                    should_retry = (
-                        self._retry_policy.should_attempt_429_retry(self.get_total_queue_length())
-                        if self.get_total_queue_length
-                        else False
-                    )
-                    if should_retry:
-                        code, message = self._error_details(exc)
-                        item.accounting.record_retry_failure(
-                            queued_ms=queued_ms,
-                            error_code=code,
-                            error_message=message,
-                            upstream_ms=upstream_ms,
-                            attempt_number=item.attempt_number,
-                        )
-                        total_queue_length = self.get_total_queue_length() if self.get_total_queue_length else self.queue.qsize()
-                        logger.warning(
-                            "proxy request 429 error, will retry request_id=%s attempt_number=%s total_queue_length=%s threshold=%s",
-                            item.request_id,
-                            item.attempt_number,
-                            total_queue_length,
-                            self._retry_policy.queue_length_threshold,
-                        )
-                        self._apply_error_extra_delay_next = True
-                        if not item.future.done():
-                            item.future.set_exception(Retry429Error(exc))
-                        continue
-
-                if not item.is_admin_probe and isinstance(exc, (APIError, UpstreamExecutionTimeout)):
-                    self._apply_error_extra_delay_next = True
-
-                code, message = self._error_details(exc)
-                item.accounting.settle_failure(
-                    queued_ms=queued_ms,
-                    error_code=code,
-                    error_message=message,
-                    upstream_ms=upstream_ms,
-                    attempt_number=item.attempt_number,
-                )
-                logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
-                if not item.future.done():
-                    item.future.set_exception(exc)
-                if isinstance(exc, UpstreamExecutionTimeout):
-                    await self._wait_for_timed_out_handler(item.request_id, exc.handler_task)
-                    self._last_upstream_completed_at = time.monotonic()
+                await self._handle_item_exception(item, queued_ms, upstream_ms, exc)
             else:
-                saved_files = []
-                if item.process_zip_response and not item.is_admin_probe:
-                    try:
-                        saved_files = await asyncio.to_thread(
-                            archive_zip_images,
-                            zip_payload=payload,
-                            request_id=item.request_id,
-                            action=item.action,
-                            config=item.logging_config,
-                        )
-                    except Exception:
-                        logger.exception("failed to archive generated images request_id=%s", item.request_id)
-                        saved_files = []
-                item.accounting.settle_success(
-                    queued_ms=queued_ms,
-                    final_cost=item.estimated_cost,
-                    output_files=saved_files,
-                    upstream_ms=upstream_ms,
-                    is_retry_success=item.has_retried_429,
-                    attempt_number=item.attempt_number,
-                )
-                log_color = "white" if item.has_retried_429 else "default"
-                logger.info(
-                    "proxy request succeeded request_id=%s final_cost=%s output_files=%s is_retry_success=%s log_color=%s",
-                    item.request_id,
-                    item.estimated_cost,
-                    len(saved_files),
-                    item.has_retried_429,
-                    log_color,
-                )
-                if not item.future.done():
-                    item.future.set_result(payload)
-                if item.process_zip_response and not item.is_admin_probe and self.image_hosting is not None:
-                    self._schedule_image_upload(zip_payload=payload, request_id=item.request_id, attempt_number=item.attempt_number)
+                await self._handle_item_success(item, queued_ms, upstream_ms, payload)
             finally:
                 self._running_item = None
                 self._running_started_at = None
                 self.queue.task_done()
                 self._notify_change()
                 await asyncio.sleep(0)
+
+    def _cancel_if_caller_done(self, item: QueueItem, queued_ms: int, *, after_interval: bool) -> bool:
+        if item.cancel_future is None or not item.cancel_future.done():
+            return False
+        item.accounting.settle_failure(
+            queued_ms=queued_ms,
+            error_code="client_cancelled",
+            error_message="Client cancelled before upstream execution",
+            attempt_number=item.attempt_number,
+        )
+        if not item.future.done():
+            item.future.cancel()
+        if after_interval:
+            logger.info(
+                "proxy request skipped after interval because caller cancelled request_id=%s upstream_id=%s attempt_number=%s",
+                item.request_id,
+                item.upstream_id,
+                item.attempt_number,
+            )
+        else:
+            logger.info(
+                "proxy request skipped because caller cancelled request_id=%s upstream_id=%s attempt_number=%s",
+                item.request_id,
+                item.upstream_id,
+                item.attempt_number,
+            )
+        return True
+
+    def _reject_if_user_unavailable(self, item: QueueItem) -> bool:
+        if not item.accounting.manage_quota or self._is_user_available(item.user_id):
+            return False
+        item.accounting.settle_rejected(
+            error_code="user_unavailable",
+            error_message="User is no longer active",
+            log_level="INFO",
+            attempt_number=item.attempt_number,
+        )
+        if not item.future.done():
+            item.future.set_exception(UserUnavailable("User is no longer active"))
+        logger.info(
+            "proxy request skipped because user is unavailable request_id=%s user_id=%s attempt_number=%s",
+            item.request_id,
+            item.user_id,
+            item.attempt_number,
+        )
+        return True
+
+    def _mark_item_running(self, item: QueueItem, queued_ms: int) -> None:
+        if not item.is_admin_probe:
+            self.usage_logs.mark_running(item.request_id, queued_ms, item.upstream_id, item.attempt_number)
+        logger.info(
+            "proxy request running request_id=%s upstream_id=%s queued_ms=%s attempt_number=%s",
+            item.request_id,
+            item.upstream_id,
+            queued_ms,
+            item.attempt_number,
+        )
+
+    async def _execute_item(self, item: QueueItem) -> tuple[bytes, int]:
+        upstream_started_at = time.monotonic()
+        try:
+            payload = await self._execute_handler_with_timeout(item)
+        finally:
+            upstream_ms = int((time.monotonic() - upstream_started_at) * 1000)
+        return payload, upstream_ms
+
+    async def _handle_item_exception(
+        self,
+        item: QueueItem,
+        queued_ms: int,
+        upstream_ms: int | None,
+        exc: Exception,
+    ) -> None:
+        self._last_upstream_completed_at = time.monotonic()
+        self._notify_upstream_api_error(exc)
+        if self._handle_retryable_429(item, queued_ms, upstream_ms, exc):
+            return
+        if not item.is_admin_probe and isinstance(exc, (APIError, UpstreamExecutionTimeout)):
+            self._apply_error_extra_delay_next = True
+
+        code, message = self._error_details(exc)
+        item.accounting.settle_failure(
+            queued_ms=queued_ms,
+            error_code=code,
+            error_message=message,
+            upstream_ms=upstream_ms,
+            attempt_number=item.attempt_number,
+        )
+        logger.exception("proxy request failed request_id=%s code=%s", item.request_id, code)
+        if not item.future.done():
+            item.future.set_exception(exc)
+        if isinstance(exc, UpstreamExecutionTimeout):
+            await self._wait_for_timed_out_handler(item.request_id, exc.handler_task)
+            self._last_upstream_completed_at = time.monotonic()
+
+    def _notify_upstream_api_error(self, exc: Exception) -> None:
+        if not isinstance(exc, APIError) or self._on_api_error is None:
+            return
+        try:
+            self._on_api_error(self.upstream_id, exc)
+        except Exception:
+            logger.exception("upstream API error callback failed upstream_id=%s", self.upstream_id)
+
+    def _handle_retryable_429(
+        self,
+        item: QueueItem,
+        queued_ms: int,
+        upstream_ms: int | None,
+        exc: Exception,
+    ) -> bool:
+        if item.is_admin_probe or not isinstance(exc, APIError) or str(exc.code) != "429":
+            return False
+        should_retry = (
+            self._retry_policy.should_attempt_429_retry(self.get_total_queue_length())
+            if self.get_total_queue_length
+            else False
+        )
+        if not should_retry:
+            return False
+
+        code, message = self._error_details(exc)
+        item.accounting.record_retry_failure(
+            queued_ms=queued_ms,
+            error_code=code,
+            error_message=message,
+            upstream_ms=upstream_ms,
+            attempt_number=item.attempt_number,
+        )
+        total_queue_length = self.get_total_queue_length() if self.get_total_queue_length else self.queue.qsize()
+        logger.warning(
+            "proxy request 429 error, will retry request_id=%s attempt_number=%s total_queue_length=%s threshold=%s",
+            item.request_id,
+            item.attempt_number,
+            total_queue_length,
+            self._retry_policy.queue_length_threshold,
+        )
+        self._apply_error_extra_delay_next = True
+        if not item.future.done():
+            item.future.set_exception(Retry429Error(exc))
+        return True
+
+    async def _handle_item_success(
+        self,
+        item: QueueItem,
+        queued_ms: int,
+        upstream_ms: int | None,
+        payload: bytes,
+    ) -> None:
+        saved_files = await self._archive_successful_zip_images(item, payload)
+        item.accounting.settle_success(
+            queued_ms=queued_ms,
+            final_cost=item.estimated_cost,
+            output_files=saved_files,
+            upstream_ms=upstream_ms,
+            is_retry_success=item.has_retried_429,
+            attempt_number=item.attempt_number,
+        )
+        log_color = "white" if item.has_retried_429 else "default"
+        logger.info(
+            "proxy request succeeded request_id=%s final_cost=%s output_files=%s is_retry_success=%s log_color=%s",
+            item.request_id,
+            item.estimated_cost,
+            len(saved_files),
+            item.has_retried_429,
+            log_color,
+        )
+        if not item.future.done():
+            item.future.set_result(payload)
+        if item.process_zip_response and not item.is_admin_probe and self.image_hosting is not None:
+            self._schedule_image_upload(zip_payload=payload, request_id=item.request_id, attempt_number=item.attempt_number)
+
+    async def _archive_successful_zip_images(self, item: QueueItem, payload: bytes) -> list[dict[str, object]]:
+        if not item.process_zip_response or item.is_admin_probe:
+            return []
+        try:
+            return await asyncio.to_thread(
+                archive_zip_images,
+                zip_payload=payload,
+                request_id=item.request_id,
+                action=item.action,
+                config=item.logging_config,
+            )
+        except Exception:
+            logger.exception("failed to archive generated images request_id=%s", item.request_id)
+            return []
 
     @staticmethod
     def _error_details(exc: Exception) -> tuple[str, str]:
