@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlite3 import Connection
 
 from .database import Database, utc_now_iso
+from .timezones import DISPLAY_TIMEZONE
 
 
 @dataclass(frozen=True)
@@ -174,31 +175,43 @@ def _parse_iso(value: str) -> datetime:
 def _next_reset_at(last_reset_at: datetime, period: str, reset_day: int) -> datetime:
     if period == "day":
         return last_reset_at + timedelta(days=1)
+    local_last_reset_at = last_reset_at.astimezone(DISPLAY_TIMEZONE)
     if period == "week":
         days = max(1, reset_day) - 1
-        start = last_reset_at + timedelta(days=1)
+        start = local_last_reset_at + timedelta(days=1)
         candidate = start + timedelta(days=(days - start.weekday()) % 7)
-        return candidate.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_candidate = candidate.replace(hour=0, minute=0, second=0, microsecond=0)
+        return local_candidate.astimezone(timezone.utc)
     if period == "month":
-        month = last_reset_at.month + 1
-        year = last_reset_at.year
+        month = local_last_reset_at.month + 1
+        year = local_last_reset_at.year
         if month == 13:
             month = 1
             year += 1
         day = max(1, min(reset_day, 28))
-        return last_reset_at.replace(year=year, month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
+        local_candidate = local_last_reset_at.replace(
+            year=year,
+            month=month,
+            day=day,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        return local_candidate.astimezone(timezone.utc)
     return datetime.max.replace(tzinfo=timezone.utc)
 
 
 def normalize_reset_day(period: str, reset_day: int | None, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
+    local_now = now.astimezone(DISPLAY_TIMEZONE)
     if period == "month":
-        day = min(now.day, 28) if reset_day is None else int(reset_day)
+        day = min(local_now.day, 28) if reset_day is None else int(reset_day)
         if not 1 <= day <= 28:
             raise ValueError("reset_day must be between 1 and 28 when reset_period is month")
         return day
     if period == "week":
-        day = now.weekday() + 1 if reset_day is None else int(reset_day)
+        day = local_now.weekday() + 1 if reset_day is None else int(reset_day)
         if not 1 <= day <= 7:
             raise ValueError("reset_day must be between 1 and 7 when reset_period is week")
         return day

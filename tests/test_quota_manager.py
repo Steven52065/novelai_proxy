@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.database import Database, utc_now_iso
-from app.quota_manager import InsufficientQuota, QuotaManager
+from app.quota_manager import InsufficientQuota, QuotaManager, _next_reset_at, normalize_reset_day
 
 
 def _quota_manager(tmp_path):
@@ -130,3 +130,23 @@ def test_reclaim_orphan_reserved_clears_only_reserved_anlas(tmp_path):
         assert manager.reclaim_orphan_reserved() == 0
     finally:
         db.close()
+
+
+def test_monthly_reset_boundary_uses_utc8_midnight():
+    last_reset_at = datetime(2026, 6, 30, 16, 0, tzinfo=timezone.utc)
+
+    assert _next_reset_at(last_reset_at, "month", 1) == datetime(2026, 7, 31, 16, 0, tzinfo=timezone.utc)
+
+
+def test_weekly_reset_boundary_uses_utc8_midnight():
+    last_reset_at = datetime(2026, 6, 21, 16, 0, tzinfo=timezone.utc)
+
+    assert _next_reset_at(last_reset_at, "week", 1) == datetime(2026, 6, 28, 16, 0, tzinfo=timezone.utc)
+
+
+def test_default_reset_day_uses_utc8_local_date():
+    utc_time_at_utc8_month_start = datetime(2026, 6, 30, 16, 0, tzinfo=timezone.utc)
+    utc_time_at_utc8_monday = datetime(2026, 6, 28, 16, 0, tzinfo=timezone.utc)
+
+    assert normalize_reset_day("month", None, utc_time_at_utc8_month_start) == 1
+    assert normalize_reset_day("week", None, utc_time_at_utc8_monday) == 1
