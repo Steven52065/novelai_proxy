@@ -187,8 +187,16 @@ class RequestAccounting:
         return True
 
     def _release_free_small_daily_reservation(self) -> None:
-        manager = self.free_small_daily_limit_manager
-        reservation = self.free_small_daily_reservation
+        self.release_free_small_daily_reservation(
+            self.free_small_daily_limit_manager,
+            self.free_small_daily_reservation,
+        )
+
+    @staticmethod
+    def release_free_small_daily_reservation(
+        manager: FreeSmallDailyLimitManager | None,
+        reservation: FreeSmallDailyReservation | None,
+    ) -> None:
         if manager is None or reservation is None:
             return
         try:

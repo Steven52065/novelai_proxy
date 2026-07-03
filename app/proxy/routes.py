@@ -214,20 +214,21 @@ async def _submit_zip_task(
     free_small_daily_count: int = 0,
     proxy_service: ProxyRequestService,
 ):
-    result = await proxy_service.submit_zip(
-        ProxyTaskRequest(
-            user=user,
-            action=action,
-            metadata=metadata,
-            request_payload=request_payload,
-            estimated_cost=estimated_cost,
-            handler=handler,
-            free_small_only_allowed=free_small_only_allowed,
-            free_small_daily_count=free_small_daily_count,
-            process_zip_response=True,
-        )
+    return await _submit_binary_task(
+        request=request,
+        user=user,
+        action=action,
+        metadata=metadata,
+        request_payload=request_payload,
+        estimated_cost=estimated_cost,
+        handler=handler,
+        media_type="application/zip",
+        free_small_only_allowed=free_small_only_allowed,
+        free_small_daily_count=free_small_daily_count,
+        response_headers={"Content-Disposition": "attachment;filename=image.zip"},
+        process_zip_response=True,
+        proxy_service=proxy_service,
     )
-    return _task_result_to_response(request, result)
 
 
 async def _submit_binary_task(
@@ -241,6 +242,7 @@ async def _submit_binary_task(
     handler: Callable[[Any], Awaitable[bytes]],
     media_type: str,
     free_small_only_allowed: bool = False,
+    free_small_daily_count: int = 0,
     response_headers: dict[str, str] | None = None,
     process_zip_response: bool = True,
     proxy_service: ProxyRequestService,
@@ -254,6 +256,7 @@ async def _submit_binary_task(
             estimated_cost=estimated_cost,
             handler=handler,
             free_small_only_allowed=free_small_only_allowed,
+            free_small_daily_count=free_small_daily_count,
             process_zip_response=process_zip_response,
         ),
         media_type=media_type,
