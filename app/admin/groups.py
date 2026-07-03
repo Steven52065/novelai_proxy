@@ -38,6 +38,7 @@ from .common import (
     normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
     notify_dashboard_change,
+    optional_query_int,
     row_to_dict,
     upstream_choices,
     validate_allowed_endpoints,
@@ -341,7 +342,7 @@ async def user_group_edit_page(group_id: int, request: Request):
             "upstream_choices": upstream_choices(request),
             "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "saved": request.query_params.get("saved") == "1",
-            "propagated": _parse_optional_int(request.query_params.get("propagated")),
+            "propagated": optional_query_int(request.query_params.get("propagated")),
             "propagate_scope": request.query_params.get("propagate_scope"),
         },
     )
@@ -450,15 +451,6 @@ def _group_row_to_dict(row):
     data["default_image_format_policy"] = normalize_image_format_policy(data.get("default_image_format_policy"))
     data["default_image_format_policy_label"] = image_format_policy_label(data["default_image_format_policy"])
     return data
-
-
-def _parse_optional_int(value: str | None) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
 
 
 def _normalize_update_reset_day_or_400(

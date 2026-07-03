@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import csv
 import io
 import uuid
-import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -23,19 +20,13 @@ from ..queue_tiers import TIER_REPLAY
 from ..templating import templates
 from ..timezones import DISPLAY_TIMEZONE
 from ..usage_logs import USAGE_LOG_STATUSES, UsageLogCreate, UsageLogRepository
+from ..zip_images import zip_images_to_data_urls
 from .auth import require_admin_or_session, require_admin_page_session
 from .common import json_or_none, optional_query_int, row_to_dict, usage_log_to_dict
 
 
 api_router = APIRouter(prefix="/admin/api")
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
-REPLAY_IMAGE_CONTENT_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-}
 LOG_STATUS_LABELS = {
     "queued": "排队中",
     "running": "运行中",
@@ -279,7 +270,7 @@ async def _replay_log_source(source, request: Request):
         "source_request_id": source["request_id"],
         "source_attempt_number": int(source["attempt_number"]),
         "replay_request_id": replay_request_id,
-        "images": _zip_images_to_data_urls(binary_payload),
+        "images": zip_images_to_data_urls(binary_payload),
     }
 
 
@@ -394,30 +385,3 @@ def _selected_user(request: Request, user_id: int | None) -> dict | None:
         return None
     row = request.app.state.db.query_one("SELECT id, name FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,))
     return row_to_dict(row) if row is not None else None
-
-
-def _zip_images_to_data_urls(zip_payload: bytes) -> list[dict[str, str | int]]:
-    images = []
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_payload)) as zip_file:
-            for member in zip_file.infolist():
-                if member.is_dir():
-                    continue
-                suffix = Path(member.filename).suffix.lower()
-                content_type = REPLAY_IMAGE_CONTENT_TYPES.get(suffix)
-                if content_type is None:
-                    continue
-                data = zip_file.read(member)
-                if not data:
-                    continue
-                images.append(
-                    {
-                        "filename": member.filename,
-                        "content_type": content_type,
-                        "bytes": len(data),
-                        "data_url": f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}",
-                    }
-                )
-    except zipfile.BadZipFile:
-        return []
-    return images

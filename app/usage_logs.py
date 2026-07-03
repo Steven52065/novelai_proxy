@@ -75,44 +75,12 @@ class UsageLogRepository:
         self.hot_payload_config = hot_payload_config or HotPayloadConfig()
 
     def insert_queued(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
-        payload = self._encode_payload(log.request_payload)
-        self.db.execute(
-            """
-            INSERT INTO usage_logs (
-                request_id, attempt_number, user_id, action, model, width, height, steps, n_samples,
-                estimated_anlas_cost, status, error_code, error_message, log_level, upstream_id,
-                request_payload, request_payload_encoding, request_payload_blob, request_payload_bytes,
-                request_payload_available_bytes, request_payload_compressed_bytes, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                log.request_id,
-                attempt_number,
-                log.user_id,
-                log.action,
-                log.model,
-                log.width,
-                log.height,
-                log.steps,
-                log.n_samples,
-                int(log.estimated_anlas_cost),
-                log.error_code,
-                log.error_message,
-                log.log_level,
-                log.upstream_id,
-                payload.request_payload,
-                payload.encoding,
-                payload.blob,
-                payload.original_bytes,
-                payload.original_bytes,
-                payload.compressed_bytes,
-                utc_now_iso(),
-            ),
-        )
-        self._notify_change()
+        self._insert_with_status("queued", log, attempt_number)
 
     def insert_rejected(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
+        self._insert_with_status("rejected", log, attempt_number)
+
+    def _insert_with_status(self, status: str, log: UsageLogCreate, attempt_number: int) -> None:
         payload = self._encode_payload(log.request_payload)
         self.db.execute(
             """
@@ -122,7 +90,7 @@ class UsageLogRepository:
                 request_payload, request_payload_encoding, request_payload_blob, request_payload_bytes,
                 request_payload_available_bytes, request_payload_compressed_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rejected', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 log.request_id,
@@ -135,6 +103,7 @@ class UsageLogRepository:
                 log.steps,
                 log.n_samples,
                 int(log.estimated_anlas_cost),
+                status,
                 log.error_code,
                 log.error_message,
                 log.log_level,

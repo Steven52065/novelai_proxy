@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from sqlite3 import IntegrityError
 from typing import Any, Callable
 
 from .allowlists import AllowedUpstreams
 from .config import RESERVED_UPSTREAM_IDS
 from .database import Database
+from .database.clock import utc_now_iso
 from .domain_errors import InvalidDomainInput, UpstreamConflict, UpstreamNotFound
 from .queue_models import UpstreamQueueTarget
 from .upstream import UpstreamClient
@@ -28,10 +28,6 @@ class NovelAISettings:
     upscale_anlas_cost: int
     created_at: str
     updated_at: str | None
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def mask_token(token: str) -> str:
@@ -99,7 +95,7 @@ class NovelAIUpstreamRepository:
     def create(self, *, upstream_id: str, api_key: str, enabled: bool = True) -> NovelAIUpstreamRecord:
         upstream_id = validate_upstream_id(upstream_id)
         api_key = validate_api_key(api_key)
-        timestamp = now_iso()
+        timestamp = utc_now_iso()
         try:
             self.db.execute(
                 """
@@ -137,7 +133,7 @@ class NovelAIUpstreamRepository:
             return existing
 
         fields.append("updated_at = ?")
-        params.append(now_iso())
+        params.append(utc_now_iso())
         params.append(upstream_id)
         self.db.execute(
             f"UPDATE novelai_upstreams SET {', '.join(fields)} WHERE id = ?",
@@ -187,7 +183,7 @@ class NovelAIUpstreamRepository:
             """
         )
         if row is None:
-            timestamp = now_iso()
+            timestamp = utc_now_iso()
             self.db.execute(
                 """
                 INSERT INTO novelai_settings(id, account_tier, upscale_anlas_cost, created_at)
@@ -232,7 +228,7 @@ class NovelAIUpstreamRepository:
             return self.get_settings()
 
         fields.append("updated_at = ?")
-        params.append(now_iso())
+        params.append(utc_now_iso())
         self.db.execute(
             f"UPDATE novelai_settings SET {', '.join(fields)} WHERE id = 1",
             tuple(params),

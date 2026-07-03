@@ -160,12 +160,20 @@ def json_or_empty_list(value):
 
 
 def optional_query_int(value: str | None) -> int | None:
+    return _optional_int_or_400(value, message="Invalid query parameter")
+
+
+def optional_form_int(value: str | None) -> int | None:
+    return _optional_int_or_400(value, message="Invalid form value")
+
+
+def _optional_int_or_400(value: str | None, *, message: str) -> int | None:
     if value is None or value == "":
         return None
     try:
         return int(value)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"message": "Invalid query parameter"}) from exc
+        raise HTTPException(status_code=400, detail={"message": message}) from exc
 
 
 def local_day_range(value: datetime) -> tuple[datetime, datetime]:

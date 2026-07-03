@@ -32,6 +32,7 @@ from .common import (
     normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
     notify_dashboard_change,
+    optional_form_int,
     row_to_dict,
     upstream_choices,
     user_row_to_dict,
@@ -315,7 +316,7 @@ async def create_user_form(
     group_id: str | None = Form(None),
     use_group_defaults: str | None = Form(None),
 ):
-    parsed_group_id = _parse_optional_form_int(group_id)
+    parsed_group_id = optional_form_int(group_id)
     if use_group_defaults == "on" and parsed_group_id is not None:
         payload = CreateUserRequest(name=name, group_id=parsed_group_id)
     else:
@@ -444,7 +445,7 @@ async def update_user_form(
     group_id: str | None = Form(None),
     apply_group_defaults: str | None = Form(None),
 ):
-    parsed_group_id = _parse_optional_form_int(group_id)
+    parsed_group_id = optional_form_int(group_id)
     current_group_id = _get_user_group_id(request.app.state.db, user_id)
     payload_data = {
         "name": name,
@@ -676,12 +677,6 @@ def _groups_for_select(db: Database, active_only: bool) -> list[dict]:
     if active_only:
         return [group for group in groups if int(group["is_active"])]
     return groups
-
-
-def _parse_optional_form_int(value: str | None) -> int | None:
-    if value is None or value == "":
-        return None
-    return int(value)
 
 
 def _escape_like(value: str) -> str:

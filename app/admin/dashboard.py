@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import time
 import uuid
-import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -22,6 +21,7 @@ from ..database import Database
 from ..logging_utils import logger
 from ..queue_errors import NoAvailableUpstream, QueueClosed, QueueFull, UpstreamExecutionTimeout
 from ..templating import templates
+from ..zip_images import zip_images_to_data_urls
 from .auth import has_admin_session, require_admin_or_session, require_admin_page_session
 from .common import (
     DISPLAY_TIMEZONE,
@@ -51,6 +51,75 @@ ADMIN_UPSTREAM_TEST_PAYLOAD = {
         "qualityToggle": False,
     },
 }
+UpstreamTestRuleValue = int | str | Callable[[BaseException], int | str]
+
+
+@dataclass(frozen=True)
+class UpstreamTestExceptionRule:
+    exception_type: type[BaseException]
+    status_code: UpstreamTestRuleValue
+    error_code: UpstreamTestRuleValue
+    error_type: UpstreamTestRuleValue
+    message: UpstreamTestRuleValue
+
+
+def _exception_class_name(exc: BaseException) -> str:
+    return exc.__class__.__name__
+
+
+def _exception_text(exc: BaseException) -> str:
+    return str(exc)
+
+
+def _api_error_code(exc: BaseException) -> str:
+    if isinstance(exc, APIError):
+        return str(exc.code or "upstream_error")
+    return "upstream_error"
+
+
+def _api_error_message(exc: BaseException) -> str:
+    if isinstance(exc, APIError):
+        return exc.message or str(exc)
+    return str(exc)
+
+
+UPSTREAM_TEST_EXCEPTION_RULES = (
+    UpstreamTestExceptionRule(
+        exception_type=QueueFull,
+        status_code=503,
+        error_code="queue_full",
+        error_type="QueueFull",
+        message="Queue full, please retry later",
+    ),
+    UpstreamTestExceptionRule(
+        exception_type=QueueClosed,
+        status_code=503,
+        error_code="server_shutting_down",
+        error_type="QueueClosed",
+        message="Server is shutting down, please retry later",
+    ),
+    UpstreamTestExceptionRule(
+        exception_type=NoAvailableUpstream,
+        status_code=400,
+        error_code="unknown_upstream",
+        error_type=_exception_class_name,
+        message=_exception_text,
+    ),
+    UpstreamTestExceptionRule(
+        exception_type=UpstreamExecutionTimeout,
+        status_code=504,
+        error_code="upstream_timeout",
+        error_type=_exception_class_name,
+        message=_exception_text,
+    ),
+    UpstreamTestExceptionRule(
+        exception_type=APIError,
+        status_code=lambda exc: api_error_status_code(exc) if isinstance(exc, APIError) else 502,
+        error_code=_api_error_code,
+        error_type=lambda exc: _api_error_type(exc) if isinstance(exc, APIError) else exc.__class__.__name__,
+        message=_api_error_message,
+    ),
+)
 
 
 @api_router.get("/queue", dependencies=[Depends(require_admin_or_session)])
@@ -121,50 +190,11 @@ async def test_upstream(request: Request, upstream_id: str):
             logging_config=request.app.state.config.logging,
             handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
         )
-    except QueueFull:
-        return _upstream_test_failure_response(
-            status_code=503,
+    except (QueueFull, QueueClosed, NoAvailableUpstream, UpstreamExecutionTimeout, APIError) as exc:
+        return _upstream_test_exception_response(
+            exc,
             upstream_id=normalized_upstream_id,
             started_at=started_at,
-            error_code="queue_full",
-            error_type="QueueFull",
-            message="Queue full, please retry later",
-        )
-    except QueueClosed:
-        return _upstream_test_failure_response(
-            status_code=503,
-            upstream_id=normalized_upstream_id,
-            started_at=started_at,
-            error_code="server_shutting_down",
-            error_type="QueueClosed",
-            message="Server is shutting down, please retry later",
-        )
-    except NoAvailableUpstream as exc:
-        return _upstream_test_failure_response(
-            status_code=400,
-            upstream_id=normalized_upstream_id,
-            started_at=started_at,
-            error_code="unknown_upstream",
-            error_type=exc.__class__.__name__,
-            message=str(exc),
-        )
-    except UpstreamExecutionTimeout as exc:
-        return _upstream_test_failure_response(
-            status_code=504,
-            upstream_id=normalized_upstream_id,
-            started_at=started_at,
-            error_code="upstream_timeout",
-            error_type=exc.__class__.__name__,
-            message=str(exc),
-        )
-    except APIError as exc:
-        return _upstream_test_failure_response(
-            status_code=api_error_status_code(exc),
-            upstream_id=normalized_upstream_id,
-            started_at=started_at,
-            error_code=str(exc.code or "upstream_error"),
-            error_type=_api_error_type(exc),
-            message=exc.message or str(exc),
         )
     except Exception as exc:
         logger.exception("admin upstream test failed upstream_id=%s", normalized_upstream_id)
@@ -388,44 +418,45 @@ def _upstream_test_failure_response(
     )
 
 
+def _upstream_test_exception_response(
+    exc: BaseException,
+    *,
+    upstream_id: str,
+    started_at: float,
+) -> JSONResponse:
+    rule = _upstream_test_exception_rule(exc)
+    if rule is None:
+        raise RuntimeError(f"Unhandled upstream test exception: {exc.__class__.__name__}") from exc
+    return _upstream_test_failure_response(
+        status_code=int(_resolve_upstream_test_rule_value(rule.status_code, exc)),
+        upstream_id=upstream_id,
+        started_at=started_at,
+        error_code=str(_resolve_upstream_test_rule_value(rule.error_code, exc)),
+        error_type=str(_resolve_upstream_test_rule_value(rule.error_type, exc)),
+        message=str(_resolve_upstream_test_rule_value(rule.message, exc)),
+    )
+
+
+def _upstream_test_exception_rule(exc: BaseException) -> UpstreamTestExceptionRule | None:
+    for rule in UPSTREAM_TEST_EXCEPTION_RULES:
+        if isinstance(exc, rule.exception_type):
+            return rule
+    return None
+
+
+def _resolve_upstream_test_rule_value(value: UpstreamTestRuleValue, exc: BaseException) -> int | str:
+    if callable(value):
+        return value(exc)
+    return value
+
+
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.monotonic() - started_at) * 1000))
 
 
 def _zip_image_preview(payload: bytes) -> tuple[int, dict[str, object] | None]:
-    image_count = 0
-    preview_image = None
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            for item in archive.infolist():
-                if item.is_dir() or item.file_size <= 0:
-                    continue
-                content_type = _image_content_type(item.filename)
-                if content_type is None:
-                    continue
-                image_count += 1
-                if preview_image is None:
-                    image_bytes = archive.read(item)
-                    preview_image = {
-                        "filename": item.filename,
-                        "content_type": content_type,
-                        "bytes": len(image_bytes),
-                        "data_url": f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('ascii')}",
-                    }
-    except zipfile.BadZipFile:
-        return 0, None
-    return image_count, preview_image
-
-
-def _image_content_type(filename: str) -> str | None:
-    lower = filename.lower()
-    if lower.endswith(".png"):
-        return "image/png"
-    if lower.endswith((".jpg", ".jpeg")):
-        return "image/jpeg"
-    if lower.endswith(".webp"):
-        return "image/webp"
-    return None
+    images = zip_images_to_data_urls(payload)
+    return len(images), images[0] if images else None
 
 
 def _api_error_type(exc: APIError) -> str:
@@ -634,63 +665,40 @@ def _request_count_for_range(db: Database, start: datetime, end: datetime, upstr
 
 
 def _hour_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
-    start_bucket = hour_bucket(start)
-    end_bucket = hour_bucket(end)
-    stats_upstream_id = _stats_upstream_id(upstream_id)
-    return db.query_all(
-        """
-        WITH request_rows AS (
-            SELECT CAST(substr(bucket_hour, 12, 2) AS INTEGER) AS bucket,
-                   COUNT(DISTINCT request_id) AS requests
-            FROM dashboard_hourly_request_refs
-            WHERE bucket_hour >= ?
-              AND bucket_hour < ?
-              AND upstream_id = ?
-            GROUP BY bucket
-        ),
-        status_rows AS (
-            SELECT CAST(substr(bucket_hour, 12, 2) AS INTEGER) AS bucket,
-                   SUM(failed_count) AS failed,
-                   SUM(rejected_count) AS rejected,
-                   SUM(retry_success_count) AS retry_success
-            FROM dashboard_hourly_stats
-            WHERE bucket_hour >= ?
-              AND bucket_hour < ?
-              AND upstream_id = ?
-            GROUP BY bucket
-        ),
-        buckets AS (
-            SELECT bucket FROM request_rows
-            UNION
-            SELECT bucket FROM status_rows
-        )
-        SELECT buckets.bucket AS bucket,
-               COALESCE(request_rows.requests, 0) AS requests,
-               COALESCE(status_rows.failed, 0) AS failed,
-               COALESCE(status_rows.rejected, 0) AS rejected,
-               COALESCE(status_rows.retry_success, 0) AS retry_success
-        FROM buckets
-        LEFT JOIN request_rows ON request_rows.bucket = buckets.bucket
-        LEFT JOIN status_rows ON status_rows.bucket = buckets.bucket
-        ORDER BY buckets.bucket
-        """,
-        (
-            start_bucket,
-            end_bucket,
-            stats_upstream_id,
-            start_bucket,
-            end_bucket,
-            stats_upstream_id,
-        ),
+    return _bucket_rows(
+        db,
+        start,
+        end,
+        bucket_expr="CAST(substr(bucket_hour, 12, 2) AS INTEGER)",
+        upstream_id=upstream_id,
     )
+
+
 def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id: str | None = None) -> list:
+    return _bucket_rows(
+        db,
+        start,
+        end,
+        bucket_expr="substr(bucket_hour, 1, 10)",
+        upstream_id=upstream_id,
+    )
+
+
+def _bucket_rows(
+    db: Database,
+    start: datetime,
+    end: datetime,
+    *,
+    bucket_expr: str,
+    upstream_id: str | None = None,
+) -> list:
     start_bucket = hour_bucket(start)
     end_bucket = hour_bucket(end)
     stats_upstream_id = _stats_upstream_id(upstream_id)
     return db.query_all(
-        """
+        f"""
         WITH request_rows AS (
-            SELECT substr(bucket_hour, 1, 10) AS bucket,
+            SELECT {bucket_expr} AS bucket,
                    COUNT(DISTINCT request_id) AS requests
             FROM dashboard_hourly_request_refs
             WHERE bucket_hour >= ?
@@ -699,7 +707,7 @@ def _date_bucket_rows(db: Database, start: datetime, end: datetime, upstream_id:
             GROUP BY bucket
         ),
         status_rows AS (
-            SELECT substr(bucket_hour, 1, 10) AS bucket,
+            SELECT {bucket_expr} AS bucket,
                    SUM(failed_count) AS failed,
                    SUM(rejected_count) AS rejected,
                    SUM(retry_success_count) AS retry_success

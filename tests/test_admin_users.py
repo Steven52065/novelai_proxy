@@ -151,6 +151,18 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
         assert bad_user_update.status_code == 400
         assert bad_user_update.json()["message"] == "Unknown image_format_policy: gif"
 
+        bad_group_id = client.post(
+            "/admin/users",
+            data={
+                "name": "bad-group-id-user",
+                "group_id": "abc",
+                "allowed_endpoints": "generate-image",
+            },
+            follow_redirects=False,
+        )
+        assert bad_group_id.status_code == 400
+        assert bad_group_id.json()["message"] == "Invalid form value"
+
         bad_group_create = client.post(
             "/admin/user-groups",
             data={
@@ -182,6 +194,10 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
         )
         assert bad_group_update.status_code == 400
         assert bad_group_update.json()["message"] == "Unknown image_format_policy: gif"
+
+        bad_propagated = client.get(f"/admin/user-groups/{group_id}?propagated=abc")
+        assert bad_propagated.status_code == 400
+        assert bad_propagated.json()["message"] == "Invalid query parameter"
 
 
 def test_admin_rejects_enabled_free_small_daily_limit_without_positive_limit(tmp_path: Path, monkeypatch):
