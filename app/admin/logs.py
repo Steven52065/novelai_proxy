@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response
 from novelai_python._exceptions import APIError
 
 from ..logging_utils import mark_request_total_duration
@@ -178,21 +178,14 @@ async def export_logs(
         "created_at",
     ]
 
-    def iter_csv():
-        buffer = io.StringIO()
-        writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        yield buffer.getvalue()
-        buffer.seek(0)
-        buffer.truncate(0)
-        for row in rows:
-            writer.writerow(usage_log_to_dict(row))
-            yield buffer.getvalue()
-            buffer.seek(0)
-            buffer.truncate(0)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(usage_log_to_dict(row))
 
-    return StreamingResponse(
-        iter_csv(),
+    return Response(
+        buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="usage_logs.csv"'},
     )

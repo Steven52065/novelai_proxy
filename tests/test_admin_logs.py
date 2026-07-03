@@ -566,6 +566,7 @@ def test_admin_logs_export_csv_uses_current_filters(tmp_path: Path, monkeypatch)
         assert export.status_code == 200
         assert export.headers["content-type"].startswith("text/csv")
         assert "usage_logs.csv" in export.headers["content-disposition"]
+        assert int(export.headers["content-length"]) > 0
         assert "csv-alpha-generate" in export.text
         assert "csv-beta-generate" not in export.text
 

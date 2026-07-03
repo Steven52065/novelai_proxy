@@ -276,7 +276,7 @@ async def dashboard_ws(websocket: WebSocket):
                     "version": last_version,
                 }
             )
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.CancelledError):
         return
     finally:
         if receive_task is not None and not receive_task.done():
