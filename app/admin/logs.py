@@ -392,7 +392,7 @@ def _parse_datetime_local_filter(value: str | None, field_name: str) -> tuple[st
 def _selected_user(request: Request, user_id: int | None) -> dict | None:
     if user_id is None:
         return None
-    row = request.app.state.db.query_one("SELECT id, name FROM users WHERE id = ?", (user_id,))
+    row = request.app.state.db.query_one("SELECT id, name FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,))
     return row_to_dict(row) if row is not None else None
 
 

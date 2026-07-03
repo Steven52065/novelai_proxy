@@ -536,6 +536,26 @@ def test_admin_logs_page_preserves_filter_controls(tmp_path: Path, monkeypatch):
         assert "/admin/logs/export?" in page.text
 
 
+def test_admin_logs_page_does_not_prefill_deleted_selected_user(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        user_id = _create_admin_user(client, "deleted-log-filter-user")
+        delete_resp = client.delete(f"/admin/api/users/{user_id}", auth=("admin", "admin123"))
+        assert delete_resp.status_code == 200
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        page = client.get(f"/admin/logs?user_id={user_id}")
+
+        assert page.status_code == 200
+        assert f'id="logs-user-id-input" name="user_id" type="hidden" value="{user_id}"' in page.text
+        assert 'id="logs-user-search-input" type="search" value=""' in page.text
+        assert "deleted-log-filter-user" not in page.text
+
+
 def test_admin_logs_export_csv_uses_current_filters(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
