@@ -160,6 +160,21 @@ class FreeSmallDailyLimitManager:
                 ),
             )
 
+    def reclaim_orphan_reserved(self) -> int:
+        # Only safe for this project's single-process deployment: the in-memory queue
+        # is empty after a restart, so no persisted reservation can still be in flight.
+        with self.db.transaction() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE free_small_daily_usage
+                SET reserved = 0,
+                    updated_at = ?
+                WHERE reserved != 0
+                """,
+                (utc_now_iso(),),
+            )
+            return int(cursor.rowcount)
+
     def reset_usage(self, user_id: int, *, now: datetime | None = None) -> None:
         # 管理员手动重置：只清零当前窗口的用量，窗口边界由时钟决定，
         # 因此每日自动重置周期不受影响。

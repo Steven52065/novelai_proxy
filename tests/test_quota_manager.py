@@ -110,3 +110,23 @@ def test_quota_extra_reset_without_schedule_update_keeps_next_auto_reset(tmp_pat
         assert manager.reset_if_due(user_id) is True
     finally:
         db.close()
+
+
+def test_reclaim_orphan_reserved_clears_only_reserved_anlas(tmp_path):
+    db, manager, user_id = _quota_manager(tmp_path)
+    try:
+        manager.create_or_update(user_id, total=10, reset_period="never")
+        manager.reserve(user_id, 4)
+        manager.confirm(user_id, 4)
+        manager.reserve(user_id, 3)
+
+        assert manager.reclaim_orphan_reserved() == 1
+
+        snapshot = manager.get_snapshot(user_id)
+        assert snapshot.total == 10
+        assert snapshot.used == 4
+        assert snapshot.reserved == 0
+        assert snapshot.available == 6
+        assert manager.reclaim_orphan_reserved() == 0
+    finally:
+        db.close()

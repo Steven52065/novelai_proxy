@@ -59,6 +59,12 @@ async def lifespan(app: FastAPI):
         db,
         reset_hour_utc8=config.free_small_daily_limit.reset_hour_utc8,
     )
+    reclaimed_anlas_rows = quota_manager.reclaim_orphan_reserved()
+    reclaimed_free_small_rows = free_small_daily_limit_manager.reclaim_orphan_reserved()
+    if reclaimed_anlas_rows:
+        logger.warning("reclaimed orphan anlas reservations rows=%s", reclaimed_anlas_rows)
+    if reclaimed_free_small_rows:
+        logger.warning("reclaimed orphan free-small daily reservations rows=%s", reclaimed_free_small_rows)
     usage_logs = UsageLogRepository(
         db,
         on_change=dashboard_events.notify_nowait,

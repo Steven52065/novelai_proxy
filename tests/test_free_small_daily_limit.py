@@ -112,6 +112,25 @@ def test_custom_utc8_reset_hour_changes_window_and_retry_after(tmp_path: Path):
     assert exceeded.value.retry_after == 1800
 
 
+def test_reclaim_orphan_reserved_clears_only_reserved_daily_usage(tmp_path: Path):
+    db = _daily_limit_db(tmp_path)
+    user_id = _create_user(db, enabled=True, limit=5)
+    manager = FreeSmallDailyLimitManager(db)
+    now = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
+
+    reservation = manager.reserve(user_id, 2, now=now)
+    manager.confirm(reservation)
+    manager.reserve(user_id, 3, now=now)
+
+    assert manager.reclaim_orphan_reserved() == 1
+
+    snapshot = manager.get_snapshot(user_id, now=now)
+    assert snapshot.used == 2
+    assert snapshot.reserved == 0
+    assert snapshot.available == 3
+    assert manager.reclaim_orphan_reserved() == 0
+
+
 def _daily_limit_db(tmp_path: Path) -> Database:
     db = Database(str(tmp_path / "daily.db"))
     db.init_schema()

@@ -86,6 +86,13 @@ class QuotaManager:
                 (cost, user_id),
             )
 
+    def reclaim_orphan_reserved(self) -> int:
+        # Only safe for this project's single-process deployment: the in-memory queue
+        # is empty after a restart, so no persisted reservation can still be in flight.
+        with self.db.transaction() as conn:
+            cursor = conn.execute("UPDATE user_anlas_quota SET reserved = 0 WHERE reserved != 0")
+            return int(cursor.rowcount)
+
     def create_or_update(self, user_id: int, total: int, reset_period: str = "month", reset_day: int | None = None) -> None:
         now = utc_now_iso()
         with self.db.transaction() as conn:
