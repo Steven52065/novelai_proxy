@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, StreamingResponse
 from novelai_python._exceptions import APIError
 
 from ..api_errors import api_error_status_code
@@ -170,14 +170,8 @@ async def export_logs(
         "created_at",
     ]
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(usage_log_to_dict(row))
-
-    return Response(
-        buffer.getvalue(),
+    return StreamingResponse(
+        _csv_log_rows(rows, columns),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="usage_logs.csv"'},
     )
@@ -347,6 +341,22 @@ def _parse_log_filters(
         action=_optional_query_text(action),
         status=_parse_status_filter(status),
     )
+
+
+def _csv_log_rows(rows, columns: list[str]):
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+
+    writer.writeheader()
+    yield buffer.getvalue()
+    buffer.seek(0)
+    buffer.truncate(0)
+
+    for row in rows:
+        writer.writerow(usage_log_to_dict(row))
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
 
 
 def _optional_query_text(value: str | None) -> str | None:
