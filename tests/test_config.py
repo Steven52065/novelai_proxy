@@ -29,6 +29,19 @@ def test_self_service_config_defaults_to_disabled():
     assert config.database.auto_vacuum.run_time_utc8 == "04:00"
 
 
+def test_logging_level_accepts_warning():
+    config = AppConfig.model_validate({"logging": {"level": "WARNING"}})
+
+    assert config.logging.level == "WARNING"
+
+
+def test_legacy_log_level_warning_updates_logging_level():
+    config = AppConfig.model_validate({"log_level": "WARNING"})
+
+    assert config.log_level == "WARNING"
+    assert config.logging.level == "WARNING"
+
+
 def test_free_small_daily_limit_reset_hour_validation():
     assert AppConfig.model_validate({"free_small_daily_limit": {"reset_hour_utc8": 0}}).free_small_daily_limit.reset_hour_utc8 == 0
     assert AppConfig.model_validate({"free_small_daily_limit": {"reset_hour_utc8": 23}}).free_small_daily_limit.reset_hour_utc8 == 23

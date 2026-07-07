@@ -112,7 +112,7 @@ class DatabaseConfig(BaseModel):
 
 
 class LoggingConfig(BaseModel):
-    level: Literal["DEBUG", "INFO", "ERROR"] = "INFO"
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     directory: str = "logs"
     request_log_file: str = "novelai_proxy.log"
     save_generated_images: bool = True
@@ -192,7 +192,7 @@ class AppConfig(BaseModel):
 
     def model_post_init(self, __context) -> None:
         if "log_level" in self.model_fields_set and "logging" not in self.model_fields_set:
-            if self.log_level in {"DEBUG", "INFO", "ERROR"}:
+            if self.log_level in {"DEBUG", "INFO", "WARNING", "ERROR"}:
                 self.logging.level = self.log_level
 
 
