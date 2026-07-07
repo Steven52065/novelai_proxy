@@ -359,7 +359,7 @@ h2 .muted,
 }
 .badge-sm { font-size: 11px; }
 
-/* ---- dashboard WS 状态指示器（JS 直接写 element.style，初始值用 class 兜底） ---- */
+/* ---- dashboard WS 状态指示器（JS 切换状态 class） ---- */
 .ws-status {
   display: flex;
   align-items: center;
@@ -371,17 +371,30 @@ h2 .muted,
   width: 8px;
   height: 8px;
   border-radius: var(--radius-pill);
-  background: #f59e0b;
-  box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
+  background: var(--ws-dot-background, var(--warning));
+  box-shadow: 0 0 10px var(--ws-dot-shadow, var(--warning-border));
+}
+.ws-dot.ws-state-connected {
+  --ws-dot-background: var(--success);
+  --ws-dot-shadow: var(--success-border);
+}
+.ws-dot.ws-state-connecting,
+.ws-dot.ws-state-fallback {
+  --ws-dot-background: var(--warning);
+  --ws-dot-shadow: var(--warning-border);
+}
+.ws-dot.ws-state-error {
+  --ws-dot-background: var(--danger);
+  --ws-dot-shadow: var(--danger-border);
 }
 
 /* ---- metric 图标配色（对应 :nth-child hover 顶条色） ---- */
 .metric-icon { width: 16px; height: 16px; }
-.metric-icon-1 { stroke: #6366f1; }
-.metric-icon-2 { stroke: #3b82f6; }
-.metric-icon-3 { stroke: #10b981; }
-.metric-icon-4 { stroke: #f59e0b; }
-.metric-icon-5 { stroke: #14b8a6; }
+.metric-icon-1 { stroke: var(--metric-accent-1, var(--primary)); }
+.metric-icon-2 { stroke: var(--metric-accent-2, var(--info)); }
+.metric-icon-3 { stroke: var(--metric-accent-3, var(--success)); }
+.metric-icon-4 { stroke: var(--metric-accent-4, var(--warning)); }
+.metric-icon-5 { stroke: var(--metric-accent-5, var(--accent-cyan)); }
 
 /* ==========================================================================
    5. Metrics（仪表盘/数据库/账号 的数字卡片网格）
@@ -419,11 +432,11 @@ h2 .muted,
   transition: var(--transition);
 }
 
-.metrics div:nth-child(1):hover::before { background: #6366f1; }
-.metrics div:nth-child(2):hover::before { background: #3b82f6; }
-.metrics div:nth-child(3):hover::before { background: #10b981; }
-.metrics div:nth-child(4):hover::before { background: #f59e0b; }
-.metrics div:nth-child(5):hover::before { background: #14b8a6; }
+.metrics div:nth-child(1):hover::before { background: var(--metric-accent-1, var(--primary)); }
+.metrics div:nth-child(2):hover::before { background: var(--metric-accent-2, var(--info)); }
+.metrics div:nth-child(3):hover::before { background: var(--metric-accent-3, var(--success)); }
+.metrics div:nth-child(4):hover::before { background: var(--metric-accent-4, var(--warning)); }
+.metrics div:nth-child(5):hover::before { background: var(--metric-accent-5, var(--accent-cyan)); }
 
 .metrics div:hover {
   transform: translateY(-4px);
@@ -482,6 +495,31 @@ h2 .muted,
 /* dashboard 页禁用 backdrop-blur（避免实时刷新抖动） */
 .dashboard-page {
   background-attachment: scroll;
+  --metric-accent-1: var(--primary);
+  --metric-accent-2: var(--info);
+  --metric-accent-3: var(--success);
+  --metric-accent-4: var(--warning);
+  --metric-accent-5: var(--accent-cyan);
+  --dashboard-control-bg: var(--field-bg);
+  --dashboard-control-active-bg: var(--info-bg);
+  --dashboard-control-active-border: var(--info-border);
+  --dashboard-control-active-text: var(--info-text);
+  --dashboard-summary-bg: var(--field-bg);
+  --dashboard-chart-bg: var(--panel-bg-elevated);
+  --dashboard-grid-stroke: var(--divider-strong);
+  --dashboard-tooltip-border: var(--secondary-border);
+  --dashboard-tooltip-bg: var(--panel-bg-elevated);
+  --dashboard-weight-track-bg: var(--divider-strong);
+  --dashboard-weight-fill: linear-gradient(90deg, var(--primary), var(--primary-soft));
+  --trend-requests: var(--info-text);
+  --trend-failed: var(--danger);
+  --trend-rejected: var(--warning);
+  --trend-retry-success: var(--success);
+  --trend-requests-fill: var(--info-bg);
+  --trend-failed-fill: var(--danger-bg);
+  --trend-rejected-fill: var(--warning-bg);
+  --trend-retry-success-fill: var(--success-bg);
+  --trend-point-stroke: var(--text-inverse);
 }
 .dashboard-page .topbar,
 .dashboard-page .metrics div,
@@ -1725,7 +1763,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   padding: 4px;
   border: 1px solid var(--panel-border-soft);
   border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.48);
+  background: var(--dashboard-control-bg);
 }
 .segmented-control button {
   min-height: 34px;
@@ -1735,9 +1773,9 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   box-shadow: none;
 }
 .segmented-control button.active {
-  background: rgba(96, 165, 250, 0.18);
-  border-color: rgba(96, 165, 250, 0.32);
-  color: #bfdbfe;
+  background: var(--dashboard-control-active-bg);
+  border-color: var(--dashboard-control-active-border);
+  color: var(--dashboard-control-active-text);
 }
 
 .trend-summary {
@@ -1752,7 +1790,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   padding: 14px var(--space-4);
   border: 1px solid var(--panel-border-soft);
   border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.38);
+  background: var(--dashboard-summary-bg);
 }
 .trend-summary span {
   display: block;
@@ -1763,7 +1801,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   white-space: nowrap;
 }
 .trend-summary strong {
-  color: #fff;
+  color: var(--text-main);
   font-size: 24px;
   line-height: 1.1;
 }
@@ -1773,7 +1811,7 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   min-height: 280px;
   border: 1px solid var(--panel-border-soft);
   border-radius: var(--radius-md);
-  background: rgba(7, 10, 23, 0.45);
+  background: var(--dashboard-chart-bg);
   overflow: hidden;
 }
 .trend-chart {
@@ -1781,16 +1819,52 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   width: 100%;
   min-height: 280px;
 }
-.trend-grid { stroke: rgba(255, 255, 255, 0.07); stroke-width: 1; }
+.trend-grid { stroke: var(--dashboard-grid-stroke); stroke-width: 1; }
 .trend-axis-label {
   fill: var(--text-muted);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 600;
 }
-.trend-line { filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.16)); }
-.trend-area { pointer-events: none; }
-.trend-point { opacity: 0.9; pointer-events: none; transition: var(--transition); }
+.trend-line {
+  fill: none;
+  stroke: var(--trend-color);
+  color: var(--trend-color);
+  filter: drop-shadow(0 0 6px var(--trend-shadow));
+}
+.trend-area {
+  fill: var(--trend-fill);
+  pointer-events: none;
+}
+.trend-point {
+  fill: var(--trend-color);
+  stroke: var(--trend-point-stroke);
+  stroke-width: 2;
+  color: var(--trend-color);
+  opacity: 0.9;
+  pointer-events: none;
+  transition: var(--transition);
+}
+.trend-series-requests {
+  --trend-color: var(--trend-requests);
+  --trend-fill: var(--trend-requests-fill);
+  --trend-shadow: var(--info-border);
+}
+.trend-series-failed {
+  --trend-color: var(--trend-failed);
+  --trend-fill: var(--trend-failed-fill);
+  --trend-shadow: var(--danger-border);
+}
+.trend-series-rejected {
+  --trend-color: var(--trend-rejected);
+  --trend-fill: var(--trend-rejected-fill);
+  --trend-shadow: var(--warning-border);
+}
+.trend-series-retry-success {
+  --trend-color: var(--trend-retry-success);
+  --trend-fill: var(--trend-retry-success-fill);
+  --trend-shadow: var(--success-border);
+}
 .trend-markers { pointer-events: none; }
 .trend-points { pointer-events: auto; }
 .trend-point-hit { cursor: pointer; outline: none; touch-action: manipulation; }
@@ -1807,11 +1881,11 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   z-index: 3;
   min-width: 120px;
   padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid var(--dashboard-tooltip-border);
   border-radius: var(--radius-sm);
-  background: rgba(10, 12, 26, 0.94);
+  background: var(--dashboard-tooltip-bg);
   box-shadow: var(--shadow-pop);
-  color: #fff;
+  color: var(--text-main);
   font-size: 12px;
   font-weight: 700;
   pointer-events: none;
@@ -1834,9 +1908,18 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   min-width: 140px;
 }
 .trend-tooltip-row + .trend-tooltip-row { margin-top: 4px; }
-.trend-tooltip-row i { width: 8px; height: 8px; border-radius: var(--radius-pill); }
+.trend-tooltip-row i {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--trend-color);
+}
 .trend-tooltip-row span { color: var(--text-muted); font-size: 11px; }
-.trend-tooltip-row strong { font-size: 13px; line-height: 1.2; }
+.trend-tooltip-row strong {
+  color: var(--trend-color);
+  font-size: 13px;
+  line-height: 1.2;
+}
 
 .trend-empty {
   position: absolute;
@@ -1862,12 +1945,14 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   width: 9px;
   height: 9px;
   border-radius: var(--radius-pill);
+  background: currentColor;
+  color: var(--trend-color);
   box-shadow: 0 0 10px currentColor;
 }
-.legend-dot-requests { background: #60a5fa; }
-.legend-dot-failed { background: #ef4444; }
-.legend-dot-rejected { background: #f59e0b; }
-.legend-dot-retry { background: #22c55e; }
+.legend-dot-requests { --trend-color: var(--trend-requests); }
+.legend-dot-failed { --trend-color: var(--trend-failed); }
+.legend-dot-rejected { --trend-color: var(--trend-rejected); }
+.legend-dot-retry { --trend-color: var(--trend-retry-success); }
 
 .weights-loading-cell {
   padding: 32px 0;
@@ -1888,13 +1973,13 @@ tr:hover:not(.log-detail-row):not(.empty-row) {
   height: 8px;
   overflow: hidden;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--dashboard-weight-track-bg);
 }
 
 .weight-meter-fill {
   height: 100%;
   border-radius: var(--radius-sm);
-  background: linear-gradient(90deg, #6366f1, #a5b4fc);
+  background: var(--dashboard-weight-fill);
   transition: width 0.5s ease;
 }
 

@@ -7,7 +7,7 @@
     系统仪表盘
   </h1>
   <div class="ws-status">
-    <span id="dashboard-ws-dot" class="ws-dot"></span>
+    <span id="dashboard-ws-dot" class="ws-dot ws-state-connecting"></span>
     <span class="muted" id="dashboard-ws-status">WS 连接中...</span>
   </div>
 </div>
@@ -193,10 +193,10 @@
   const totalRejected = document.getElementById("trend-total-rejected");
   const totalRetrySuccess = document.getElementById("trend-total-retry-success");
   const seriesConfig = [
-    {key: "requests", label: "请求数量", color: "#60a5fa", fill: "rgba(96, 165, 250, 0.08)"},
-    {key: "failed", label: "失败数量", color: "#ef4444", fill: "rgba(239, 68, 68, 0.06)"},
-    {key: "rejected", label: "拒绝数量", color: "#f59e0b", fill: "rgba(245, 158, 11, 0.06)"},
-    {key: "retry_success", label: "重试成功", color: "#22c55e", fill: "rgba(34, 197, 94, 0.05)"},
+    {key: "requests", label: "请求数量", className: "trend-series-requests"},
+    {key: "failed", label: "失败数量", className: "trend-series-failed"},
+    {key: "rejected", label: "拒绝数量", className: "trend-series-rejected"},
+    {key: "retry_success", label: "重试成功", className: "trend-series-retry-success"},
   ];
   let trends = {};
   let activeRange = "today";
@@ -298,11 +298,9 @@
       const swatch = document.createElement("i");
       const name = document.createElement("span");
       const value = document.createElement("strong");
-      row.className = "trend-tooltip-row";
-      swatch.style.background = item.color;
+      row.className = `trend-tooltip-row ${item.className}`;
       name.textContent = item.label;
       value.textContent = Number(values[item.key] || 0);
-      value.style.color = item.color;
       row.append(swatch, name, value);
       return row;
     });
@@ -329,10 +327,7 @@
         cx: point.x,
         cy: point.y,
         r: 4,
-        fill: item.color,
-        stroke: "#0f172a",
-        "stroke-width": 2,
-        class: "trend-point",
+        class: `trend-point ${item.className}`,
       });
       group.appendChild(visiblePoint);
     }
@@ -431,17 +426,14 @@
       if (!itemValues.length) continue;
       chart.appendChild(svgEl("path", {
         d: areaPath(itemValues, yMax, width, height, left, top),
-        fill: item.fill,
-        class: "trend-area",
+        class: `trend-area ${item.className}`,
       }));
       chart.appendChild(svgEl("path", {
         d: pointPath(itemValues, yMax, width, height, left, top),
-        fill: "none",
-        stroke: item.color,
         "stroke-width": item.key === "requests" ? 3 : 2.5,
         "stroke-linecap": "round",
         "stroke-linejoin": "round",
-        class: "trend-line",
+        class: `trend-line ${item.className}`,
       }));
       appendTrendMarkers(item, itemValues, yMax, width, height, left, top);
     }
@@ -862,16 +854,10 @@
   function setWsStatus(state, text) {
     if (wsStatus) wsStatus.textContent = text;
     if (!wsStatusDot) return;
-    const styles = {
-      connected: ["#10b981", "rgba(16, 185, 129, 0.6)", ""],
-      connecting: ["#f59e0b", "rgba(245, 158, 11, 0.45)", ""],
-      fallback: ["#f59e0b", "rgba(245, 158, 11, 0.45)", ""],
-      error: ["#ef4444", "rgba(239, 68, 68, 0.45)", ""],
-    };
-    const [background, shadow, animation] = styles[state] || styles.connecting;
-    wsStatusDot.style.background = background;
-    wsStatusDot.style.boxShadow = `0 0 10px ${shadow}`;
-    wsStatusDot.style.animation = animation;
+    const states = ["connected", "connecting", "fallback", "error"];
+    const normalizedState = states.includes(state) ? state : "connecting";
+    wsStatusDot.classList.remove(...states.map((item) => `ws-state-${item}`));
+    wsStatusDot.classList.add(`ws-state-${normalizedState}`);
   }
 
   function dashboardWebSocketUrl() {
