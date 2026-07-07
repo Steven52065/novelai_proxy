@@ -12,11 +12,11 @@ from fastapi.responses import HTMLResponse, Response
 from novelai_python._exceptions import APIError
 
 from ..api_errors import api_error_status_code
-from ..logging_utils import mark_request_total_duration
 from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..payload_archive import PayloadArchiveError, PayloadArchiveService, PayloadNotFoundError
 from ..queue_errors import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout
 from ..queue_tiers import TIER_REPLAY
+from ..request_accounting import mark_request_total_duration
 from ..templating import templates
 from ..timezones import DISPLAY_TIMEZONE
 from ..usage_logs import USAGE_LOG_STATUSES, UsageLogCreate, UsageLogRepository

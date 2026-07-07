@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from novelai_python._exceptions import APIError
 
-from .logging_utils import archive_zip_images, logger
+from .logging_utils import logger
 from .queue_errors import QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable
 from .queue_models import ImageHostingServiceLike, QueueItem
 from .queue_snapshot import ProxyQueueSnapshot
@@ -16,6 +16,7 @@ from .queue_snapshot_helpers import item_snapshot
 from .queue_work_queue import PriorityWorkQueue
 from .retry_policy import RetryPolicy
 from .usage_logs import UsageLogRepository
+from .zip_images import archive_zip_images
 
 
 class ProxyQueue:

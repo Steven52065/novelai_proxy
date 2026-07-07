@@ -31,8 +31,9 @@ from ..deps import (
 from ..free_small_daily_limit import FreeSmallDailyLimitManager
 from ..image_format_policies import effective_image_format_config
 from ..queue_tiers import is_vip_tier
-from ..logging_utils import dump_model_payload, logger, mark_request_total_duration
+from ..logging_utils import dump_model_payload, logger
 from ..quota_manager import QuotaManager
+from ..request_accounting import mark_request_total_duration
 from ..routing_queue import RoutingProxyQueue
 from .service import MESSAGE_PROXY_REQUEST_FAILED, MESSAGE_UPSTREAM_REQUEST_FAILED, ProxyRequestService, ProxyTaskRequest, ProxyTaskResult
 

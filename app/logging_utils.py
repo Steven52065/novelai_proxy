@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sys
 import time
-import zipfile
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import LoggingConfig
@@ -112,65 +108,6 @@ class RequestLoggingMiddleware:
                 _client_addr(scope),
                 json_dumps(_safe_headers(scope)),
             )
-
-
-def mark_request_total_duration(request: Request, request_id: str | None) -> None:
-    """按 RequestLoggingMiddleware 记录的起始时间，把请求总耗时写入 usage_logs。"""
-    if not request_id:
-        return
-    started_at = getattr(request.state, "request_started_at", None)
-    try:
-        total_ms = int((time.perf_counter() - float(started_at)) * 1000)
-    except (TypeError, ValueError):
-        return
-    request.app.state.usage_logs.mark_total_duration(request_id, max(0, total_ms))
-
-
-def archive_zip_images(
-    *,
-    zip_payload: bytes,
-    request_id: str,
-    action: str,
-    config: LoggingConfig,
-) -> list[str]:
-    if not config.save_generated_images:
-        return []
-
-    output_root = Path(config.directory) / config.generated_images_dir / request_id
-    output_root.mkdir(parents=True, exist_ok=True)
-    saved_files: list[str] = []
-
-    try:
-        with zipfile.ZipFile(BytesIO(zip_payload)) as zip_file:
-            for index, member in enumerate(zip_file.infolist(), start=1):
-                if member.is_dir():
-                    continue
-                data = zip_file.read(member)
-                if not data:
-                    continue
-                ext = _safe_suffix(member.filename)
-                filename = f"{index:02d}_{_safe_name(action)}{ext}"
-                path = output_root / filename
-                path.write_bytes(data)
-                saved_files.append(str(path))
-    except zipfile.BadZipFile:
-        path = output_root / "response.bin"
-        path.write_bytes(zip_payload)
-        saved_files.append(str(path))
-
-    return saved_files
-
-
-def _safe_suffix(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    if re.fullmatch(r"\.[a-z0-9]{1,8}", suffix):
-        return suffix
-    return ".bin"
-
-
-def _safe_name(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
-    return cleaned or "image"
 
 
 def _client_addr(scope: Scope) -> str:
