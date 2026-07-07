@@ -2,27 +2,23 @@
  * NovelAI Proxy — Service Worker
  *
  * Strategy:
- *   Static assets (CSS, icons, manifest): Cache-first
- *   CDN scripts (Lucide):              Stale-while-revalidate
- *   HTML pages:                         Network-first (admin data changes frequently)
- *   API / POST requests:               Network-only (never cached)
+ *   Static assets (CSS, icons, scripts, manifest): Cache-first
+ *   HTML pages:                                      Network-first (admin data changes frequently)
+ *   API / POST requests:                            Network-only (never cached)
  */
 
 const CACHE_STATIC = "nai-proxy-static-v2";
-const CACHE_CDN = "nai-proxy-cdn-v1";
 
 // ── Assets to pre-cache immediately on install ──────────────────────
 const PRECACHE = [
   "/static/style.css",
+  "/static/vendor/lucide.min.js",
   "/static/manifest.json",
   "/static/icon-192.png",
   "/static/icon-512.png",
   "/static/favicon-32.png",
   "/static/icon.svg",
 ];
-
-// ── CDN origins eligible for caching ────────────────────────────────
-const CDN_ORIGINS = ["unpkg.com", "cdn.jsdelivr.net"];
 
 // ── Install: pre-cache critical assets ──────────────────────────────
 self.addEventListener("install", (event) => {
@@ -45,18 +41,13 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((k) => k !== CACHE_STATIC && k !== CACHE_CDN)
+            .filter((k) => k !== CACHE_STATIC)
             .map((k) => caches.delete(k))
         )
       )
       .then(() => self.clients.claim())
   );
 });
-
-// ── Helpers ─────────────────────────────────────────────────────────
-function isCDN(url) {
-  return CDN_ORIGINS.some((origin) => url.hostname.endsWith(origin));
-}
 
 function isNavigation(request) {
   return request.mode === "navigate";
@@ -73,24 +64,6 @@ self.addEventListener("fetch", (event) => {
 
   // Non-GET requests are never cached
   if (request.method !== "GET") return;
-
-  // ── CDN scripts: stale-while-revalidate ───────────────────────
-  if (isCDN(url)) {
-    event.respondWith(
-      caches.open(CACHE_CDN).then((cache) =>
-        cache.match(request).then((cached) => {
-          const fetched = fetch(request)
-            .then((response) => {
-              if (response.ok) cache.put(request, response.clone());
-              return response;
-            })
-            .catch(() => cached);
-          return cached || fetched;
-        })
-      )
-    );
-    return;
-  }
 
   // ── Navigation (HTML pages): network-first, update cache ──────
   if (isNavigation(request)) {
