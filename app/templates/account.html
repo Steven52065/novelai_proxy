@@ -100,7 +100,7 @@
           API Key
         </h2>
         <p class="muted muted-13 h2-mb-sm">代理 API 只接受本项目 API Key，不接受 Discord token。</p>
-        <form method="post" action="/account/reset-key" onsubmit="return confirm('确认重置 API Key 吗？原 Key 会立即失效。');">
+        <form method="post" action="/account/reset-key" onsubmit="return confirmSubmit(event, '确认重置 API Key 吗？原 Key 会立即失效。', {danger: true});">
           <button class="danger" type="submit">
             <i data-lucide="refresh-cw" class="btn-icon"></i>
             重置 API Key
@@ -194,7 +194,10 @@
     </section>
   </main>
 
+  {% include "_confirm_dialog.html" %}
+
   <script src="{{ static_url('vendor/lucide.min.js') }}"></script>
+  <script src="{{ static_url('confirm-dialog.js') }}"></script>
   <script>
     lucide.createIcons();
     document.querySelectorAll(".copy-button").forEach((button) => {

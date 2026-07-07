@@ -98,22 +98,11 @@
     </div>
   </div>
 
-  <div id="confirm-dialog-modal" class="admin-notification-modal confirm-dialog-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" hidden>
-    <div id="confirm-dialog-card" class="admin-notification-card confirm-dialog-card">
-      <div class="admin-notification-head">
-        <i id="confirm-dialog-icon" data-lucide="circle-help" class="admin-notification-icon"></i>
-        <h2 id="confirm-dialog-title">确认操作</h2>
-      </div>
-      <p id="confirm-dialog-message" class="admin-notification-content"></p>
-      <div class="admin-notification-actions">
-        <button id="confirm-dialog-cancel" type="button" class="secondary">取消</button>
-        <button id="confirm-dialog-ok" type="button">确认</button>
-      </div>
-    </div>
-  </div>
+  {% include "_confirm_dialog.html" %}
 
   <!-- Lucide Icons Library -->
   <script src="{{ static_url('vendor/lucide.min.js') }}"></script>
+  <script src="{{ static_url('confirm-dialog.js') }}"></script>
   
   <script>
     // Initialize Lucide Icons
@@ -147,70 +136,6 @@
         toast.classList.remove('show');
       }, 2500);
     }
-
-    const confirmDialogModal = document.getElementById('confirm-dialog-modal');
-    const confirmDialogCard = document.getElementById('confirm-dialog-card');
-    const confirmDialogIcon = document.getElementById('confirm-dialog-icon');
-    const confirmDialogMessage = document.getElementById('confirm-dialog-message');
-    const confirmDialogCancel = document.getElementById('confirm-dialog-cancel');
-    const confirmDialogOk = document.getElementById('confirm-dialog-ok');
-    let confirmDialogResolve = null;
-
-    function closeConfirmDialog(result) {
-      confirmDialogModal.hidden = true;
-      const resolve = confirmDialogResolve;
-      confirmDialogResolve = null;
-      if (resolve) {
-        resolve(result);
-      }
-    }
-
-    function confirmDialog(message, options = {}) {
-      if (confirmDialogResolve) {
-        closeConfirmDialog(false);
-      }
-      confirmDialogMessage.textContent = message;
-      confirmDialogCard.classList.toggle('danger', Boolean(options.danger));
-      confirmDialogIcon.setAttribute('data-lucide', options.danger ? 'alert-triangle' : 'circle-help');
-      confirmDialogOk.className = options.danger ? 'danger' : '';
-      confirmDialogOk.textContent = options.confirmText || '确认';
-      confirmDialogCancel.textContent = options.cancelText || '取消';
-      confirmDialogModal.hidden = false;
-      lucide.createIcons();
-      confirmDialogOk.focus();
-      return new Promise((resolve) => {
-        confirmDialogResolve = resolve;
-      });
-    }
-
-    function confirmSubmit(event, message, options = {}) {
-      const form = event.currentTarget;
-      if (form.dataset.confirmed === 'true') {
-        delete form.dataset.confirmed;
-        form.dataset.loadingConfirmed = 'true';
-        return true;
-      }
-      event.preventDefault();
-      confirmDialog(message, options).then((confirmed) => {
-        if (!confirmed) return;
-        form.dataset.confirmed = 'true';
-        form.requestSubmit();
-      });
-      return false;
-    }
-
-    confirmDialogCancel.addEventListener('click', () => closeConfirmDialog(false));
-    confirmDialogOk.addEventListener('click', () => closeConfirmDialog(true));
-    confirmDialogModal.addEventListener('click', (event) => {
-      if (event.target === confirmDialogModal) {
-        closeConfirmDialog(false);
-      }
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !confirmDialogModal.hidden) {
-        closeConfirmDialog(false);
-      }
-    });
 
     // Lightbox for Base64 Preview Setup
     const lightbox = document.getElementById('global-lightbox');
