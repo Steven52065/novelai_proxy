@@ -20,6 +20,7 @@ def verify_payload(token: str | None, secret: str) -> dict[str, Any] | None:
     body, signature = token.rsplit(".", 1)
     try:
         body_bytes = body.encode("ascii")
+        signature.encode("ascii")
     except UnicodeEncodeError:
         return None
     expected = _b64(hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).digest())

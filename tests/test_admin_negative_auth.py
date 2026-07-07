@@ -6,7 +6,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.admin.auth import SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SECONDS
+from fastapi import Request
+
+from app.admin.auth import SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SECONDS, has_admin_session
 from app.signed_tokens import sign_payload, verify_payload
 from helpers import write_test_config
 
@@ -115,8 +117,34 @@ def test_admin_session_rejects_legacy_expired_and_tampered_tokens(tmp_path: Path
             assert resp.headers["location"] == "/admin/login"
 
 
+def test_admin_session_rejects_non_ascii_signature_cookie(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app):
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/admin/users",
+                "headers": [(b"cookie", b"novelai_proxy_admin=abc.\xe9")],
+                "app": app,
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "client": ("testclient", 50000),
+                "query_string": b"",
+            }
+        )
+
+        assert has_admin_session(request) is False
+
+
 def test_signed_token_rejects_non_ascii_body_without_error():
     assert verify_payload("\u00e9.signature", "secret") is None
+
+
+def test_signed_token_rejects_non_ascii_signature_without_error():
+    assert verify_payload("abc.\u00e9", "secret") is None
 
 
 def test_admin_session_refresh_extends_expiration(tmp_path: Path, monkeypatch):
