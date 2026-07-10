@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 from typing import Literal
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -25,11 +25,27 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 
 class CSRFMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        legacy_scope = _legacy_session_scope(request)
+        from .admin.auth import has_valid_admin_basic_authorization
+
+        valid_basic_authorization = (
+            request.url.path.startswith("/admin/api")
+            and has_valid_admin_basic_authorization(request)
+        )
+        if (
+            valid_basic_authorization
+            and request.method.upper() not in SAFE_METHODS
+            and _is_cross_site_browser_request(request)
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"message": "Cross-site Basic-authenticated admin request is not allowed"},
+            )
+
+        legacy_scope = _legacy_session_scope(request, valid_basic_authorization)
         if legacy_scope is not None:
             return _clear_legacy_session(request, legacy_scope)
 
-        scope = _csrf_scope(request)
+        scope = _csrf_scope(request, valid_basic_authorization)
         if scope is None:
             return await call_next(request)
 
@@ -64,11 +80,11 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _legacy_session_scope(request: Request) -> Literal["admin", "self_service"] | None:
+def _legacy_session_scope(
+    request: Request,
+    valid_basic_authorization: bool,
+) -> Literal["admin", "self_service"] | None:
     path = request.url.path
-    from .admin.auth import has_valid_admin_basic_authorization
-
-    valid_basic_authorization = has_valid_admin_basic_authorization(request)
     if (
         path.startswith("/admin")
         and path != "/admin/login"
@@ -104,20 +120,20 @@ def _clear_legacy_session(request: Request, scope: Literal["admin", "self_servic
     return response
 
 
-def _csrf_scope(request: Request) -> Literal["admin", "self_service"] | None:
+def _csrf_scope(
+    request: Request,
+    valid_basic_authorization: bool,
+) -> Literal["admin", "self_service"] | None:
     path = request.url.path
-    from .admin.auth import has_valid_admin_basic_authorization
-
-    valid_basic_authorization = has_valid_admin_basic_authorization(request)
     if (
         path.startswith("/admin")
         and path != "/admin/login"
         and request.cookies.get(ADMIN_SESSION_COOKIE)
         and not valid_basic_authorization
     ):
-        from .admin.auth import admin_session_payload
+        from .admin.auth import admin_session_id
 
-        if admin_session_payload(request) is not None:
+        if admin_session_id(request) is not None:
             return "admin"
     if path.startswith("/account") and request.cookies.get(SELF_SERVICE_SESSION_COOKIE):
         payload = verify_payload(
@@ -150,9 +166,9 @@ def _new_token(request: Request, scope: Literal["admin", "self_service"]) -> str
 
 def _session_id(request: Request, scope: Literal["admin", "self_service"]) -> str | None:
     if scope == "admin":
-        from .admin.auth import admin_session_payload
+        from .admin.auth import admin_session_id
 
-        payload = admin_session_payload(request)
+        return admin_session_id(request)
     else:
         payload = verify_payload(
             request.cookies.get(SELF_SERVICE_SESSION_COOKIE),
@@ -162,6 +178,47 @@ def _session_id(request: Request, scope: Literal["admin", "self_service"]) -> st
         return None
     session_id = payload.get("sid")
     return session_id if isinstance(session_id, str) and session_id else None
+
+
+def _is_cross_site_browser_request(request: Request) -> bool:
+    if request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site":
+        return True
+
+    origin = request.headers.get("origin")
+    if origin is not None:
+        return not _url_matches_request_origin(request, origin)
+
+    referer = request.headers.get("referer")
+    if referer:
+        return not _url_matches_request_origin(request, referer)
+    return False
+
+
+def _url_matches_request_origin(request: Request, value: str) -> bool:
+    try:
+        candidate = urlsplit(value)
+        candidate_port = candidate.port
+    except ValueError:
+        return False
+    if not candidate.scheme or candidate.hostname is None:
+        return False
+
+    request_port = request.url.port or _default_port(request.url.scheme)
+    candidate_port = candidate_port or _default_port(candidate.scheme)
+    return (
+        candidate.scheme.lower() == request.url.scheme.lower()
+        and candidate.hostname.lower() == (request.url.hostname or "").lower()
+        and candidate_port == request_port
+    )
+
+
+def _default_port(scheme: str) -> int | None:
+    normalized = scheme.lower()
+    if normalized == "http":
+        return 80
+    if normalized == "https":
+        return 443
+    return None
 
 
 def _payload_has_session_id(payload: dict) -> bool:

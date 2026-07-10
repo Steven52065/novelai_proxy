@@ -66,6 +66,54 @@ def test_invalid_basic_does_not_bypass_admin_session_csrf(tmp_path: Path, monkey
         assert "CSRF" in response.json()["message"]
 
 
+def test_basic_admin_mutations_reject_cross_site_browser_requests(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    cross_site_headers = (
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Origin": "https://attacker.example"},
+        {"Referer": "https://attacker.example/form"},
+        {"Origin": "null"},
+    )
+    with TestClient(app) as client:
+        for index, headers in enumerate(cross_site_headers):
+            response = client.post(
+                "/admin/api/users",
+                auth=("admin", "admin123"),
+                headers=headers,
+                json={"name": f"cross-site-basic-{index}"},
+            )
+
+            assert response.status_code == 403
+            assert response.json()["message"] == "Cross-site Basic-authenticated admin request is not allowed"
+            assert response.headers["cache-control"] == "no-store, private"
+
+        count = client.app.state.db.query_one("SELECT COUNT(*) AS c FROM users")["c"]
+        assert count == 0
+
+
+def test_basic_admin_mutations_allow_same_origin_browser_and_script_clients(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        script = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "basic-script-client"},
+        )
+        same_origin = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+            json={"name": "basic-same-origin-browser"},
+        )
+
+        assert script.status_code == 200
+        assert same_origin.status_code == 200
+
+
 def test_admin_csrf_token_cannot_be_reused_after_new_login(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -124,9 +172,16 @@ def test_legacy_admin_session_is_cleared_and_requires_login(tmp_path: Path, monk
     legacy_session = sign_payload(expiring_payload(3600, sub="admin"), admin_secret)
 
     with TestClient(app) as client:
-        client.cookies.set("novelai_proxy_admin", legacy_session, path="/")
-        client.cookies.set(ADMIN_CSRF_COOKIE, "stale-csrf", path="/")
-        response = client.get("/admin", follow_redirects=False)
+        response = client.get(
+            "/admin",
+            headers={
+                "Cookie": (
+                    f"novelai_proxy_admin={legacy_session}; "
+                    f"{ADMIN_CSRF_COOKIE}=stale-csrf"
+                )
+            },
+            follow_redirects=False,
+        )
 
         assert response.status_code == 303
         assert response.headers["location"] == "/admin/login"
@@ -135,6 +190,15 @@ def test_legacy_admin_session_is_cleared_and_requires_login(tmp_path: Path, monk
         cleared = response.headers.get_list("set-cookie")
         assert any("novelai_proxy_admin=" in value and "Max-Age=0" in value for value in cleared)
         assert any(f"{ADMIN_CSRF_COOKIE}=" in value and "Max-Age=0" in value for value in cleared)
+        assert not any(
+            value.startswith("novelai_proxy_admin=") and "Max-Age=0" not in value
+            for value in cleared
+        )
+        assert client.cookies.get("novelai_proxy_admin") is None
+
+        next_request = client.get("/admin", follow_redirects=False)
+        assert next_request.status_code == 303
+        assert next_request.headers["location"] == "/admin/login"
 
 
 def test_legacy_admin_session_does_not_override_valid_basic_auth(tmp_path: Path, monkeypatch):
@@ -149,14 +213,19 @@ def test_legacy_admin_session_does_not_override_valid_basic_auth(tmp_path: Path,
     legacy_session = sign_payload(expiring_payload(3600, sub="admin"), admin_secret)
 
     with TestClient(app) as client:
-        client.cookies.set("novelai_proxy_admin", legacy_session, path="/")
         response = client.get(
             "/admin/api/users",
             auth=("admin", "admin123"),
+            headers={"Cookie": f"novelai_proxy_admin={legacy_session}"},
             follow_redirects=False,
         )
 
         assert response.status_code == 200
+        assert not any(
+            value.startswith("novelai_proxy_admin=")
+            for value in response.headers.get_list("set-cookie")
+        )
+        assert client.cookies.get("novelai_proxy_admin") is None
 
 
 def test_invalid_basic_does_not_preserve_legacy_admin_session(tmp_path: Path, monkeypatch):

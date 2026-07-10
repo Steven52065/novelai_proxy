@@ -168,6 +168,7 @@ def test_admin_session_refresh_extends_expiration(tmp_path: Path, monkeypatch):
         refreshed_payload = verify_payload(client.cookies.get(SESSION_COOKIE), secret)
         assert refreshed_payload["exp"] == now + SESSION_COOKIE_MAX_AGE_SECONDS
         assert refreshed_payload["exp"] > first_payload["exp"]
+        assert refreshed_payload["sid"] == first_payload["sid"]
 
 
 def test_admin_session_cookie_sets_secure_on_https(tmp_path: Path, monkeypatch):

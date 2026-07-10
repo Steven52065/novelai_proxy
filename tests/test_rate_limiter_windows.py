@@ -259,3 +259,67 @@ def test_group_rate_limit_waits_until_group_count_falls_below_limit(rate_limit_d
     assert result.allowed is False
     assert result.scope == "group"
     assert result.retry_after == 40
+
+
+def test_rate_limit_returns_longest_wait_across_user_rules(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    user_id = _create_user(rate_limit_db)
+    _add_rule(rate_limit_db, user_id, period="minute", max_requests=1)
+    _add_rule(rate_limit_db, user_id, period="day", max_requests=1)
+    _insert_log(
+        rate_limit_db,
+        user_id,
+        request_id="shared-user-window",
+        status="success",
+        created_at=FIXED_NOW - timedelta(seconds=30),
+    )
+
+    result = RateLimiter(rate_limit_db).check(user_id)
+
+    assert result.allowed is False
+    assert result.scope == "user"
+    assert result.message == "Rate limit exceeded: 1 per day"
+    assert result.retry_after == 86400 - 30
+
+
+def test_rate_limit_returns_longest_wait_across_user_and_group_rules(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    group_id = _create_group(rate_limit_db)
+    user_id = _create_user(rate_limit_db, group_id=group_id)
+    _add_rule(rate_limit_db, user_id, period="minute", max_requests=1)
+    _add_group_rule(rate_limit_db, group_id, period="hour", max_requests=1)
+    _insert_log(
+        rate_limit_db,
+        user_id,
+        request_id="shared-scope-window",
+        status="success",
+        created_at=FIXED_NOW - timedelta(seconds=30),
+    )
+
+    result = RateLimiter(rate_limit_db).check(user_id)
+
+    assert result.allowed is False
+    assert result.scope == "group"
+    assert result.message == "Group rate limit exceeded: 1 per hour"
+    assert result.retry_after == 3600 - 30
+
+
+def test_rate_limit_prefers_user_rule_when_waits_are_equal(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    group_id = _create_group(rate_limit_db)
+    user_id = _create_user(rate_limit_db, group_id=group_id)
+    _add_rule(rate_limit_db, user_id, period="minute", max_requests=1)
+    _add_group_rule(rate_limit_db, group_id, period="minute", max_requests=1)
+    _insert_log(
+        rate_limit_db,
+        user_id,
+        request_id="equal-scope-window",
+        status="success",
+        created_at=FIXED_NOW - timedelta(seconds=30),
+    )
+
+    result = RateLimiter(rate_limit_db).check(user_id)
+
+    assert result.allowed is False
+    assert result.scope == "user"
+    assert result.retry_after == 30

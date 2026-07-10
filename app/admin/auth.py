@@ -97,10 +97,7 @@ async def logout(request: Request):
 
 def session_value(request: Request) -> str:
     config = request.app.state.config
-    current = admin_session_payload(request)
-    session_id = current.get("sid") if current is not None else None
-    if not isinstance(session_id, str) or not session_id:
-        session_id = secrets.token_urlsafe(18)
+    session_id = admin_session_id(request) or secrets.token_urlsafe(18)
     return sign_payload(
         expiring_payload(SESSION_COOKIE_MAX_AGE_SECONDS, sub=config.admin.username, sid=session_id),
         admin_session_secret(request),
@@ -118,11 +115,18 @@ def set_admin_session_cookie(response: Response, request: Request) -> None:
 
 
 def has_admin_session(request: Request) -> bool:
+    return admin_session_id(request) is not None
+
+
+def admin_session_id(request: Request) -> str | None:
     payload = admin_session_payload(request)
     if payload is None:
-        return False
+        return None
     sub = payload.get("sub")
-    return isinstance(sub, str) and hmac.compare_digest(sub, request.app.state.config.admin.username)
+    if not isinstance(sub, str) or not hmac.compare_digest(sub, request.app.state.config.admin.username):
+        return None
+    session_id = payload.get("sid")
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 def admin_session_payload(request: Request) -> dict | None:
