@@ -27,6 +27,9 @@ CONVERSION_FORMATS = {
     "webp": {"suffix": ".webp", "content_type": "image/webp", "pillow_format": "WEBP"},
 }
 
+ERROR_RESPONSE_BODY_MAX_CHARS = 2000
+REDACTED = "[redacted]"
+
 
 @dataclass(frozen=True)
 class ImageUploadFile:
@@ -64,10 +67,24 @@ class CatboxImageHost:
         }
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(self.api_url, data=data, files=files)
+        if response.is_error:
+            _log_image_host_response(
+                provider=self.provider,
+                response=response,
+                image=image,
+                secrets=(self.userhash,),
+            )
         response.raise_for_status()
         url = response.text.strip()
         if not url.startswith(("http://", "https://")):
-            raise ImageHostUploadError(url or "empty image host response")
+            _log_image_host_response(
+                provider=self.provider,
+                response=response,
+                image=image,
+                secrets=(self.userhash,),
+                invalid=True,
+            )
+            raise ImageHostUploadError("invalid image host response")
         return url
 
 
@@ -96,10 +113,12 @@ class ImageHostingService:
                 url = await self.client.upload_image(image)
             except Exception:
                 logger.exception(
-                    "image host upload failed request_id=%s provider=%s filename=%s",
+                    "image host upload failed request_id=%s provider=%s filename=%s bytes=%s content_type=%s",
                     request_id,
                     self.client.provider,
                     image.filename,
+                    len(image.content),
+                    image.content_type,
                 )
                 continue
             uploads.append(
@@ -133,6 +152,45 @@ class ImageHostingService:
 
 class ImageHostUploadError(Exception):
     pass
+
+
+def _log_image_host_response(
+    *,
+    provider: str,
+    response: httpx.Response,
+    image: ImageUploadFile,
+    secrets: tuple[str, ...] = (),
+    invalid: bool = False,
+) -> None:
+    message = "image host invalid response" if invalid else "image host response error"
+    logger.error(
+        f"{message} provider=%s status_code=%s reason=%s response_content_type=%s "
+        "response_body=%r filename=%s bytes=%s upload_content_type=%s",
+        provider,
+        response.status_code,
+        response.reason_phrase,
+        response.headers.get("content-type", ""),
+        _safe_error_response_body(response, secrets=secrets),
+        image.filename,
+        len(image.content),
+        image.content_type,
+    )
+
+
+def _safe_error_response_body(response: httpx.Response, *, secrets: tuple[str, ...]) -> str:
+    try:
+        body = response.text.strip()
+    except Exception:
+        return "<unreadable>"
+    for secret in secrets:
+        if secret:
+            body = body.replace(secret, REDACTED)
+    if not body:
+        return "<empty>"
+    if len(body) <= ERROR_RESPONSE_BODY_MAX_CHARS:
+        return body
+    omitted = len(body) - ERROR_RESPONSE_BODY_MAX_CHARS
+    return f"{body[:ERROR_RESPONSE_BODY_MAX_CHARS]}...[truncated {omitted} chars]"
 
 
 def _convert_image(image: ImageUploadFile, target_format: str) -> ImageUploadFile:
