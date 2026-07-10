@@ -49,6 +49,23 @@ def test_admin_cookie_mutations_require_valid_csrf_but_basic_remains_compatible(
         assert basic.status_code == 200
 
 
+def test_invalid_basic_does_not_bypass_admin_session_csrf(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        assert client.post("/admin/login", data={"username": "admin", "password": "admin123"}).status_code == 200
+
+        response = client.post(
+            "/admin/api/users",
+            auth=("wrong", "wrong"),
+            json={"name": "invalid-basic-csrf-bypass"},
+        )
+
+        assert response.status_code == 403
+        assert "CSRF" in response.json()["message"]
+
+
 def test_admin_csrf_token_cannot_be_reused_after_new_login(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -140,6 +157,33 @@ def test_legacy_admin_session_does_not_override_valid_basic_auth(tmp_path: Path,
         )
 
         assert response.status_code == 200
+
+
+def test_invalid_basic_does_not_preserve_legacy_admin_session(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    admin_secret = hmac.new(
+        b"admin123",
+        b"novelai-proxy-admin-session-v1",
+        hashlib.sha256,
+    ).hexdigest()
+    legacy_session = sign_payload(expiring_payload(3600, sub="admin"), admin_secret)
+
+    with TestClient(app) as client:
+        client.cookies.set("novelai_proxy_admin", legacy_session, path="/")
+        response = client.post(
+            "/admin/api/users",
+            auth=("wrong", "wrong"),
+            json={"name": "legacy-invalid-basic"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["login_url"] == "/admin/login"
+        assert any(
+            "novelai_proxy_admin=" in value and "Max-Age=0" in value
+            for value in response.headers.get_list("set-cookie")
+        )
 
 
 def test_legacy_self_service_session_is_cleared_and_requires_login(tmp_path: Path, monkeypatch):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import secrets
@@ -22,10 +24,7 @@ SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> None:
-    config = request.app.state.config
-    valid_user = constant_time_equal(credentials.username, config.admin.username)
-    valid_password = constant_time_equal(credentials.password, config.admin.password)
-    if not (valid_user and valid_password):
+    if not _admin_credentials_are_valid(request, credentials.username, credentials.password):
         raise HTTPException(status_code=401, detail={"message": "Invalid admin credentials"})
 
 
@@ -38,6 +37,27 @@ def require_admin_or_session(
     if credentials is None:
         raise HTTPException(status_code=401, detail={"message": "Invalid admin credentials"})
     require_admin(request, credentials)
+
+
+def has_valid_admin_basic_authorization(request: Request) -> bool:
+    scheme, separator, encoded = request.headers.get("authorization", "").partition(" ")
+    if not separator or scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("ascii")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return False
+    return _admin_credentials_are_valid(request, username, password)
+
+
+def _admin_credentials_are_valid(request: Request, username: str, password: str) -> bool:
+    config = request.app.state.config
+    valid_user = constant_time_equal(username, config.admin.username)
+    valid_password = constant_time_equal(password, config.admin.password)
+    return valid_user and valid_password
 
 
 class AdminLoginRequired(Exception):
