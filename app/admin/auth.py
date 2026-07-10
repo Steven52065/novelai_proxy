@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from ..security import constant_time_equal
+from ..cookies import delete_response_cookie, set_response_cookie
 from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 
@@ -67,9 +68,9 @@ async def login_submit(request: Request, username: str = Form(...), password: st
 
 
 @web_router.post("/logout")
-async def logout():
+async def logout(request: Request):
     response = RedirectResponse("/admin/login", status_code=303)
-    response.delete_cookie(SESSION_COOKIE)
+    delete_response_cookie(response, request, SESSION_COOKIE)
     return response
 
 
@@ -82,13 +83,12 @@ def session_value(request: Request) -> str:
 
 
 def set_admin_session_cookie(response: Response, request: Request) -> None:
-    response.set_cookie(
+    set_response_cookie(
+        response,
+        request,
         SESSION_COOKIE,
         session_value(request),
         max_age=SESSION_COOKIE_MAX_AGE_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=request.url.scheme == "https",
     )
 
 

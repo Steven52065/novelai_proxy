@@ -27,6 +27,8 @@ def test_self_service_config_defaults_to_disabled():
     assert config.database.hot_payload.min_savings_ratio == 0.10
     assert config.database.auto_vacuum.enabled is True
     assert config.database.auto_vacuum.run_time_utc8 == "04:00"
+    assert config.security.secure_cookies == "auto"
+    assert config.security.trusted_proxy_ips == ["127.0.0.1", "::1"]
 
 
 def test_logging_level_accepts_warning():

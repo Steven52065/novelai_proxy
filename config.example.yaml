@@ -21,6 +21,13 @@ server:
   # 监听端口。
   port: 8080
 
+# Cloudflare -> Caddy -> FastAPI 部署建议保留 auto，并只信任 Caddy 的来源地址。
+security:
+  secure_cookies: auto
+  trusted_proxy_ips:
+    - 127.0.0.1
+    - ::1
+
 # 上游 NovelAI 请求队列配置。
 # 项目会把用户请求先放入本地调度队列，再按 routing 规则转交到某个上游 key 的独立队列。
 # 每个上游 key 拥有自己的串行队列和延时状态，用于避免多个请求同时打到同一个上游账号。

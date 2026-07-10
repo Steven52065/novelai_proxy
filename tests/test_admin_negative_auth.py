@@ -185,5 +185,44 @@ def test_admin_session_cookie_sets_secure_on_https(tmp_path: Path, monkeypatch):
     assert "secure" in resp.headers["set-cookie"].lower()
 
 
+def test_admin_session_cookie_auto_trusts_forwarded_https_from_configured_proxy(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        client.app.state.config.security.trusted_proxy_ips = ["testclient"]
+        resp = client.post(
+            "/admin/login",
+            headers={"X-Forwarded-Proto": "https"},
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 303
+    assert "secure" in resp.headers["set-cookie"].lower()
+
+
+def test_admin_session_cookie_modes_override_request_scheme(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app, base_url="https://testserver") as client:
+        client.app.state.config.security.secure_cookies = "never"
+        never = client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=False,
+        )
+        assert "secure" not in never.headers["set-cookie"].lower()
+
+        client.app.state.config.security.secure_cookies = "always"
+        always = client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "admin123"},
+            follow_redirects=False,
+        )
+        assert "secure" in always.headers["set-cookie"].lower()
+
+
 def _admin_session_secret(password: str) -> str:
     return hmac.new(password.encode("utf-8"), b"novelai-proxy-admin-session-v1", hashlib.sha256).hexdigest()

@@ -20,5 +20,7 @@ if __name__ == "__main__":
         host=config.server.host,
         port=config.server.port,
         reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips=",".join(config.security.trusted_proxy_ips),
         timeout_graceful_shutdown=None,
     )

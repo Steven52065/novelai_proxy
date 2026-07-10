@@ -20,6 +20,11 @@ class ServerConfig(BaseModel):
     port: int = 8080
 
 
+class SecurityConfig(BaseModel):
+    secure_cookies: Literal["auto", "always", "never"] = "auto"
+    trusted_proxy_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
+
+
 class QueueConfig(BaseModel):
     max_queue_size: int = 50
     dispatch_max_queue_size: int | None = Field(default=None, ge=1)
@@ -171,6 +176,7 @@ class SelfServiceConfig(BaseModel):
 class AppConfig(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     queue: QueueConfig = Field(default_factory=QueueConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     upstream_auto_disable: UpstreamAutoDisableConfig = Field(default_factory=UpstreamAutoDisableConfig)

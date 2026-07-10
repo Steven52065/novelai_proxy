@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from ..allowlists import AllowedEndpoints, AllowedUpstreams
 from ..api_key_flash import ApiKeyFlashStore
 from ..config import DiscordSelfServiceConfig
+from ..cookies import delete_response_cookie, set_response_cookie
 from ..database import Database
 from ..deps import (
     get_db,
@@ -70,12 +71,12 @@ async def discord_start(
         oauth.authorization_url(redirect_uri=config.redirect_uri, state=state),
         status_code=303,
     )
-    response.set_cookie(
+    set_response_cookie(
+        response,
+        request,
         OAUTH_STATE_COOKIE,
         sign_payload(expiring_payload(OAUTH_STATE_TTL_SECONDS, state=state), config.session_secret),
         max_age=OAUTH_STATE_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
     )
     return response
 
@@ -135,8 +136,8 @@ async def discord_callback(
         profile=profile,
     )
     response = RedirectResponse("/account", status_code=303)
-    _set_session_cookie(response, config.session_secret, login.user_id)
-    response.delete_cookie(OAUTH_STATE_COOKIE)
+    _set_session_cookie(response, request, config.session_secret, login.user_id)
+    delete_response_cookie(response, request, OAUTH_STATE_COOKIE)
     if login.api_key is not None:
         _api_key_flash.set_flash(response, request, login.api_key, owner_id=login.user_id)
     return response
@@ -194,7 +195,7 @@ async def account_page(
         },
     )
     if has_api_key_flash:
-        response.delete_cookie(API_KEY_FLASH_COOKIE)
+        delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
     return response
 
 
@@ -240,12 +241,13 @@ async def account_reset_key(
 
 @router.post("/account/logout")
 async def account_logout(
+    request: Request,
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
 ):
     _require_discord_enabled(config)
     response = RedirectResponse("/signup", status_code=303)
-    response.delete_cookie(SESSION_COOKIE)
-    response.delete_cookie(API_KEY_FLASH_COOKIE)
+    delete_response_cookie(response, request, SESSION_COOKIE)
+    delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
     return response
 
 
@@ -363,13 +365,13 @@ def _redact_sensitive_text(value: str) -> str:
     return redacted
 
 
-def _set_session_cookie(response, secret: str, user_id: int) -> None:
-    response.set_cookie(
+def _set_session_cookie(response, request: Request, secret: str, user_id: int) -> None:
+    set_response_cookie(
+        response,
+        request,
         SESSION_COOKIE,
         sign_payload(expiring_payload(SESSION_TTL_SECONDS, user_id=user_id), secret),
         max_age=SESSION_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
     )
 
 

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from ..allowlists import ALLOWED_ENDPOINT_CHOICES, DEFAULT_ALLOWED_ENDPOINTS
 from ..api_key_flash import ApiKeyFlashStore
+from ..cookies import delete_response_cookie
 from ..database import Database, utc_now_iso
 from ..image_format_policies import (
     DEFAULT_IMAGE_FORMAT_POLICY,
@@ -295,7 +296,7 @@ async def users_page(request: Request):
         },
     )
     if new_api_key is not None:
-        response.delete_cookie(API_KEY_FLASH_COOKIE)
+        delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
     return response
 
 
@@ -416,7 +417,7 @@ async def user_edit_page(user_id: int, request: Request):
         },
     )
     if new_api_key is not None:
-        response.delete_cookie(API_KEY_FLASH_COOKIE)
+        delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
     return response
 
 

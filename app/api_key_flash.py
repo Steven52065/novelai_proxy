@@ -5,6 +5,8 @@ import time
 
 from fastapi import Request, Response
 
+from .cookies import set_response_cookie
+
 
 DEFAULT_TTL_SECONDS = 5 * 60
 
@@ -25,12 +27,12 @@ class ApiKeyFlashStore:
         store = self._store(request)
         self._cleanup(store)
         store[token] = (owner_id, api_key, time.monotonic() + self._ttl_seconds)
-        response.set_cookie(
+        set_response_cookie(
+            response,
+            request,
             self.cookie_name,
             token,
             max_age=self._ttl_seconds,
-            httponly=True,
-            samesite="lax",
         )
 
     def pop_flash(self, request: Request, *, owner_id: int | None = None) -> str | None:
