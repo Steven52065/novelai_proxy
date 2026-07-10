@@ -3,11 +3,11 @@
  *
  * Strategy:
  *   Static assets (CSS, icons, scripts, manifest): Cache-first
- *   HTML pages:                                      Network-first (admin data changes frequently)
+ *   HTML pages:                                      Network-only (may contain sensitive data)
  *   API / POST requests:                            Network-only (never cached)
  */
 
-const CACHE_STATIC = "nai-proxy-static-v2";
+const CACHE_STATIC = "nai-proxy-static-v3";
 
 // ── Assets to pre-cache immediately on install ──────────────────────
 const PRECACHE = [
@@ -65,22 +65,9 @@ self.addEventListener("fetch", (event) => {
   // Non-GET requests are never cached
   if (request.method !== "GET") return;
 
-  // ── Navigation (HTML pages): network-first, update cache ──────
+  // ── Navigation (HTML pages): network-only ─────────────────────
   if (isNavigation(request)) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const cloned = response.clone();
-            caches.open(CACHE_STATIC).then((cache) => cache.put(request, cloned));
-          }
-          return response;
-        })
-        .catch(() =>
-          // Offline: try cache, fallback to /admin
-          caches.match(request).then((cached) => cached || caches.match("/admin"))
-        )
-    );
+    event.respondWith(fetch(request));
     return;
   }
 

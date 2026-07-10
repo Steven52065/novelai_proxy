@@ -23,6 +23,7 @@ from .admin.auth import (
 from .admin.router import router as admin_router
 from .admin.session_middleware import AdminSessionRefreshMiddleware
 from .admin_notifications import AdminNotificationRepository
+from .cache_control import SensitiveResponseCacheMiddleware
 from .config import load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
@@ -180,6 +181,7 @@ app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)
 app.add_middleware(ConfigurableCORSMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(AdminSessionRefreshMiddleware)
+app.add_middleware(SensitiveResponseCacheMiddleware)
 static_dir = repo_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")

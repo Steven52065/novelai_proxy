@@ -39,6 +39,31 @@ def test_health_admin_create_user_and_subscription(tmp_path: Path, monkeypatch):
         monkeypatch.delenv("NOVELAI_PROXY_CONFIG", raising=False)
 
 
+def test_sensitive_pages_disable_browser_caching(tmp_path: Path, monkeypatch):
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    try:
+        from app.main import app
+
+        with TestClient(app) as client:
+            login = client.get("/admin/login")
+            assert login.headers["cache-control"] == "no-store, private"
+            assert login.headers["pragma"] == "no-cache"
+
+            health = client.get("/health")
+            assert "cache-control" not in health.headers
+    finally:
+        monkeypatch.delenv("NOVELAI_PROXY_CONFIG", raising=False)
+
+
+def test_service_worker_never_caches_navigation_responses():
+    source = (Path(__file__).parents[1] / "static" / "sw.js").read_text(encoding="utf-8")
+    navigation_block = source.split("if (isNavigation(request))", 1)[1].split("if (isStaticAsset(url))", 1)[0]
+    assert "event.respondWith(fetch(request))" in navigation_block
+    assert "cache.put(request" not in navigation_block
+    assert 'caches.match("/admin")' not in source
+
+
 def test_startup_reclaims_orphan_reserved_quota_and_daily_usage(tmp_path: Path, monkeypatch):
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "test.db"
