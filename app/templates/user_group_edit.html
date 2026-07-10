@@ -214,7 +214,7 @@
             <option value="minute">minute</option>
             <option value="hour">hour</option>
             <option value="day">day</option>
-            <option value="month">month</option>
+            <option value="month">month（滚动 30 天）</option>
           </select>
         </label>
         <label class="label-gap-sm">
@@ -247,7 +247,7 @@
               <td data-label="周期">
                 <select form="group-rate-limit-rule-{{ rule.id }}" name="period" class="rule-select">
                   {% for period in ["minute", "hour", "day", "month"] %}
-                  <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ period }}</option>
+                  <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ "month（滚动 30 天）" if period == "month" else period }}</option>
                   {% endfor %}
                 </select>
               </td>

@@ -92,7 +92,7 @@ def test_rate_limit_counts_window_start_as_inside_period(rate_limit_db, monkeypa
     result = RateLimiter(rate_limit_db).check(user_id)
 
     assert result.allowed is False
-    assert result.retry_after == 60
+    assert result.retry_after == 1
     assert result.message == "Rate limit exceeded: 1 per minute"
 
 
@@ -132,7 +132,7 @@ def test_rate_limit_counts_retry_attempts_once_and_ignores_rejected(rate_limit_d
     result = RateLimiter(rate_limit_db).check(user_id)
 
     assert result.allowed is False
-    assert result.retry_after == 3600
+    assert result.retry_after == 3300
 
 
 def test_rate_limit_ignores_inactive_rules_and_applies_multiple_windows(rate_limit_db, monkeypatch):
@@ -145,7 +145,7 @@ def test_rate_limit_ignores_inactive_rules_and_applies_multiple_windows(rate_lim
     result = RateLimiter(rate_limit_db).check(user_id)
 
     assert result.allowed is False
-    assert result.retry_after == 86400
+    assert result.retry_after == 22 * 3600
     assert result.message == "Rate limit exceeded: 1 per day"
 
 
@@ -171,7 +171,7 @@ def test_group_rate_limit_counts_group_members_once_and_ignores_rejected(rate_li
 
     assert result.allowed is False
     assert result.scope == "group"
-    assert result.retry_after == 60
+    assert result.retry_after == 50
     assert result.message == "Group rate limit exceeded: 2 per minute"
 
 
@@ -191,3 +191,21 @@ def test_group_rate_limit_does_not_apply_without_active_group(rate_limit_db, mon
 
     assert RateLimiter(rate_limit_db).check(disabled_group_user).allowed is True
     assert RateLimiter(rate_limit_db).check(no_group_user).allowed is True
+
+
+def test_month_rate_limit_is_a_rolling_thirty_day_window(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    user_id = _create_user(rate_limit_db)
+    _add_rule(rate_limit_db, user_id, period="month", max_requests=1)
+    _insert_log(
+        rate_limit_db,
+        user_id,
+        request_id="rolling-month-request",
+        status="success",
+        created_at=FIXED_NOW - timedelta(days=29, hours=23),
+    )
+
+    result = RateLimiter(rate_limit_db).check(user_id)
+
+    assert result.allowed is False
+    assert result.retry_after == 3600
