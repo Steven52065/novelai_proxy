@@ -196,6 +196,18 @@ class AppConfig(BaseModel):
                 self.logging.level = self.log_level
 
 
+def configuration_security_warnings(config: AppConfig, *, config_exists: bool) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if not config_exists:
+        warnings.append("configuration file is missing; built-in defaults are active")
+    password = config.admin.password.strip()
+    if not password:
+        warnings.append("admin password is empty")
+    elif password.lower() in {"admin123", "change-me"}:
+        warnings.append("admin password uses a known development default")
+    return tuple(warnings)
+
+
 def load_config(path: str | Path = "config.yaml") -> AppConfig:
     config_path = Path(path)
     if not config_path.exists():

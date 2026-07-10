@@ -24,7 +24,7 @@ from .admin.router import router as admin_router
 from .admin.session_middleware import AdminSessionRefreshMiddleware
 from .admin_notifications import AdminNotificationRepository
 from .cache_control import SensitiveResponseCacheMiddleware
-from .config import load_config
+from .config import configuration_security_warnings, load_config
 from .cors import ConfigurableCORSMiddleware
 from .dashboard_events import DashboardEventBus
 from .database import Database, validate_discord_self_service_config
@@ -49,8 +49,11 @@ from .usage_logs import UsageLogRepository
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    config = load_config(environ.get("NOVELAI_PROXY_CONFIG", "config.yaml"))
+    config_path = Path(environ.get("NOVELAI_PROXY_CONFIG", "config.yaml"))
+    config = load_config(config_path)
     configure_logging(config.logging)
+    for warning in configuration_security_warnings(config, config_exists=config_path.exists()):
+        logger.warning("configuration security warning: %s", warning)
     db = Database(config.database.path)
     db.init_schema()
     validate_discord_self_service_config(db, config)

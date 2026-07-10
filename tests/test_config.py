@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.config import AppConfig
+from app.config import AppConfig, configuration_security_warnings
 
 
 def test_novelai_config_is_rejected():
@@ -85,3 +85,18 @@ def test_discord_self_service_model_allows_missing_fields_when_disabled():
     )
 
     assert config.self_service.discord.enabled is False
+
+
+def test_configuration_security_warnings_keep_weak_config_compatible():
+    config = AppConfig()
+
+    assert configuration_security_warnings(config, config_exists=False) == (
+        "configuration file is missing; built-in defaults are active",
+        "admin password uses a known development default",
+    )
+
+
+def test_configuration_security_warnings_accept_strong_password():
+    config = AppConfig.model_validate({"admin": {"password": "a-long-production-password"}})
+
+    assert configuration_security_warnings(config, config_exists=True) == ()
