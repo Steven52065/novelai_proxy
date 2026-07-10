@@ -26,6 +26,7 @@ from .admin_notifications import AdminNotificationRepository
 from .cache_control import SensitiveResponseCacheMiddleware
 from .config import configuration_security_warnings, load_config
 from .cors import ConfigurableCORSMiddleware
+from .csrf import CSRFMiddleware
 from .dashboard_events import DashboardEventBus
 from .database import Database, validate_discord_self_service_config
 from .database_maintenance import auto_vacuum_loop
@@ -185,6 +186,7 @@ app.add_middleware(ConfigurableCORSMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(AdminSessionRefreshMiddleware)
 app.add_middleware(SensitiveResponseCacheMiddleware)
+app.add_middleware(CSRFMiddleware)
 static_dir = repo_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")

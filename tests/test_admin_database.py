@@ -14,7 +14,7 @@ from app.database import Database
 from app.database import utc_now_iso, validate_discord_self_service_config
 from app.payload_archive import PayloadArchiveService
 from app.usage_logs import UsageLogCreate
-from helpers import write_test_config
+from helpers import csrf_form, write_test_config
 
 
 def _utf8_len(value: str | None) -> int:
@@ -872,7 +872,7 @@ def test_admin_database_page_and_vacuum(tmp_path: Path, monkeypatch):
         assert api_resp.status_code == 200
         assert api_resp.json()["ok"] is True
 
-        form_resp = client.post("/admin/database/vacuum", follow_redirects=False)
+        form_resp = client.post("/admin/database/vacuum", data=csrf_form(client), follow_redirects=False)
         assert form_resp.status_code == 303
         assert "/admin/database" in form_resp.headers["location"]
 

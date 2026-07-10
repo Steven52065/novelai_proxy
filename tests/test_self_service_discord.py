@@ -12,7 +12,7 @@ import app.self_service.accounts as accounts
 from app.database import Database, utc_now_iso
 from app.quota_manager import QuotaManager
 from app.self_service.routes import API_KEY_FLASH_COOKIE
-from helpers import PAYLOAD, FakeUpstream, write_test_config
+from helpers import PAYLOAD, FakeUpstream, csrf_form, write_test_config
 
 
 class FakeDiscordClient:
@@ -271,7 +271,11 @@ def test_account_updates_image_format_policy_and_generation_uses_it(tmp_path: Pa
 
         update = client.post(
             "/account/image-format-policy",
-            data={"image_format_policy": "force_png"},
+            data=csrf_form(
+                client,
+                {"image_format_policy": "force_png"},
+                cookie_name="novelai_proxy_self_service_csrf",
+            ),
             follow_redirects=False,
         )
         assert update.status_code == 303
@@ -426,7 +430,10 @@ def test_disabled_discord_user_cannot_use_self_service_account(tmp_path: Path, m
         assert account.status_code == 403
         assert account.json()["message"] == "Account is disabled"
 
-        reset = client.post("/account/reset-key")
+        reset = client.post(
+            "/account/reset-key",
+            data=csrf_form(client, cookie_name="novelai_proxy_self_service_csrf"),
+        )
         assert reset.status_code == 403
         assert reset.json()["message"] == "Account is disabled"
         current_hash = client.app.state.db.query_one("SELECT api_key_hash FROM users WHERE id = ?", (user_id,))["api_key_hash"]
@@ -448,7 +455,11 @@ def test_self_service_reset_key_invalidates_old_key_and_does_not_store_discord_t
         page = _complete_discord_login(client)
         old_key = _extract_api_key(page.text)
 
-        reset = client.post("/account/reset-key", follow_redirects=True)
+        reset = client.post(
+            "/account/reset-key",
+            data=csrf_form(client, cookie_name="novelai_proxy_self_service_csrf"),
+            follow_redirects=True,
+        )
         assert reset.status_code == 200
         new_key = _extract_api_key(reset.text)
         assert new_key != old_key

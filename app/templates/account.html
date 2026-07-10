@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
+  <meta name="csrf-token" content="{{ request.state.csrf_token }}">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>我的账号 - NovelAI Proxy</title>
@@ -198,6 +199,7 @@
 
   <script src="{{ static_url('vendor/lucide.min.js') }}"></script>
   <script src="{{ static_url('confirm-dialog.js') }}"></script>
+  <script src="{{ static_url('csrf.js') }}"></script>
   <script>
     lucide.createIcons();
     document.querySelectorAll(".copy-button").forEach((button) => {

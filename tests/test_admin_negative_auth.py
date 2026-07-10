@@ -10,7 +10,7 @@ from fastapi import Request
 
 from app.admin.auth import SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SECONDS, has_admin_session
 from app.signed_tokens import sign_payload, verify_payload
-from helpers import write_test_config
+from helpers import csrf_form, write_test_config
 
 
 def test_admin_api_rejects_missing_and_wrong_basic_auth(tmp_path: Path, monkeypatch):
@@ -78,7 +78,7 @@ def test_admin_web_pages_redirect_without_session_and_after_logout(tmp_path: Pat
         assert client.get("/admin/users").status_code == 200
         assert client.get("/admin/user-groups").status_code == 200
 
-        logout = client.post("/admin/logout", follow_redirects=False)
+        logout = client.post("/admin/logout", data=csrf_form(client), follow_redirects=False)
         assert logout.status_code == 303
         assert logout.headers["location"] == "/admin/login"
         after_logout = client.get("/admin/users", follow_redirects=False)

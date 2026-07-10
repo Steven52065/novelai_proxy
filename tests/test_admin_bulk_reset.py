@@ -146,6 +146,7 @@ def test_bulk_reset_web_forms_and_page_controls(client, create_user):
 
     login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
     assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = client.cookies.get("novelai_proxy_admin_csrf")
 
     page = client.get("/admin/users")
     assert page.status_code == 200

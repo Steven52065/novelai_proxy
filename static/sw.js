@@ -13,6 +13,7 @@ const CACHE_STATIC = "nai-proxy-static-v3";
 const PRECACHE = [
   "/static/style.css",
   "/static/vendor/lucide.min.js",
+  "/static/csrf.js",
   "/static/manifest.json",
   "/static/icon-192.png",
   "/static/icon-512.png",

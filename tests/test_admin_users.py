@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.database import utc_now_iso
-from helpers import BlockingFakeUpstream, PAYLOAD, write_test_config, write_test_config_with_upstreams
+from helpers import BlockingFakeUpstream, PAYLOAD, csrf_headers, write_test_config, write_test_config_with_upstreams
 
 
 def test_admin_create_update_free_small_only(tmp_path: Path, monkeypatch):
@@ -116,6 +116,7 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
     with TestClient(app) as client:
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
 
         bad_user_create = client.post(
             "/admin/users",
@@ -267,6 +268,7 @@ def test_admin_web_key_flash_does_not_put_key_in_url_or_logs(tmp_path: Path, mon
     with TestClient(app) as client:
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
 
         create_resp = client.post(
             "/admin/users",
@@ -887,6 +889,7 @@ def test_admin_user_group_web_pages_create_and_show_fixed_id(tmp_path: Path, mon
     with TestClient(app) as client:
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
 
         create_resp = client.post(
             "/admin/user-groups",
@@ -930,6 +933,7 @@ def test_admin_user_group_web_form_save_propagates_with_scope(tmp_path: Path, mo
 
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
 
         page = client.get(f"/admin/user-groups/{group_id}")
         assert page.status_code == 200
@@ -988,6 +992,7 @@ def test_admin_user_edit_page_can_change_group(tmp_path: Path, monkeypatch):
 
         login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
         assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
         detail = client.get(f"/admin/users/{user_id}")
         assert detail.status_code == 200
         assert "所属用户组" in detail.text

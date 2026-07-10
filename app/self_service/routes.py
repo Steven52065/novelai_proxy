@@ -370,7 +370,10 @@ def _set_session_cookie(response, request: Request, secret: str, user_id: int) -
         response,
         request,
         SESSION_COOKIE,
-        sign_payload(expiring_payload(SESSION_TTL_SECONDS, user_id=user_id), secret),
+        sign_payload(
+            expiring_payload(SESSION_TTL_SECONDS, user_id=user_id, sid=secrets.token_urlsafe(18)),
+            secret,
+        ),
         max_age=SESSION_TTL_SECONDS,
     )
 

@@ -8,6 +8,14 @@ import time
 import zipfile
 from pathlib import Path
 
+
+def csrf_form(client, data: dict | None = None, *, cookie_name: str = "novelai_proxy_admin_csrf") -> dict:
+    return {**(data or {}), "_csrf_token": client.cookies.get(cookie_name)}
+
+
+def csrf_headers(client, *, cookie_name: str = "novelai_proxy_admin_csrf") -> dict[str, str]:
+    return {"X-CSRF-Token": client.cookies.get(cookie_name)}
+
 from fastapi.testclient import TestClient
 from novelai_python._exceptions import APIError
 

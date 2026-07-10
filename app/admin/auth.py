@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import secrets
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -76,9 +77,13 @@ async def logout(request: Request):
 
 def session_value(request: Request) -> str:
     config = request.app.state.config
+    current = admin_session_payload(request)
+    session_id = current.get("sid") if current is not None else None
+    if not isinstance(session_id, str) or not session_id:
+        session_id = secrets.token_urlsafe(18)
     return sign_payload(
-        expiring_payload(SESSION_COOKIE_MAX_AGE_SECONDS, sub=config.admin.username),
-        _admin_session_secret(request),
+        expiring_payload(SESSION_COOKIE_MAX_AGE_SECONDS, sub=config.admin.username, sid=session_id),
+        admin_session_secret(request),
     )
 
 
@@ -93,15 +98,18 @@ def set_admin_session_cookie(response: Response, request: Request) -> None:
 
 
 def has_admin_session(request: Request) -> bool:
-    cookie = request.cookies.get(SESSION_COOKIE)
-    payload = verify_payload(cookie, _admin_session_secret(request))
+    payload = admin_session_payload(request)
     if payload is None:
         return False
     sub = payload.get("sub")
     return isinstance(sub, str) and hmac.compare_digest(sub, request.app.state.config.admin.username)
 
 
-def _admin_session_secret(request: Request) -> str:
+def admin_session_payload(request: Request) -> dict | None:
+    return verify_payload(request.cookies.get(SESSION_COOKIE), admin_session_secret(request))
+
+
+def admin_session_secret(request: Request) -> str:
     # Admin sessions are intentionally derived from the current admin password:
     # changing that password revokes every outstanding admin cookie.
     password = request.app.state.config.admin.password.encode("utf-8")
