@@ -44,23 +44,25 @@ class RateLimiter:
             if not seconds:
                 continue
             window_start = (now - timedelta(seconds=seconds)).isoformat()
-            usage = self.db.query_one(
+            activity_times = self.db.query_all(
                 """
-                SELECT COUNT(DISTINCT request_id) AS c, MIN(created_at) AS earliest_at
+                SELECT MAX(created_at) AS latest_at
                 FROM usage_logs
                 WHERE user_id = ?
                   AND created_at >= ?
                   AND status NOT IN ('rejected')
+                GROUP BY request_id
+                ORDER BY latest_at ASC
                 """,
                 (user_id, window_start),
             )
-            count = usage["c"]
+            count = len(activity_times)
             max_requests = int(rule["max_requests"])
-            if int(count) >= max_requests:
+            if count >= max_requests:
                 return RateLimitResult(
                     allowed=False,
                     message=f"Rate limit exceeded: {max_requests} per {period}",
-                    retry_after=_remaining_window_seconds(now, usage["earliest_at"], seconds),
+                    retry_after=_retry_after_seconds(now, activity_times, max_requests, seconds),
                     scope="user",
                 )
         group = self.db.query_one(
@@ -92,38 +94,44 @@ class RateLimiter:
             if not seconds:
                 continue
             window_start = (now - timedelta(seconds=seconds)).isoformat()
-            usage = self.db.query_one(
+            activity_times = self.db.query_all(
                 """
-                SELECT COUNT(DISTINCT l.request_id) AS c, MIN(l.created_at) AS earliest_at
+                SELECT MAX(l.created_at) AS latest_at
                 FROM usage_logs l
                 JOIN users u ON u.id = l.user_id
                 WHERE u.group_id = ?
                   AND u.deleted_at IS NULL
                   AND l.created_at >= ?
                   AND l.status NOT IN ('rejected')
+                GROUP BY l.request_id
+                ORDER BY latest_at ASC
                 """,
                 (group_id, window_start),
             )
-            count = usage["c"]
+            count = len(activity_times)
             max_requests = int(rule["max_requests"])
-            if int(count) >= max_requests:
+            if count >= max_requests:
                 return RateLimitResult(
                     allowed=False,
                     message=f"Group rate limit exceeded: {max_requests} per {period}",
-                    retry_after=_remaining_window_seconds(now, usage["earliest_at"], seconds),
+                    retry_after=_retry_after_seconds(now, activity_times, max_requests, seconds),
                     scope="group",
                 )
         return RateLimitResult(allowed=True)
 
 
-def _remaining_window_seconds(now: datetime, earliest_at: str | None, window_seconds: int) -> int:
-    if not earliest_at:
+def _retry_after_seconds(now: datetime, activity_times, max_requests: int, window_seconds: int) -> int:
+    unlock_index = len(activity_times) - max_requests
+    if unlock_index < 0 or unlock_index >= len(activity_times):
+        return window_seconds
+    latest_at = activity_times[unlock_index]["latest_at"]
+    if not latest_at:
         return window_seconds
     try:
-        earliest = datetime.fromisoformat(earliest_at)
+        unlock_activity = datetime.fromisoformat(latest_at)
     except ValueError:
         return window_seconds
-    if earliest.tzinfo is None:
-        earliest = earliest.replace(tzinfo=timezone.utc)
-    remaining = window_seconds - (now - earliest.astimezone(timezone.utc)).total_seconds()
+    if unlock_activity.tzinfo is None:
+        unlock_activity = unlock_activity.replace(tzinfo=timezone.utc)
+    remaining = window_seconds - (now - unlock_activity.astimezone(timezone.utc)).total_seconds()
     return max(1, math.ceil(remaining))

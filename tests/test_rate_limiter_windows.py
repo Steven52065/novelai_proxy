@@ -209,3 +209,53 @@ def test_month_rate_limit_is_a_rolling_thirty_day_window(rate_limit_db, monkeypa
 
     assert result.allowed is False
     assert result.retry_after == 3600
+
+
+def test_rate_limit_waits_until_count_falls_below_limit(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    user_id = _create_user(rate_limit_db)
+    _add_rule(rate_limit_db, user_id, period="minute", max_requests=2)
+    _insert_log(rate_limit_db, user_id, request_id="first", status="success", created_at=FIXED_NOW - timedelta(seconds=30))
+    _insert_log(rate_limit_db, user_id, request_id="second", status="success", created_at=FIXED_NOW - timedelta(seconds=20))
+    _insert_log(rate_limit_db, user_id, request_id="third", status="success", created_at=FIXED_NOW - timedelta(seconds=10))
+
+    result = RateLimiter(rate_limit_db).check(user_id)
+
+    assert result.allowed is False
+    assert result.retry_after == 40
+
+
+def test_rate_limit_uses_latest_attempt_for_each_request(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    user_id = _create_user(rate_limit_db)
+    _add_rule(rate_limit_db, user_id, period="minute", max_requests=1)
+    _insert_log(rate_limit_db, user_id, request_id="retried", status="failed", created_at=FIXED_NOW - timedelta(seconds=50))
+    rate_limit_db.execute(
+        """
+        INSERT INTO usage_logs (request_id, attempt_number, user_id, action, estimated_anlas_cost, status, log_level, created_at)
+        VALUES (?, 1, ?, 'generate', 0, 'success', 'INFO', ?)
+        """,
+        ("retried", user_id, (FIXED_NOW - timedelta(seconds=10)).isoformat()),
+    )
+
+    result = RateLimiter(rate_limit_db).check(user_id)
+
+    assert result.allowed is False
+    assert result.retry_after == 50
+
+
+def test_group_rate_limit_waits_until_group_count_falls_below_limit(rate_limit_db, monkeypatch):
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    group_id = _create_group(rate_limit_db)
+    first_user = _create_user(rate_limit_db, group_id=group_id)
+    second_user = _create_user(rate_limit_db, group_id=group_id)
+    _add_group_rule(rate_limit_db, group_id, period="minute", max_requests=2)
+    _insert_log(rate_limit_db, first_user, request_id="first", status="success", created_at=FIXED_NOW - timedelta(seconds=30))
+    _insert_log(rate_limit_db, second_user, request_id="second", status="success", created_at=FIXED_NOW - timedelta(seconds=20))
+    _insert_log(rate_limit_db, first_user, request_id="third", status="success", created_at=FIXED_NOW - timedelta(seconds=10))
+
+    result = RateLimiter(rate_limit_db).check(second_user)
+
+    assert result.allowed is False
+    assert result.scope == "group"
+    assert result.retry_after == 40

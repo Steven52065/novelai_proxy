@@ -6,8 +6,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.csrf import ADMIN_CSRF_COOKIE
-from app.signed_tokens import sign_payload, verify_payload
+from app.csrf import ADMIN_CSRF_COOKIE, SELF_SERVICE_CSRF_COOKIE
+from app.signed_tokens import expiring_payload, sign_payload, verify_payload
 from helpers import FakeUpstream, PAYLOAD, csrf_headers, write_test_config
 
 
@@ -91,6 +91,70 @@ def test_admin_csrf_rejects_expired_signed_token(tmp_path: Path, monkeypatch):
             json={"name": "expired-csrf"},
         )
         assert response.status_code == 403
+
+
+def test_legacy_admin_session_is_cleared_and_requires_login(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    admin_secret = hmac.new(
+        b"admin123",
+        b"novelai-proxy-admin-session-v1",
+        hashlib.sha256,
+    ).hexdigest()
+    legacy_session = sign_payload(expiring_payload(3600, sub="admin"), admin_secret)
+
+    with TestClient(app) as client:
+        client.cookies.set("novelai_proxy_admin", legacy_session, path="/")
+        client.cookies.set(ADMIN_CSRF_COOKIE, "stale-csrf", path="/")
+        response = client.get("/admin", follow_redirects=False)
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin/login"
+        cleared = response.headers.get_list("set-cookie")
+        assert any("novelai_proxy_admin=" in value and "Max-Age=0" in value for value in cleared)
+        assert any(f"{ADMIN_CSRF_COOKIE}=" in value and "Max-Age=0" in value for value in cleared)
+
+
+def test_legacy_self_service_session_is_cleared_and_requires_login(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    legacy_session = sign_payload(expiring_payload(3600, user_id=1), "")
+
+    with TestClient(app) as client:
+        client.cookies.set("novelai_proxy_self_service_session", legacy_session, path="/")
+        client.cookies.set(SELF_SERVICE_CSRF_COOKIE, "stale-csrf", path="/")
+        response = client.get("/account", follow_redirects=False)
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/signup"
+        cleared = response.headers.get_list("set-cookie")
+        assert any("novelai_proxy_self_service_session=" in value and "Max-Age=0" in value for value in cleared)
+        assert any(f"{SELF_SERVICE_CSRF_COOKIE}=" in value and "Max-Age=0" in value for value in cleared)
+
+
+def test_legacy_session_write_returns_relogin_response(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    admin_secret = hmac.new(
+        b"admin123",
+        b"novelai-proxy-admin-session-v1",
+        hashlib.sha256,
+    ).hexdigest()
+    legacy_session = sign_payload(expiring_payload(3600, sub="admin"), admin_secret)
+
+    with TestClient(app) as client:
+        client.cookies.set("novelai_proxy_admin", legacy_session, path="/")
+        response = client.post("/admin/logout", follow_redirects=False)
+
+        assert response.status_code == 401
+        assert response.json()["login_url"] == "/admin/login"
+        assert any(
+            "novelai_proxy_admin=" in value and "Max-Age=0" in value
+            for value in response.headers.get_list("set-cookie")
+        )
 
 
 def test_bearer_image_api_does_not_require_csrf(tmp_path: Path, monkeypatch):
