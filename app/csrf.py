@@ -66,7 +66,13 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
 def _legacy_session_scope(request: Request) -> Literal["admin", "self_service"] | None:
     path = request.url.path
-    if path.startswith("/admin") and path != "/admin/login" and request.cookies.get(ADMIN_SESSION_COOKIE):
+    basic_authorization = request.headers.get("authorization", "").lower().startswith("basic ")
+    if (
+        path.startswith("/admin")
+        and path != "/admin/login"
+        and request.cookies.get(ADMIN_SESSION_COOKIE)
+        and not basic_authorization
+    ):
         from .admin.auth import admin_session_payload
 
         payload = admin_session_payload(request)

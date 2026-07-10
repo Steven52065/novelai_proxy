@@ -68,6 +68,8 @@ def test_csrf_browser_helper_protects_forms_and_unsafe_fetches():
     source = (Path(__file__).parents[1] / "static" / "csrf.js").read_text(encoding="utf-8")
     assert 'input.name = "_csrf_token"' in source
     assert 'headers.set("X-CSRF-Token", token)' in source
+    assert "input instanceof URL ? input.href" in source
+    assert "input instanceof Request" in source
 
 
 def test_startup_reclaims_orphan_reserved_quota_and_daily_usage(tmp_path: Path, monkeypatch):

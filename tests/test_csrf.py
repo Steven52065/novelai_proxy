@@ -24,6 +24,8 @@ def test_admin_cookie_mutations_require_valid_csrf_but_basic_remains_compatible(
         missing = client.post("/admin/api/users", json={"name": "missing-csrf"})
         assert missing.status_code == 403
         assert "refresh" in missing.json()["message"]
+        assert missing.headers["cache-control"] == "no-store, private"
+        assert missing.headers["pragma"] == "no-cache"
 
         tampered = client.post(
             "/admin/api/users",
@@ -111,9 +113,33 @@ def test_legacy_admin_session_is_cleared_and_requires_login(tmp_path: Path, monk
 
         assert response.status_code == 303
         assert response.headers["location"] == "/admin/login"
+        assert response.headers["cache-control"] == "no-store, private"
+        assert response.headers["pragma"] == "no-cache"
         cleared = response.headers.get_list("set-cookie")
         assert any("novelai_proxy_admin=" in value and "Max-Age=0" in value for value in cleared)
         assert any(f"{ADMIN_CSRF_COOKIE}=" in value and "Max-Age=0" in value for value in cleared)
+
+
+def test_legacy_admin_session_does_not_override_valid_basic_auth(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    admin_secret = hmac.new(
+        b"admin123",
+        b"novelai-proxy-admin-session-v1",
+        hashlib.sha256,
+    ).hexdigest()
+    legacy_session = sign_payload(expiring_payload(3600, sub="admin"), admin_secret)
+
+    with TestClient(app) as client:
+        client.cookies.set("novelai_proxy_admin", legacy_session, path="/")
+        response = client.get(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 200
 
 
 def test_legacy_self_service_session_is_cleared_and_requires_login(tmp_path: Path, monkeypatch):

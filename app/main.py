@@ -182,11 +182,11 @@ async def _payload_archive_loop(service: PayloadArchiveService, config) -> None:
 
 
 app = FastAPI(title="NovelAI Proxy", lifespan=lifespan)
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(ConfigurableCORSMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(AdminSessionRefreshMiddleware)
 app.add_middleware(SensitiveResponseCacheMiddleware)
-app.add_middleware(CSRFMiddleware)
 static_dir = repo_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
