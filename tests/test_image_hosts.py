@@ -10,8 +10,14 @@ import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
-from app.config import CatboxConfig, ImageHostingConfig
-from app.image_hosts import CatboxImageHost, ImageHostingService, ImageHostUploadError, ImageUploadFile
+from app.config import CatboxConfig, ImageHostingConfig, Sda1Config
+from app.image_hosts import (
+    CatboxImageHost,
+    ImageHostingService,
+    ImageHostUploadError,
+    ImageUploadFile,
+    Sda1ImageHost,
+)
 from app.logging_utils import LOGGER_NAME
 
 
@@ -119,6 +125,92 @@ def test_catbox_upload_logs_invalid_success_response_without_userhash(monkeypatc
     assert "image host invalid response" in caplog.text
     assert "response_body='upload rejected for [redacted]'" in caplog.text
     assert userhash not in caplog.text
+
+
+def test_sda1_upload_uses_filename_query_and_binary_body(monkeypatch):
+    image = ImageUploadFile(
+        filename="image_0.webp",
+        content=b"fake-webp-content",
+        content_type="image/webp",
+    )
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.params["filename"] == image.filename
+        assert request.headers["content-type"] == image.content_type
+        assert request.content == image.content
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "url": "https://p.sda1.dev/example/image_0.webp",
+                },
+            },
+            request=request,
+        )
+
+    real_async_client = httpx.AsyncClient
+
+    def build_client(*, timeout):
+        return real_async_client(timeout=timeout, transport=httpx.MockTransport(handle_request))
+
+    monkeypatch.setattr("app.image_hosts.httpx.AsyncClient", build_client)
+    host = Sda1ImageHost(
+        api_url="https://p.sda1.dev/api/v1/upload_external_noform",
+        timeout_seconds=30,
+    )
+
+    url = asyncio.run(host.upload_image(image))
+
+    assert url == "https://p.sda1.dev/example/image_0.webp"
+
+
+def test_image_hosting_service_builds_sda1_client_without_userhash():
+    service = ImageHostingService(
+        ImageHostingConfig(
+            enabled=True,
+            provider="sda1",
+            sda1=Sda1Config(),
+        )
+    )
+
+    assert isinstance(service.client, Sda1ImageHost)
+
+
+def test_sda1_upload_rejects_response_without_data_url(monkeypatch, caplog):
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"success": False, "message": "upload rejected", "data": {}},
+            request=request,
+        )
+
+    real_async_client = httpx.AsyncClient
+
+    def build_client(*, timeout):
+        return real_async_client(timeout=timeout, transport=httpx.MockTransport(handle_request))
+
+    monkeypatch.setattr("app.image_hosts.httpx.AsyncClient", build_client)
+    caplog.set_level(logging.ERROR, logger=LOGGER_NAME)
+    host = Sda1ImageHost(
+        api_url="https://p.sda1.dev/api/v1/upload_external_noform",
+        timeout_seconds=30,
+    )
+
+    with pytest.raises(ImageHostUploadError, match="invalid image host response"):
+        asyncio.run(
+            host.upload_image(
+                ImageUploadFile(
+                    filename="image.png",
+                    content=b"fake-png-content",
+                    content_type="image/png",
+                )
+            )
+        )
+
+    assert "image host invalid response provider=sda1" in caplog.text
+    assert "upload rejected" in caplog.text
 
 
 def test_image_host_upload_failure_logs_file_details(caplog):

@@ -183,7 +183,7 @@ image_format:
 # 默认关闭；开启后会在成功生成图片后，把 zip 内图片上传到图床，并把返回 URL 写入 usage_logs.image_urls。
 image_hosting:
   enabled: false
-  # 当前仅支持 catbox；后续新增平台时会通过该字段选择。
+  # 可选 catbox 或 sda1（流浪图床）。
   provider: catbox
   # 上传请求超时时间，单位秒。
   timeout_seconds: 30
@@ -199,6 +199,9 @@ image_hosting:
     api_url: https://catbox.moe/user/api.php
     # Catbox 用户 hash。启用图床上传时必须填写。
     userhash: ""
+  sda1:
+    # 流浪图床无需 API Key；上传时使用 filename 查询参数和原始 Binary 请求体。
+    api_url: https://p.sda1.dev/api/v1/upload_external_noform
 
 # 浏览器跨域 CORS 配置。
 # 当前项目主要使用 Authorization: Bearer <proxy_api_key> 鉴权；

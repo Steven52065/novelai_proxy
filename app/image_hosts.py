@@ -88,6 +88,45 @@ class CatboxImageHost:
         return url
 
 
+class Sda1ImageHost:
+    provider = "sda1"
+
+    def __init__(self, *, api_url: str, timeout_seconds: float):
+        self.api_url = api_url
+        self.timeout_seconds = timeout_seconds
+
+    async def upload_image(self, image: ImageUploadFile) -> str:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                self.api_url,
+                params={"filename": image.filename},
+                content=image.content,
+                headers={"content-type": image.content_type},
+            )
+        if response.is_error:
+            _log_image_host_response(
+                provider=self.provider,
+                response=response,
+                image=image,
+            )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        data = payload.get("data") if isinstance(payload, dict) else None
+        url = data.get("url") if isinstance(data, dict) else None
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            _log_image_host_response(
+                provider=self.provider,
+                response=response,
+                image=image,
+                invalid=True,
+            )
+            raise ImageHostUploadError("invalid image host response")
+        return url
+
+
 class ImageHostingService:
     def __init__(self, config: ImageHostingConfig):
         self.config = config
@@ -145,6 +184,11 @@ class ImageHostingService:
             return CatboxImageHost(
                 api_url=config.catbox.api_url,
                 userhash=config.catbox.userhash,
+                timeout_seconds=config.timeout_seconds,
+            )
+        if config.provider == "sda1":
+            return Sda1ImageHost(
+                api_url=config.sda1.api_url,
                 timeout_seconds=config.timeout_seconds,
             )
         raise ValueError(f"Unsupported image host provider: {config.provider}")

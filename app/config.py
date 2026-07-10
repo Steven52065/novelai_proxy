@@ -145,14 +145,19 @@ class CatboxConfig(BaseModel):
     userhash: str = ""
 
 
+class Sda1Config(BaseModel):
+    api_url: str = "https://p.sda1.dev/api/v1/upload_external_noform"
+
+
 class ImageHostingConfig(BaseModel):
     enabled: bool = False
-    provider: Literal["catbox"] = "catbox"
+    provider: Literal["catbox", "sda1"] = "catbox"
     timeout_seconds: float = Field(default=30, gt=0)
     max_pending_uploads: int = Field(default=50, ge=0)
     local_format_conversion: bool = False
     local_conversion_format: Literal["png", "jpeg", "webp"] = "webp"
     catbox: CatboxConfig = Field(default_factory=CatboxConfig)
+    sda1: Sda1Config = Field(default_factory=Sda1Config)
 
 
 class FreeSmallDailyLimitConfig(BaseModel):

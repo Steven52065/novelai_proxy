@@ -20,6 +20,8 @@ def test_self_service_config_defaults_to_disabled():
     assert config.free_small_daily_limit.reset_hour_utc8 == 0
     assert config.image_hosting.local_format_conversion is False
     assert config.image_hosting.local_conversion_format == "webp"
+    assert config.image_hosting.provider == "catbox"
+    assert config.image_hosting.sda1.api_url == "https://p.sda1.dev/api/v1/upload_external_noform"
     assert config.database.hot_payload.enabled is False
     assert config.database.hot_payload.compression == "zlib"
     assert config.database.hot_payload.compression_level == 6
@@ -35,6 +37,12 @@ def test_logging_level_accepts_warning():
     config = AppConfig.model_validate({"logging": {"level": "WARNING"}})
 
     assert config.logging.level == "WARNING"
+
+
+def test_image_hosting_accepts_sda1_provider():
+    config = AppConfig.model_validate({"image_hosting": {"enabled": True, "provider": "sda1"}})
+
+    assert config.image_hosting.provider == "sda1"
 
 
 def test_legacy_log_level_warning_updates_logging_level():
