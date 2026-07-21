@@ -32,6 +32,7 @@ class QueueConfig(BaseModel):
     upstream_interval_max_seconds: float = Field(default=5, ge=0)
     upstream_error_extra_delay_seconds: float = Field(default=5, ge=0)
     upstream_execution_timeout_seconds: float = Field(default=60, gt=0)
+    upstream_timeout_cleanup_grace_seconds: float = Field(default=60, ge=0)
     retry_429_queue_length_threshold: int = Field(default=3, ge=-1)
     retry_429_max_attempts: int = Field(default=5, ge=1)
 

@@ -30,6 +30,7 @@ class ProxyQueue:
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
         upstream_execution_timeout_seconds: float = 60,
+        upstream_timeout_cleanup_grace_seconds: float = 60,
         retry_429_queue_length_threshold: int = 3,
         retry_policy: RetryPolicy | None = None,
         get_total_queue_length: Callable[[], int] | None = None,
@@ -51,12 +52,16 @@ class ProxyQueue:
         self.upstream_execution_timeout_seconds = float(upstream_execution_timeout_seconds)
         if self.upstream_execution_timeout_seconds <= 0:
             raise ValueError("upstream_execution_timeout_seconds must be greater than 0")
+        # 超时 handler 的清理宽限：超时取消后最多再等这么久让 handler 真正退出，
+        # 以维持对上游的串行；0 表示无限等待（旧行为，病态 handler 会卡死整个队列）。
+        self.upstream_timeout_cleanup_grace_seconds = max(0.0, float(upstream_timeout_cleanup_grace_seconds))
         self._retry_policy = retry_policy or RetryPolicy(queue_length_threshold=retry_429_queue_length_threshold)
         self.get_total_queue_length = get_total_queue_length
         self._is_user_available = is_user_available or (lambda _user_id: True)
         self._last_upstream_completed_at: float | None = None
         self._apply_error_extra_delay_next = False
         self._worker: asyncio.Task | None = None
+        self._stopping = False
         self._image_upload_tasks: set[asyncio.Task] = set()
         self._running_item: QueueItem | None = None
         self._running_started_at: float | None = None
@@ -76,10 +81,31 @@ class ProxyQueue:
         return self._running_item
 
     def start(self) -> None:
+        self._stopping = False
         if self._worker is None or self._worker.done():
-            self._worker = asyncio.create_task(self._run())
+            self._spawn_worker()
+
+    def _spawn_worker(self) -> None:
+        self._worker = asyncio.create_task(self._run())
+        self._worker.add_done_callback(self._on_worker_done)
+
+    def _on_worker_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if self._stopping:
+            return
+        # worker 协程是单点：意外退出会让整个上游队列永久停摆（排队项无人消费）。
+        # 循环内部已经兜底，这里是最后防线：记录后立即重启。
+        logger.error(
+            "upstream queue worker exited unexpectedly, restarting upstream_id=%s",
+            self.upstream_id,
+            exc_info=exc,
+        )
+        self._spawn_worker()
 
     async def stop(self, *, drain: bool = True) -> None:
+        self._stopping = True
         if self._worker is None:
             return
         if drain:
@@ -161,29 +187,77 @@ class ProxyQueue:
             self._running_item = item
             self._running_started_at = time.monotonic()
             self._notify_change()
-            queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
-            upstream_ms: int | None = None
             try:
-                if self._cancel_if_caller_done(item, queued_ms, after_interval=False):
-                    continue
-                if self._reject_if_user_unavailable(item):
-                    continue
-                self._mark_item_running(item, queued_ms)
-                await self._wait_for_upstream_interval(item.request_id)
-                if self._cancel_if_caller_done(item, queued_ms, after_interval=True):
-                    continue
-                payload, upstream_ms = await self._execute_item(item)
-                self._last_upstream_completed_at = time.monotonic()
-            except Exception as exc:
-                await self._handle_item_exception(item, queued_ms, upstream_ms, exc)
-            else:
-                await self._handle_item_success(item, queued_ms, upstream_ms, payload)
+                await self._process_item(item)
+            except asyncio.CancelledError:
+                # worker 被取消（stop / 移除上游）时正在处理的 attempt 要么已被
+                # _process_item 料理，要么在这里取消掉，避免调用方永久挂起。
+                if not item.future.done():
+                    item.future.cancel()
+                raise
+            except Exception:
+                # _process_item 已经对成功/失败处理各自兜底，这里只可能是
+                # 兜底代码本身出错；吞掉并继续，绝不能让 worker 退出。
+                logger.exception(
+                    "proxy queue item processing crashed request_id=%s upstream_id=%s",
+                    item.request_id,
+                    self.upstream_id,
+                )
             finally:
                 self._running_item = None
                 self._running_started_at = None
-                self.queue.task_done()
+                try:
+                    self.queue.task_done()
+                except ValueError:
+                    logger.exception("proxy queue task_done accounting error upstream_id=%s", self.upstream_id)
                 self._notify_change()
                 await asyncio.sleep(0)
+
+    async def _process_item(self, item: QueueItem) -> None:
+        queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
+        upstream_ms: int | None = None
+        try:
+            if self._cancel_if_caller_done(item, queued_ms, after_interval=False):
+                return
+            if self._reject_if_user_unavailable(item):
+                return
+            self._mark_item_running(item, queued_ms)
+            await self._wait_for_upstream_interval(item.request_id)
+            if self._cancel_if_caller_done(item, queued_ms, after_interval=True):
+                return
+            payload, upstream_ms = await self._execute_item(item)
+            self._last_upstream_completed_at = time.monotonic()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            try:
+                await self._handle_item_exception(item, queued_ms, upstream_ms, exc)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "proxy request failure handling crashed request_id=%s upstream_id=%s",
+                    item.request_id,
+                    self.upstream_id,
+                )
+            finally:
+                # 记账/日志写入自身出错时也必须让调用方拿到结果，否则请求悬挂。
+                if not item.future.done():
+                    item.future.set_exception(exc)
+        else:
+            try:
+                await self._handle_item_success(item, queued_ms, upstream_ms, payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "proxy request success handling crashed request_id=%s upstream_id=%s",
+                    item.request_id,
+                    self.upstream_id,
+                )
+                # 上游已经成功产出，记账问题不应把成功变成失败。
+                if not item.future.done():
+                    item.future.set_result(payload)
 
     def _cancel_if_caller_done(self, item: QueueItem, queued_ms: int, *, after_interval: bool) -> bool:
         if item.cancel_future is None or not item.cancel_future.done():
@@ -398,15 +472,30 @@ class ProxyQueue:
     async def _wait_for_timed_out_handler(self, request_id: str, handler_task: asyncio.Task | None) -> None:
         if handler_task is None:
             return
+        grace = self.upstream_timeout_cleanup_grace_seconds
         try:
-            await asyncio.shield(handler_task)
+            done, _pending = await asyncio.wait(
+                {handler_task},
+                timeout=grace if grace > 0 else None,
+            )
         except asyncio.CancelledError:
             if not handler_task.done():
                 handler_task.add_done_callback(self._consume_timed_out_handler_result)
                 logger.info("timed out upstream handler cleanup interrupted request_id=%s", request_id)
-                raise
-        except Exception:
-            logger.debug("timed out upstream handler finished with an exception request_id=%s", request_id, exc_info=True)
+            raise
+        if handler_task in done:
+            if not handler_task.cancelled() and handler_task.exception() is not None:
+                logger.debug("timed out upstream handler finished with an exception request_id=%s", request_id)
+            return
+        # handler 在取消后的宽限期内仍未退出（吞掉了取消或卡在不可中断的调用上）。
+        # 继续等待会让 worker 永久阻塞、整个上游队列卡死，因此放弃等待并继续消费。
+        handler_task.add_done_callback(self._consume_timed_out_handler_result)
+        logger.warning(
+            "timed out upstream handler did not exit within cleanup grace, resuming queue request_id=%s upstream_id=%s grace_seconds=%s",
+            request_id,
+            self.upstream_id,
+            grace,
+        )
 
     @staticmethod
     def _consume_timed_out_handler_result(task: asyncio.Task) -> None:
@@ -479,5 +568,10 @@ class ProxyQueue:
         logger.info("image host upload succeeded request_id=%s image_urls=%s attempt_number=%s", request_id, len(image_urls), attempt_number)
 
     def _notify_change(self) -> None:
-        if self._on_change is not None:
+        if self._on_change is None:
+            return
+        try:
             self._on_change()
+        except Exception:
+            # 状态广播只是 UI 优化，绝不能反噬 worker 循环。
+            logger.exception("queue change callback failed upstream_id=%s", self.upstream_id)

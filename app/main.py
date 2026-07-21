@@ -99,6 +99,7 @@ async def lifespan(app: FastAPI):
         upstream_interval_max_seconds=config.queue.upstream_interval_max_seconds,
         upstream_error_extra_delay_seconds=config.queue.upstream_error_extra_delay_seconds,
         upstream_execution_timeout_seconds=config.queue.upstream_execution_timeout_seconds,
+        upstream_timeout_cleanup_grace_seconds=config.queue.upstream_timeout_cleanup_grace_seconds,
         retry_429_queue_length_threshold=config.queue.retry_429_queue_length_threshold,
         retry_429_max_attempts=config.queue.retry_429_max_attempts,
         is_user_available=lambda user_id: user_is_available(db, user_id),

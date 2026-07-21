@@ -52,6 +52,7 @@ class RoutingProxyQueue:
         upstream_interval_max_seconds: float = 5,
         upstream_error_extra_delay_seconds: float = 5,
         upstream_execution_timeout_seconds: float = 60,
+        upstream_timeout_cleanup_grace_seconds: float = 60,
         retry_429_queue_length_threshold: int = 3,
         retry_429_max_attempts: int = 5,
         is_user_available: Callable[[int], bool] | None = None,
@@ -74,6 +75,7 @@ class RoutingProxyQueue:
         self._upstream_interval_max_seconds = upstream_interval_max_seconds
         self._upstream_error_extra_delay_seconds = upstream_error_extra_delay_seconds
         self._upstream_execution_timeout_seconds = upstream_execution_timeout_seconds
+        self._upstream_timeout_cleanup_grace_seconds = upstream_timeout_cleanup_grace_seconds
         self._targets = {target.id: target for target in enabled_targets}
         self._target_order = [target.id for target in enabled_targets]
         self._round_robin = itertools.count()
@@ -119,9 +121,23 @@ class RoutingProxyQueue:
         self._started = True
         self._loop = asyncio.get_running_loop()
         if self._dispatch_worker is None or self._dispatch_worker.done():
-            self._dispatch_worker = asyncio.create_task(self._run_dispatcher())
+            self._spawn_dispatcher()
         for queue in self._queues.values():
             queue.start()
+
+    def _spawn_dispatcher(self) -> None:
+        self._dispatch_worker = asyncio.create_task(self._run_dispatcher())
+        self._dispatch_worker.add_done_callback(self._on_dispatcher_done)
+
+    def _on_dispatcher_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if not self._started or not self._accepting:
+            return
+        # dispatcher 是所有请求进入上游队列的唯一通道，意外退出等于全站排队冻结。
+        logger.error("dispatch worker exited unexpectedly, restarting", exc_info=exc)
+        self._spawn_dispatcher()
 
     async def stop(self, *, drain: bool = True) -> None:
         self._accepting = False
@@ -240,6 +256,7 @@ class RoutingProxyQueue:
             upstream_interval_max_seconds=self._upstream_interval_max_seconds,
             upstream_error_extra_delay_seconds=self._upstream_error_extra_delay_seconds,
             upstream_execution_timeout_seconds=self._upstream_execution_timeout_seconds,
+            upstream_timeout_cleanup_grace_seconds=self._upstream_timeout_cleanup_grace_seconds,
             retry_policy=self._retry_policy,
             get_total_queue_length=self._get_total_queue_length,
             is_user_available=self._is_user_available,
@@ -456,9 +473,17 @@ class RoutingProxyQueue:
             except Exception as exc:
                 if not item.future.done():
                     item.future.set_exception(exc)
+                else:
+                    logger.exception(
+                        "dispatcher item handling failed after future completion request_id=%s",
+                        item.request_id,
+                    )
             finally:
                 self._dispatch_running_item = None
-                self._dispatch_queue.task_done()
+                try:
+                    self._dispatch_queue.task_done()
+                except ValueError:
+                    logger.exception("dispatch queue task_done accounting error")
                 self._notify_change()
 
     def _dispatch_to_upstream(
@@ -499,6 +524,32 @@ class RoutingProxyQueue:
         self._finish_unavailable_dispatch(item, errors=errors, last_429_error=last_429_error)
 
     def _handle_upstream_completion(
+        self,
+        completed: asyncio.Future,
+        *,
+        item: QueueItem,
+        upstream_id: str,
+        last_429_error: APIError | None,
+    ) -> None:
+        try:
+            self._handle_upstream_completion_inner(
+                completed,
+                item=item,
+                upstream_id=upstream_id,
+                last_429_error=last_429_error,
+            )
+        except Exception as exc:
+            # done callback 里未处理的异常只会被 asyncio 记一条日志，原始 future
+            # 会永远悬挂、客户端无限等待，这里兜底把异常传给调用方。
+            logger.exception(
+                "upstream completion handling crashed request_id=%s upstream_id=%s",
+                item.request_id,
+                upstream_id,
+            )
+            if not item.future.done():
+                item.future.set_exception(exc)
+
+    def _handle_upstream_completion_inner(
         self,
         completed: asyncio.Future,
         *,
@@ -802,5 +853,10 @@ class RoutingProxyQueue:
         return self._adaptive_min_weight + score.score
 
     def _notify_change(self) -> None:
-        if self._on_change is not None:
+        if self._on_change is None:
+            return
+        try:
             self._on_change()
+        except Exception:
+            # 状态广播只是 UI 优化，绝不能反噬 dispatcher / 队列生命周期。
+            logger.exception("routing queue change callback failed")
