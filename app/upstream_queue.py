@@ -449,7 +449,11 @@ class ProxyQueue:
         if isinstance(exc, UpstreamExecutionTimeout):
             return "upstream_timeout", str(exc)
         if isinstance(exc, APIError):
-            return str(exc.code or "upstream_error"), exc.message
+            code = str(exc.code or "upstream_error")
+            # 仅 500：把上游原始 message/details 记入 usage_logs，便于管理面板排查。
+            if code == "500":
+                return code, _format_upstream_500_error_message(exc)
+            return code, exc.message
         return exc.__class__.__name__, str(exc)
 
     async def _execute_handler_with_timeout(self, item: QueueItem) -> bytes:
@@ -575,3 +579,21 @@ class ProxyQueue:
         except Exception:
             # 状态广播只是 UI 优化，绝不能反噬 worker 循环。
             logger.exception("queue change callback failed upstream_id=%s", self.upstream_id)
+
+
+def _format_upstream_500_error_message(exc: APIError) -> str:
+    """仅用于上游 500：拼出管理面板可见的原始 message/details。"""
+    response = exc.response
+    message = (exc.message or "").strip()
+    details = None
+    if isinstance(response, dict):
+        raw_message = response.get("message")
+        if isinstance(raw_message, str) and raw_message.strip():
+            message = raw_message.strip()
+        if "details" in response and response.get("details") is not None:
+            details = response.get("details")
+    if not message:
+        message = "Internal Server Error"
+    if details is None:
+        return message
+    return f"{message} | details={details!r}"
