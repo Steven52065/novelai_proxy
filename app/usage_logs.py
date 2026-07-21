@@ -69,10 +69,12 @@ class UsageLogRepository:
         db: Database,
         on_change: Callable[[], None] | None = None,
         hot_payload_config: HotPayloadConfig | None = None,
+        skip_request_payload: bool = False,
     ):
         self.db = db
         self._on_change = on_change
         self.hot_payload_config = hot_payload_config or HotPayloadConfig()
+        self.skip_request_payload = skip_request_payload
 
     def insert_queued(self, log: UsageLogCreate, attempt_number: int = 0) -> None:
         self._insert_with_status("queued", log, attempt_number)
@@ -374,7 +376,7 @@ class UsageLogRepository:
         )
 
     def _encode_payload(self, payload: dict[str, Any] | None) -> EncodedPayload:
-        if payload is None:
+        if payload is None or self.skip_request_payload:
             return EncodedPayload(
                 request_payload=None,
                 encoding="json",

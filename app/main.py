@@ -74,6 +74,7 @@ async def lifespan(app: FastAPI):
         db,
         on_change=dashboard_events.notify_nowait,
         hot_payload_config=config.database.hot_payload,
+        skip_request_payload=config.logging.skip_request_payload,
     )
     admin_notifications = AdminNotificationRepository(db)
     payload_archive_service = PayloadArchiveService(db)

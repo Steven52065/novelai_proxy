@@ -174,6 +174,11 @@ logging:
   save_generated_images: true
   # 生成图片归档目录名，最终路径为 logs/generated_images/{request_id}/。
   generated_images_dir: generated_images
+  # 是否不把用户请求的 Payload 记录到使用日志。默认 false（记录）。
+  # Payload 指用户生成图片时发送的 tag 等请求内容，管理后台“使用日志”中以
+  # “请求与响应 Payload 数据”展示。开启后该 Payload 不再写入数据库，
+  # 管理后台无法查看或重放对应请求；模型、尺寸、额度等汇总信息仍会正常记录。
+  skip_request_payload: false
 
 # 上游生图输出格式策略。用户图片格式策略选择“跟随全局”时，使用这里的配置。
 # 项目不再在本地转换 zip 内图片格式，而是通过 NovelAI 官方 parameters.image_format 控制上游输出。

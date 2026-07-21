@@ -123,6 +123,8 @@ class LoggingConfig(BaseModel):
     request_log_file: str = "novelai_proxy.log"
     save_generated_images: bool = True
     generated_images_dir: str = "generated_images"
+    # 开启后不再把用户请求的 Payload（tag 等内容）写入使用日志，管理后台将无法查看或重放该 Payload。
+    skip_request_payload: bool = False
 
 
 class ImageFormatConfig(BaseModel):
