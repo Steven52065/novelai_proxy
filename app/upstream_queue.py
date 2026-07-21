@@ -581,15 +581,24 @@ class ProxyQueue:
             logger.exception("queue change callback failed upstream_id=%s", self.upstream_id)
 
 
+def _as_error_text(value: object) -> str:
+    """把上游 message 字段安全转成短文本；list/dict 等非 str 也要能落日志。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
 def _format_upstream_500_error_message(exc: APIError) -> str:
     """仅用于上游 500：拼出管理面板可见的原始 message/details。"""
     response = exc.response
-    message = (exc.message or "").strip()
+    message = _as_error_text(exc.message)
     details = None
     if isinstance(response, dict):
-        raw_message = response.get("message")
-        if isinstance(raw_message, str) and raw_message.strip():
-            message = raw_message.strip()
+        raw_message = _as_error_text(response.get("message"))
+        if raw_message:
+            message = raw_message
         if "details" in response and response.get("details") is not None:
             details = response.get("details")
     if not message:

@@ -32,6 +32,26 @@ def test_format_upstream_500_without_details_keeps_message():
     assert _format_upstream_500_error_message(exc) == "Internal Server Error"
 
 
+def test_format_upstream_500_accepts_list_message():
+    # NovelAI 校验错误常见形态：message 是 list，不能对 list 调 strip。
+    exc = APIError(
+        ["width invalid", "height invalid"],
+        request={},
+        response={
+            "statusCode": 500,
+            "message": ["width invalid", "height invalid"],
+            "details": {"field": "width"},
+        },
+        code=500,
+    )
+    assert _format_upstream_500_error_message(exc) == (
+        "['width invalid', 'height invalid'] | details={'field': 'width'}"
+    )
+    code, message = ProxyQueue._error_details(exc)
+    assert code == "500"
+    assert message == "['width invalid', 'height invalid'] | details={'field': 'width'}"
+
+
 def test_error_details_only_enriches_500():
     exc_500 = APIError(
         "Internal Server Error",
