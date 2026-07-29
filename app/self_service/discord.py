@@ -4,6 +4,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from ..discord_validation import parse_discord_snowflake
+
 
 DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"
@@ -68,11 +70,9 @@ def discord_guild_ids(payload: object) -> set[str]:
         raise TypeError("Discord guilds response is not a JSON array")
 
     guild_ids: set[str] = set()
-    for guild in payload:
+    for index, guild in enumerate(payload):
         if not isinstance(guild, dict):
             raise TypeError("Discord guilds response contains a non-object item")
-        guild_id = str(guild.get("id") or "").strip()
-        if not guild_id:
-            raise ValueError("Discord guilds response contains an item without an id")
+        guild_id = parse_discord_snowflake(guild.get("id"), field=f"guilds[{index}].id")
         guild_ids.add(guild_id)
     return guild_ids

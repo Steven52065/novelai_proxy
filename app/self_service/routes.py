@@ -16,6 +16,7 @@ from ..api_key_flash import ApiKeyFlashStore
 from ..config import DiscordSelfServiceConfig
 from ..cookies import delete_response_cookie, set_response_cookie
 from ..database import Database
+from ..discord_validation import parse_discord_snowflake
 from ..deps import (
     get_db,
     get_discord_oauth_client,
@@ -119,7 +120,10 @@ async def discord_callback(
         user_payload = await oauth.fetch_user(access_token=access_token)
     except Exception as exc:
         _raise_discord_oauth_failure("fetch_user", exc)
-    profile = _profile_from_payload(user_payload)
+    try:
+        profile = _profile_from_payload(user_payload)
+    except (TypeError, ValueError) as exc:
+        _raise_discord_oauth_failure("parse_user_response", exc)
 
     try:
         guilds_payload = await oauth.fetch_guilds(access_token=access_token)
@@ -131,7 +135,7 @@ async def discord_callback(
     except (TypeError, ValueError) as exc:
         _raise_discord_oauth_failure("parse_guilds_response", exc)
 
-    if str(config.required_guild_id) not in guild_ids:
+    if config.required_guild_id not in guild_ids:
         disabled_user_id = disable_linked_discord_user(db, discord_user_id=profile.user_id)
         if disabled_user_id is not None:
             logger.info(
@@ -262,13 +266,14 @@ async def account_logout(
     return response
 
 
-def _profile_from_payload(payload: dict) -> DiscordProfile:
-    user_id = str(payload.get("id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=502, detail={"message": "Discord user payload missing id"})
-    username = _optional_str(payload.get("username"))
-    global_name = _optional_str(payload.get("global_name"))
-    avatar = _optional_str(payload.get("avatar"))
+def _profile_from_payload(payload: object) -> DiscordProfile:
+    if not isinstance(payload, dict):
+        raise TypeError("Discord user response is not a JSON object")
+
+    user_id = parse_discord_snowflake(payload.get("id"), field="user.id")
+    username = _discord_string_field(payload.get("username"), field="user.username", required=True)
+    global_name = _discord_string_field(payload.get("global_name"), field="user.global_name")
+    avatar = _discord_string_field(payload.get("avatar"), field="user.avatar")
     return DiscordProfile(user_id=user_id, username=username, global_name=global_name, avatar=avatar)
 
 
@@ -410,8 +415,14 @@ def _ensure_self_service_account_active(db: Database, user_id: int) -> None:
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
 
 
-def _optional_str(value) -> str | None:
+def _discord_string_field(value: object, *, field: str, required: bool = False) -> str | None:
     if value is None:
+        if required:
+            raise ValueError(f"{field} is required")
         return None
-    stripped = str(value).strip()
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string or null")
+    stripped = value.strip()
+    if required and not stripped:
+        raise ValueError(f"{field} must not be empty")
     return stripped or None

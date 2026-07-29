@@ -149,7 +149,7 @@ self_service:
     client_secret: ""
     # Discord OAuth2 Redirect URI，必须与 Developer Portal 中登记的地址完全一致。
     redirect_uri: "http://127.0.0.1:8080/auth/discord/callback"
-    # 允许自助注册的 Discord 服务器 ID（Guild ID），不是频道 ID 或角色 ID。
+    # 允许自助注册的 Discord 服务器 ID（Guild ID），必须是纯数字 Snowflake 字符串，不是频道 ID 或角色 ID。
     required_guild_id: ""
     # 本地 user_groups.id。启用 Discord 自助注册时必须指向一个存在且启用的用户组。
     default_group_id:

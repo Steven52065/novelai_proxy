@@ -15,10 +15,20 @@ from app.self_service.routes import API_KEY_FLASH_COOKIE
 from helpers import PAYLOAD, FakeUpstream, csrf_form, write_test_config
 
 
+DISCORD_USER_ID = "100000000000000001"
+SECOND_DISCORD_USER_ID = "100000000000000002"
+REQUIRED_GUILD_ID = "200000000000000001"
+OTHER_GUILD_ID = "200000000000000002"
+
+
 class FakeDiscordClient:
-    def __init__(self, *, user: dict | None = None, guilds: object | None = None, fail_at: str | None = None):
-        self.user = user or {"id": "discord-1", "username": "tester", "global_name": "Tester", "avatar": "avatar"}
-        self.guilds = guilds if guilds is not None else [{"id": "guild-1"}]
+    def __init__(self, *, user: object | None = None, guilds: object | None = None, fail_at: str | None = None):
+        self.user = (
+            user
+            if user is not None
+            else {"id": DISCORD_USER_ID, "username": "tester", "global_name": "Tester", "avatar": "avatar"}
+        )
+        self.guilds = guilds if guilds is not None else [{"id": REQUIRED_GUILD_ID}]
         self.fail_at = fail_at
 
     def authorization_url(self, *, redirect_uri: str, state: str) -> str:
@@ -29,7 +39,7 @@ class FakeDiscordClient:
             raise RuntimeError("token failed")
         return {"access_token": "secret-access-token", "refresh_token": "secret-refresh-token"}
 
-    async def fetch_user(self, *, access_token: str) -> dict:
+    async def fetch_user(self, *, access_token: str) -> object:
         if self.fail_at == "user":
             raise RuntimeError("user failed")
         return self.user
@@ -134,7 +144,7 @@ def test_discord_user_outside_required_guild_is_rejected(tmp_path: Path, monkeyp
 
     with TestClient(app) as client:
         state = _start_state(client)
-        client.app.state.discord_oauth_client = FakeDiscordClient(guilds=[{"id": "other-guild"}])
+        client.app.state.discord_oauth_client = FakeDiscordClient(guilds=[{"id": OTHER_GUILD_ID}])
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
@@ -153,7 +163,7 @@ def test_discord_login_outside_required_guild_disables_existing_account(tmp_path
         user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
 
         state = _start_state(client)
-        client.app.state.discord_oauth_client = FakeDiscordClient(guilds=[{"id": "other-guild"}])
+        client.app.state.discord_oauth_client = FakeDiscordClient(guilds=[{"id": OTHER_GUILD_ID}])
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
@@ -169,9 +179,17 @@ def test_discord_login_outside_required_guild_disables_existing_account(tmp_path
 @pytest.mark.parametrize(
     "guilds",
     [
-        {"id": "guild-1"},
+        {"id": REQUIRED_GUILD_ID},
         [None],
         [{"name": "missing-id"}],
+        [{"id": 200000000000000001}],
+        [{"id": True}],
+        [{"id": {"unexpected": True}}],
+        [{"id": [REQUIRED_GUILD_ID]}],
+        [{"id": "not-a-snowflake"}],
+        [{"id": "0200000000000000001"}],
+        [{"id": str(1 << 64)}],
+        [{"id": REQUIRED_GUILD_ID}, {"id": {"unexpected": True}}],
     ],
 )
 def test_invalid_discord_guilds_response_does_not_disable_existing_account(
@@ -196,6 +214,48 @@ def test_invalid_discord_guilds_response_does_not_disable_existing_account(
         assert resp.json()["message"] == "Discord OAuth request failed"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 1
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "user",
+    [
+        [],
+        {"username": "missing-id"},
+        {"id": 100000000000000001, "username": "tester"},
+        {"id": True, "username": "tester"},
+        {"id": {"unexpected": True}, "username": "tester"},
+        {"id": "not-a-snowflake", "username": "tester"},
+        {"id": "0100000000000000001", "username": "tester"},
+        {"id": str(1 << 64), "username": "tester"},
+        {"id": DISCORD_USER_ID},
+        {"id": DISCORD_USER_ID, "username": {"unexpected": True}},
+        {"id": DISCORD_USER_ID, "username": "tester", "global_name": []},
+        {"id": DISCORD_USER_ID, "username": "tester", "avatar": False},
+    ],
+)
+def test_invalid_discord_user_response_does_not_disable_existing_account(
+    tmp_path: Path,
+    monkeypatch,
+    user: object,
+):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(user=user)
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 502
+        assert resp.json()["message"] == "Discord OAuth request failed"
+        existing_user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert existing_user["is_active"] == 1
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
 
 
@@ -241,7 +301,7 @@ def test_discord_signup_creates_group_user_and_shows_api_key_once(tmp_path: Path
         assert dict(quota) == {"total": 42, "reset_period": "week", "reset_day": 2}
         link = client.app.state.db.query_one("SELECT discord_user_id, discord_username, discord_global_name FROM discord_user_links")
         assert dict(link) == {
-            "discord_user_id": "discord-1",
+            "discord_user_id": DISCORD_USER_ID,
             "discord_username": "tester",
             "discord_global_name": "Tester",
         }
@@ -424,7 +484,7 @@ def test_discord_repeat_login_syncs_names_without_duplicate_or_overwriting_manua
 
         _complete_discord_login(
             client,
-            user={"id": "discord-1", "username": "tester2", "global_name": "Tester Two", "avatar": "avatar-2"},
+            user={"id": DISCORD_USER_ID, "username": "tester2", "global_name": "Tester Two", "avatar": "avatar-2"},
         )
         assert _count_rows(client.app.state.db, "users") == 1
         user = client.app.state.db.query_one("SELECT name FROM users WHERE id = ?", (user_id,))
@@ -439,7 +499,7 @@ def test_discord_repeat_login_syncs_names_without_duplicate_or_overwriting_manua
         client.app.state.db.execute("UPDATE users SET name = 'Manual Name' WHERE id = ?", (user_id,))
         _complete_discord_login(
             client,
-            user={"id": "discord-1", "username": "tester3", "global_name": "Tester Three", "avatar": "avatar-3"},
+            user={"id": DISCORD_USER_ID, "username": "tester3", "global_name": "Tester Three", "avatar": "avatar-3"},
         )
         user = client.app.state.db.query_one("SELECT name FROM users WHERE id = ?", (user_id,))
         assert user["name"] == "Manual Name"
@@ -460,7 +520,7 @@ def test_self_service_api_key_flash_is_bound_to_current_user(tmp_path: Path, mon
 
         second = _complete_discord_login(
             client,
-            user={"id": "discord-2", "username": "second", "global_name": "Second", "avatar": "avatar-2"},
+            user={"id": SECOND_DISCORD_USER_ID, "username": "second", "global_name": "Second", "avatar": "avatar-2"},
             follow_redirects=False,
         )
         assert second.status_code == 303
@@ -584,7 +644,7 @@ self_service:
     client_id: "client-id"
     client_secret: "client-secret"
     redirect_uri: "http://testserver/auth/discord/callback"
-    required_guild_id: "guild-1"
+    required_guild_id: "{REQUIRED_GUILD_ID}"
     default_group_id: {group_id}
     session_secret: "test-session-secret"
 """

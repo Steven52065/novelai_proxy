@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..discord_validation import parse_discord_snowflake
+
 if TYPE_CHECKING:
     from .connection import Database
 
@@ -21,6 +23,16 @@ def validate_discord_self_service_config(db: Database, config: Any) -> None:
     if missing_fields:
         formatted = ", ".join(f"self_service.discord.{field_name}" for field_name in missing_fields)
         raise ValueError(f"Discord self-service is enabled but missing required configuration: {formatted}")
+
+    try:
+        parse_discord_snowflake(
+            discord.required_guild_id,
+            field="self_service.discord.required_guild_id",
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "self_service.discord.required_guild_id must be a valid Discord guild snowflake"
+        ) from exc
 
     row = db.query_one(
         "SELECT id, is_active FROM user_groups WHERE id = ?",

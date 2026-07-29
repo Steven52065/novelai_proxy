@@ -963,7 +963,7 @@ def test_discord_self_service_validation_requires_existing_active_default_group(
                     "enabled": True,
                     "client_id": "client",
                     "client_secret": "secret",
-                    "required_guild_id": "guild",
+                    "required_guild_id": "200000000000000001",
                     "default_group_id": 1,
                     "session_secret": "session-secret",
                 }
@@ -983,6 +983,45 @@ def test_discord_self_service_validation_requires_existing_active_default_group(
 
     db.execute("UPDATE user_groups SET is_active = 1 WHERE id = 1")
     validate_discord_self_service_config(db, config)
+    db.close()
+
+
+@pytest.mark.parametrize(
+    "required_guild_id",
+    [
+        "guild",
+        "0200000000000000001",
+        str(1 << 64),
+    ],
+)
+def test_discord_self_service_validation_rejects_invalid_required_guild_id(
+    tmp_path: Path,
+    required_guild_id: str,
+):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 1, ?)",
+        ("enabled", utc_now_iso()),
+    )
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": True,
+                    "client_id": "client",
+                    "client_secret": "secret",
+                    "required_guild_id": required_guild_id,
+                    "default_group_id": 1,
+                    "session_secret": "session-secret",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="valid Discord guild snowflake"):
+        validate_discord_self_service_config(db, config)
+
     db.close()
 
 
