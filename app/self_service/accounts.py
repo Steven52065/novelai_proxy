@@ -29,6 +29,24 @@ class DiscordLoginResult:
     api_key: str | None
 
 
+def disable_linked_discord_user(db: Database, *, discord_user_id: str) -> int | None:
+    with db.transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT u.id, u.is_active, u.deleted_at
+            FROM discord_user_links l
+            JOIN users u ON u.id = l.user_id
+            WHERE l.discord_user_id = ?
+            """,
+            (discord_user_id,),
+        ).fetchone()
+        if row is None or row["deleted_at"] is not None or not int(row["is_active"]):
+            return None
+        user_id = int(row["id"])
+        conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        return user_id
+
+
 def login_or_register_discord_user(
     db: Database,
     quota_manager: QuotaManager,

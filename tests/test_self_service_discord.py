@@ -16,7 +16,7 @@ from helpers import PAYLOAD, FakeUpstream, csrf_form, write_test_config
 
 
 class FakeDiscordClient:
-    def __init__(self, *, user: dict | None = None, guilds: list[dict] | None = None, fail_at: str | None = None):
+    def __init__(self, *, user: dict | None = None, guilds: object | None = None, fail_at: str | None = None):
         self.user = user or {"id": "discord-1", "username": "tester", "global_name": "Tester", "avatar": "avatar"}
         self.guilds = guilds if guilds is not None else [{"id": "guild-1"}]
         self.fail_at = fail_at
@@ -34,7 +34,7 @@ class FakeDiscordClient:
             raise RuntimeError("user failed")
         return self.user
 
-    async def fetch_guilds(self, *, access_token: str) -> list[dict]:
+    async def fetch_guilds(self, *, access_token: str) -> object:
         if self.fail_at == "guilds":
             raise RuntimeError("guilds failed")
         return self.guilds
@@ -140,6 +140,84 @@ def test_discord_user_outside_required_guild_is_rejected(tmp_path: Path, monkeyp
         assert resp.status_code == 403
         assert resp.json()["message"] == "Discord user is not in the required guild"
         assert _count_rows(client.app.state.db, "users") == 0
+
+
+def test_discord_login_outside_required_guild_disables_existing_account(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(guilds=[{"id": "other-guild"}])
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Discord user is not in the required guild"
+        user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert user["is_active"] == 0
+        api_resp = client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"})
+        assert api_resp.status_code == 403
+        assert api_resp.json()["message"] == "Account disabled"
+        assert client.get("/account").status_code == 403
+
+
+@pytest.mark.parametrize(
+    "guilds",
+    [
+        {"id": "guild-1"},
+        [None],
+        [{"name": "missing-id"}],
+    ],
+)
+def test_invalid_discord_guilds_response_does_not_disable_existing_account(
+    tmp_path: Path,
+    monkeypatch,
+    guilds: object,
+):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(guilds=guilds)
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 502
+        assert resp.json()["message"] == "Discord OAuth request failed"
+        user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert user["is_active"] == 1
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+
+
+def test_discord_guilds_request_failure_does_not_disable_existing_account(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(fail_at="guilds")
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 502
+        assert resp.json()["message"] == "Discord OAuth request failed"
+        user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert user["is_active"] == 1
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
 
 
 def test_discord_signup_creates_group_user_and_shows_api_key_once(tmp_path: Path, monkeypatch):

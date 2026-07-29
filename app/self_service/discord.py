@@ -55,8 +55,24 @@ class DiscordOAuthClient:
             response = await client.get(DISCORD_GUILDS_URL, headers=_auth_headers(access_token))
             response.raise_for_status()
             payload = response.json()
-            return payload if isinstance(payload, list) else []
+            discord_guild_ids(payload)
+            return payload
 
 
 def _auth_headers(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
+
+
+def discord_guild_ids(payload: object) -> set[str]:
+    if not isinstance(payload, list):
+        raise TypeError("Discord guilds response is not a JSON array")
+
+    guild_ids: set[str] = set()
+    for guild in payload:
+        if not isinstance(guild, dict):
+            raise TypeError("Discord guilds response contains a non-object item")
+        guild_id = str(guild.get("id") or "").strip()
+        if not guild_id:
+            raise ValueError("Discord guilds response contains an item without an id")
+        guild_ids.add(guild_id)
+    return guild_ids

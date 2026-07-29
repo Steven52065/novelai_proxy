@@ -34,8 +34,8 @@ from ..quota_manager import QuotaManager
 from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 from ..users import reset_api_key
-from .accounts import DiscordProfile, login_or_register_discord_user
-from .discord import DiscordOAuthClient
+from .accounts import DiscordProfile, disable_linked_discord_user, login_or_register_discord_user
+from .discord import DiscordOAuthClient, discord_guild_ids
 
 
 router = APIRouter()
@@ -119,16 +119,27 @@ async def discord_callback(
         user_payload = await oauth.fetch_user(access_token=access_token)
     except Exception as exc:
         _raise_discord_oauth_failure("fetch_user", exc)
+    profile = _profile_from_payload(user_payload)
 
     try:
         guilds_payload = await oauth.fetch_guilds(access_token=access_token)
     except Exception as exc:
         _raise_discord_oauth_failure("fetch_guilds", exc)
 
-    if str(config.required_guild_id) not in {str(guild.get("id")) for guild in guilds_payload}:
+    try:
+        guild_ids = discord_guild_ids(guilds_payload)
+    except (TypeError, ValueError) as exc:
+        _raise_discord_oauth_failure("parse_guilds_response", exc)
+
+    if str(config.required_guild_id) not in guild_ids:
+        disabled_user_id = disable_linked_discord_user(db, discord_user_id=profile.user_id)
+        if disabled_user_id is not None:
+            logger.info(
+                "discord-linked account disabled because user is not in required guild user_id=%s",
+                disabled_user_id,
+            )
         raise HTTPException(status_code=403, detail={"message": "Discord user is not in the required guild"})
 
-    profile = _profile_from_payload(user_payload)
     login = login_or_register_discord_user(
         db,
         quota_manager,
