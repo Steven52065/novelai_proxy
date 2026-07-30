@@ -541,7 +541,7 @@
       return;
     }
     if (!await confirmDialog(confirmMessage, {danger: true})) return;
-    bulkResetForm.innerHTML = "";
+    bulkResetForm.querySelectorAll('input[name="user_ids"]').forEach((input) => input.remove());
     ids.forEach((id) => {
       const input = document.createElement("input");
       input.type = "hidden";

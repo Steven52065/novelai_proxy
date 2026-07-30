@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from app.database import utc_now_iso
+from helpers import csrf_form
 
 
 def _quota_row(client: TestClient, user_id: int) -> dict:
@@ -146,7 +147,6 @@ def test_bulk_reset_web_forms_and_page_controls(client, create_user):
 
     login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
     assert login.status_code == 200
-    client.headers["X-CSRF-Token"] = client.cookies.get("novelai_proxy_admin_csrf")
 
     page = client.get("/admin/users")
     assert page.status_code == 200
@@ -163,10 +163,12 @@ def test_bulk_reset_web_forms_and_page_controls(client, create_user):
         "重置日小图",
     ):
         assert marker in page.text
+    assert "bulkResetForm.innerHTML" not in page.text
+    assert """bulkResetForm.querySelectorAll('input[name="user_ids"]')""" in page.text
 
     anlas_resp = client.post(
         "/admin/users/bulk-reset-anlas",
-        data={"user_ids": str(user_id)},
+        data=csrf_form(client, {"user_ids": str(user_id)}),
         follow_redirects=False,
     )
     assert anlas_resp.status_code == 303
@@ -177,7 +179,7 @@ def test_bulk_reset_web_forms_and_page_controls(client, create_user):
 
     daily_resp = client.post(
         "/admin/users/bulk-reset-free-small-daily",
-        data={"user_ids": str(user_id)},
+        data=csrf_form(client, {"user_ids": str(user_id)}),
         follow_redirects=False,
     )
     assert daily_resp.status_code == 303
@@ -186,6 +188,10 @@ def test_bulk_reset_web_forms_and_page_controls(client, create_user):
     assert snapshot.used == 0
     assert snapshot.reserved == 0
 
-    no_selection = client.post("/admin/users/bulk-reset-anlas", data={}, follow_redirects=False)
+    no_selection = client.post(
+        "/admin/users/bulk-reset-anlas",
+        data=csrf_form(client),
+        follow_redirects=False,
+    )
     assert no_selection.status_code == 400
     assert no_selection.json()["message"] == "No users selected"
