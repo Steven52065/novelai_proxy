@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -47,6 +49,12 @@ api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_
 web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page_session)])
 API_KEY_FLASH_COOKIE = "novelai_proxy_api_key_flash"
 _api_key_flash = ApiKeyFlashStore(cookie_name=API_KEY_FLASH_COOKIE, state_attr="admin_api_key_flash_store")
+USERS_PAGE_SIZE = 50
+USER_PAGE_SORT_COLUMNS = {
+    "id": "u.id",
+    "name": "u.name COLLATE NOCASE",
+    "anlas": "COALESCE(q.used, 0) + COALESCE(q.reserved, 0)",
+}
 
 
 class CreateUserRequest(BaseModel):
@@ -261,8 +269,60 @@ async def delete_rate_limit_rule(rule_id: int, request: Request):
 async def users_page(request: Request):
     db: Database = request.app.state.db
     new_api_key = _api_key_flash.pop_flash(request)
+    query = request.query_params.get("q", "").strip()
+    group_filter = request.query_params.get("group_id", "").strip()
+    tier_filter = request.query_params.get("tier", "").strip()
+    status_filter = request.query_params.get("status", "").strip()
+    sort_key = request.query_params.get("sort", "id").strip()
+    direction = request.query_params.get("direction", "asc").strip().lower()
+
+    if group_filter != "none":
+        try:
+            group_id = int(group_filter) if group_filter else None
+        except ValueError:
+            group_id = None
+        if group_id is None and group_filter:
+            group_filter = ""
+        elif group_id is not None and group_id < 1:
+            group_filter = ""
+    if tier_filter not in {"", "normal", "vip"}:
+        tier_filter = ""
+    if status_filter not in {"", "active", "inactive"}:
+        status_filter = ""
+    if sort_key not in USER_PAGE_SORT_COLUMNS:
+        sort_key = "id"
+    if direction not in {"asc", "desc"}:
+        direction = "asc"
+    try:
+        page = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page = 1
+
+    where = ["u.deleted_at IS NULL"]
+    params: list[object] = []
+    if query:
+        where.append("u.name LIKE ? ESCAPE '\\'")
+        params.append(f"%{_escape_like(query)}%")
+    if group_filter == "none":
+        where.append("u.group_id IS NULL")
+    elif group_filter:
+        where.append("u.group_id = ?")
+        params.append(int(group_filter))
+    if tier_filter:
+        where.append("u.tier = ?")
+        params.append(tier_filter)
+    if status_filter == "active":
+        where.append("u.is_active = 1")
+    elif status_filter == "inactive":
+        where.append("u.is_active = 0")
+
+    where_sql = " AND ".join(where)
+    total = int(db.query_one(f"SELECT COUNT(*) AS total FROM users u WHERE {where_sql}", tuple(params))["total"])
+    total_pages = max(1, (total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
+    page = min(page, total_pages)
+    offset = (page - 1) * USERS_PAGE_SIZE
     rows = db.query_all(
-        """
+        f"""
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
@@ -276,18 +336,42 @@ async def users_page(request: Request):
         FROM users u
         LEFT JOIN user_anlas_quota q ON q.user_id = u.id
         LEFT JOIN user_groups g ON g.id = u.group_id
-        WHERE u.deleted_at IS NULL
-        ORDER BY u.id DESC
-        """
+        WHERE {where_sql}
+        ORDER BY {USER_PAGE_SORT_COLUMNS[sort_key]} {direction}, u.id ASC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, USERS_PAGE_SIZE, offset),
     )
     users = [user_row_to_dict(row) for row in rows]
     _attach_free_small_daily_snapshots(request, users)
+    user_list_query = urlencode(
+        {
+            "q": query,
+            "group_id": group_filter,
+            "tier": tier_filter,
+            "status": status_filter,
+            "sort": sort_key,
+            "direction": direction,
+        }
+    )
     response = templates.TemplateResponse(
         request,
         "users.html",
         {
             "active": "users",
             "users": users,
+            "user_filters": {
+                "q": query,
+                "group_id": group_filter,
+                "tier": tier_filter,
+                "status": status_filter,
+            },
+            "user_sort": sort_key,
+            "user_direction": direction,
+            "user_page": page,
+            "user_total": total,
+            "user_total_pages": total_pages,
+            "user_list_query": user_list_query,
             "groups": _groups_for_select(db, active_only=True),
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),

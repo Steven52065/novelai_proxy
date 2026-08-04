@@ -357,6 +357,65 @@ def test_admin_user_pages_show_daily_usage_and_hide_zero_anlas_usage(tmp_path: P
         assert "Anlas额度使用状态" in _normalized_text(paid_detail.text)
 
 
+def test_admin_user_list_is_paginated_and_filters_server_side(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        db = client.app.state.db
+        now = utc_now_iso()
+        with db.transaction() as conn:
+            conn.executemany(
+                """
+                INSERT INTO users (api_key_hash, name, tier, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        f"page-hash-{index}",
+                        f"page-user-{index:04d}",
+                        "vip" if index % 2 == 0 else "normal",
+                        0 if index % 5 == 0 else 1,
+                        now,
+                    )
+                    for index in range(1500)
+                ],
+            )
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        first_page = client.get("/admin/users")
+        assert first_page.status_code == 200
+        assert first_page.text.count("<tr data-user-row") == 50
+        assert 'data-user-name="page-user-0000"' in first_page.text
+        assert 'data-user-name="page-user-0050"' not in first_page.text
+        assert "第 1 / 30 页" in first_page.text
+        assert "users-load-sentinel" in first_page.text
+        assert "IntersectionObserver" in first_page.text
+
+        second_page = client.get("/admin/users?page=2")
+        assert second_page.status_code == 200
+        assert 'data-user-name="page-user-0050"' in second_page.text
+        assert 'data-user-name="page-user-0000"' not in second_page.text
+        assert "page=1" in second_page.text
+
+        search_page = client.get("/admin/users?q=page-user-1499")
+        assert search_page.status_code == 200
+        assert search_page.text.count("<tr data-user-row") == 1
+        assert 'data-user-name="page-user-1499"' in search_page.text
+        assert 'data-user-name="page-user-0000"' not in search_page.text
+        assert "第 1 / 1 页" in search_page.text
+
+        filtered_page = client.get("/admin/users?tier=vip&status=inactive")
+        assert filtered_page.status_code == 200
+        assert filtered_page.text.count("<tr data-user-row") == 50
+        assert 'data-user-name="page-user-0000"' in filtered_page.text
+        assert 'data-user-name="page-user-0002"' not in filtered_page.text
+        assert 'data-user-name="page-user-0005"' not in filtered_page.text
+        assert "第 1 / 3 页" in filtered_page.text
+
+
 def test_admin_rejects_unknown_allowed_upstream(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
     from app.main import app

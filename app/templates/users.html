@@ -6,27 +6,27 @@
     <i data-lucide="users" class="h1-icon"></i>
     用户管理
   </h1>
-  <div class="users-actions">
+  <form id="user-filter-form" method="get" action="/admin/users" class="users-actions">
     <div class="user-search">
       <i data-lucide="search" class="user-search-icon"></i>
-      <input id="user-remark-search" type="search" placeholder="搜索备注名" aria-label="搜索备注名" autocomplete="off">
+      <input id="user-remark-search" name="q" type="search" value="{{ user_filters.q }}" placeholder="搜索备注名" aria-label="搜索备注名" autocomplete="off">
     </div>
-    <select id="user-group-filter" aria-label="筛选用户组" class="control-h38">
-      <option value="">全部用户组</option>
-      <option value="none">未分组</option>
+    <select id="user-group-filter" name="group_id" aria-label="筛选用户组" class="control-h38">
+      <option value="" {{ "selected" if user_filters.group_id == "" else "" }}>全部用户组</option>
+      <option value="none" {{ "selected" if user_filters.group_id == "none" else "" }}>未分组</option>
       {% for group in groups %}
-      <option value="{{ group.id }}">#{{ group.id }} {{ group.name }}</option>
+      <option value="{{ group.id }}" {{ "selected" if user_filters.group_id == (group.id|string) else "" }}>#{{ group.id }} {{ group.name }}</option>
       {% endfor %}
     </select>
-    <select id="user-tier-filter" aria-label="筛选账号等级" class="control-h38">
-      <option value="">全部等级</option>
-      <option value="normal">normal</option>
-      <option value="vip">vip</option>
+    <select id="user-tier-filter" name="tier" aria-label="筛选账号等级" class="control-h38">
+      <option value="" {{ "selected" if user_filters.tier == "" else "" }}>全部等级</option>
+      <option value="normal" {{ "selected" if user_filters.tier == "normal" else "" }}>normal</option>
+      <option value="vip" {{ "selected" if user_filters.tier == "vip" else "" }}>vip</option>
     </select>
-    <select id="user-status-filter" aria-label="筛选状态" class="control-h38">
-      <option value="">全部状态</option>
-      <option value="active">启用</option>
-      <option value="inactive">禁用</option>
+    <select id="user-status-filter" name="status" aria-label="筛选状态" class="control-h38">
+      <option value="" {{ "selected" if user_filters.status == "" else "" }}>全部状态</option>
+      <option value="active" {{ "selected" if user_filters.status == "active" else "" }}>启用</option>
+      <option value="inactive" {{ "selected" if user_filters.status == "inactive" else "" }}>禁用</option>
     </select>
     <button type="button" id="bulk-reset-anlas-btn" class="secondary" disabled>
       <i data-lucide="rotate-ccw" class="btn-icon"></i>
@@ -41,7 +41,7 @@
       <i data-lucide="user-plus" class="btn-icon-lg"></i>
       创建新用户
     </button>
-  </div>
+  </form>
 </div>
 
 <!-- 批量重置提交用隐藏表单（JS 填充选中的 user_ids 后提交） -->
@@ -199,7 +199,7 @@
         <i data-lucide="list" class="h2-icon"></i>
         用户列表
       </h2>
-      <p class="muted section-subtitle">查看当前系统中注册的全部代理用户及其Anlas额度和状态</p>
+      <p id="users-summary" class="muted section-subtitle">当前显示 {{ users|length }} 个，共 {{ user_total }} 个用户（第 {{ user_page }} / {{ user_total_pages }} 页）</p>
     </div>
   </div>
 
@@ -208,15 +208,15 @@
       <thead>
         <tr>
           <th class="user-select-cell user-col-select">
-            <input id="select-all-users" class="user-select-checkbox" type="checkbox" title="全选/取消全选">
+            <input id="select-all-users" class="user-select-checkbox" type="checkbox" title="全选/取消全选当前页用户">
           </th>
-          <th class="user-col-id"><button type="button" class="table-sort-btn" data-user-sort="id">ID</button></th>
-          <th class="user-col-name"><button type="button" class="table-sort-btn" data-user-sort="name">备注名</button></th>
+          <th class="user-col-id"><button type="button" class="table-sort-btn {{ 'active' if user_sort == 'id' else '' }}" data-user-sort="id" data-direction="{{ user_direction if user_sort == 'id' else '' }}">ID</button></th>
+          <th class="user-col-name"><button type="button" class="table-sort-btn {{ 'active' if user_sort == 'name' else '' }}" data-user-sort="name" data-direction="{{ user_direction if user_sort == 'name' else '' }}">备注名</button></th>
           <th class="user-col-group">用户组</th>
           <th class="user-col-tier">账号等级</th>
           <th class="user-col-status">状态</th>
           <th class="user-col-limits">功能限制</th>
-          <th class="user-col-anlas"><button type="button" class="table-sort-btn" data-user-sort="anlas">Anlas额度 (已用 + 锁定 / 总额)</button></th>
+          <th class="user-col-anlas"><button type="button" class="table-sort-btn {{ 'active' if user_sort == 'anlas' else '' }}" data-user-sort="anlas" data-direction="{{ user_direction if user_sort == 'anlas' else '' }}">Anlas额度 (已用 + 锁定 / 总额)</button></th>
           <th class="user-col-reset">Anlas额度重置规则</th>
           <th class="user-col-actions">操作选项</th>
         </tr>
@@ -366,12 +366,38 @@
           </td>
         </tr>
         {% endfor %}
-        <tr id="users-empty-row" class="empty-row" hidden>
+        <tr id="users-empty-row" class="empty-row" {% if users %}hidden{% endif %}>
           <td colspan="10" class="muted cell-centered empty-pad">未找到匹配的用户</td>
         </tr>
       </tbody>
     </table>
   </div>
+  <nav id="users-pagination" class="users-pagination" aria-label="用户列表分页">
+    <span id="users-pagination-info" class="users-pagination-info">第 {{ user_page }} / {{ user_total_pages }} 页</span>
+    <div class="users-pagination-links">
+      {% if user_page > 1 %}
+      <a class="button-like secondary" href="/admin/users?{{ user_list_query }}&amp;page={{ user_page - 1 }}">
+        <i data-lucide="chevron-left" class="btn-icon-sm"></i>
+        上一页
+      </a>
+      {% endif %}
+      {% if user_page < user_total_pages %}
+      <a class="button-like secondary" href="/admin/users?{{ user_list_query }}&amp;page={{ user_page + 1 }}">
+        下一页
+        <i data-lucide="chevron-right" class="btn-icon-sm"></i>
+      </a>
+      {% endif %}
+    </div>
+  </nav>
+  <div
+    id="users-load-sentinel"
+    class="users-load-sentinel"
+    data-next-page="{{ user_page + 1 }}"
+    data-total-pages="{{ user_total_pages }}"
+    data-total-users="{{ user_total }}"
+    {% if user_page >= user_total_pages %}hidden{% endif %}
+    aria-hidden="true"
+  ></div>
 </section>
 
 <script>
@@ -434,39 +460,136 @@
     drawerOverlay.addEventListener("click", hideDrawer);
   }
 
-  // 批量重置：多选框联动与表单提交
-  const bulkResetForm = document.getElementById("bulk-reset-form");
-  const bulkResetAnlasBtn = document.getElementById("bulk-reset-anlas-btn");
-  const bulkResetDailyBtn = document.getElementById("bulk-reset-daily-btn");
-  const selectAllUsers = document.getElementById("select-all-users");
+  // 筛选、排序和分页在服务端完成，页面只保留当前页的用户行。
+  const userFilterForm = document.getElementById("user-filter-form");
   const userSearchInput = document.getElementById("user-remark-search");
   const userGroupFilter = document.getElementById("user-group-filter");
   const userTierFilter = document.getElementById("user-tier-filter");
   const userStatusFilter = document.getElementById("user-status-filter");
   const userSortButtons = Array.from(document.querySelectorAll("[data-user-sort]"));
-  const userRows = Array.from(document.querySelectorAll("[data-user-row]"));
-  const usersEmptyRow = document.getElementById("users-empty-row");
   const usersTableBody = document.getElementById("users-table-body");
-  const userSelectBoxes = Array.from(document.querySelectorAll(".user-select"));
-  let userSortState = {key: "id", direction: "asc"};
+  const usersEmptyRow = document.getElementById("users-empty-row");
+  const usersSummary = document.getElementById("users-summary");
+  const usersPaginationInfo = document.getElementById("users-pagination-info");
+  const usersLoadSentinel = document.getElementById("users-load-sentinel");
+  let userFilterTimer = null;
+  let userPageLoading = false;
+  let nextUserPage = Number(usersLoadSentinel?.dataset.nextPage || 0);
+  const totalUserPages = Number(usersLoadSentinel?.dataset.totalPages || 1);
+  const totalUsers = Number(usersLoadSentinel?.dataset.totalUsers || 0);
 
-  function normalizeSearchText(value) {
-    return (value || "").trim().toLocaleLowerCase("zh-CN");
+  function navigateUserList(params) {
+    const url = new URL(window.location.href);
+    url.search = params.toString();
+    window.location.assign(url.toString());
   }
 
-  function visibleUserSelectBoxes() {
-    return userSelectBoxes.filter((box) => {
-      const row = box.closest("[data-user-row]");
-      return row && !row.hidden;
+  function submitUserFilters() {
+    if (!userFilterForm) return;
+    window.clearTimeout(userFilterTimer);
+    const params = new URLSearchParams();
+    new FormData(userFilterForm).forEach((value, key) => {
+      if (typeof value === "string" && value) params.set(key, value);
     });
+    const current = new URLSearchParams(window.location.search);
+    ["sort", "direction"].forEach((key) => {
+      const value = current.get(key);
+      if (value) params.set(key, value);
+    });
+    params.set("page", "1");
+    navigateUserList(params);
+  }
+
+  function scheduleUserFilter() {
+    window.clearTimeout(userFilterTimer);
+    userFilterTimer = window.setTimeout(submitUserFilters, 250);
+  }
+
+  if (userFilterForm) {
+    userFilterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitUserFilters();
+    });
+  }
+  userSearchInput?.addEventListener("input", scheduleUserFilter);
+  userSearchInput?.addEventListener("search", submitUserFilters);
+  [userGroupFilter, userTierFilter, userStatusFilter].forEach((filter) => {
+    filter?.addEventListener("change", submitUserFilters);
+  });
+
+  userSortButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const params = new URLSearchParams(window.location.search);
+      const key = button.dataset.userSort;
+      const currentKey = params.get("sort") || "id";
+      const currentDirection = params.get("direction") || "asc";
+      const nextDirection = currentKey === key && currentDirection === "asc" ? "desc" : "asc";
+      params.set("sort", key);
+      params.set("direction", nextDirection);
+      params.set("page", "1");
+      navigateUserList(params);
+    });
+  });
+
+  async function loadNextUserPage() {
+    if (!usersLoadSentinel || !usersTableBody || userPageLoading || nextUserPage > totalUserPages) return;
+    userPageLoading = true;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("page", String(nextUserPage));
+      const response = await fetch(url.toString(), {
+        credentials: "same-origin",
+        headers: {"Accept": "text/html"},
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const pageDocument = new DOMParser().parseFromString(await response.text(), "text/html");
+      const rows = Array.from(pageDocument.querySelectorAll("[data-user-row]"));
+      if (!rows.length) throw new Error("No user rows returned");
+      rows.forEach((row) => usersTableBody.insertBefore(row, usersEmptyRow));
+      nextUserPage += 1;
+
+      const loadedCount = usersTableBody.querySelectorAll("[data-user-row]").length;
+      if (usersSummary) usersSummary.textContent = `当前已加载 ${loadedCount} 个，共 ${totalUsers} 个用户`;
+      if (usersPaginationInfo) usersPaginationInfo.textContent = `已加载 ${loadedCount} / ${totalUsers} 个用户`;
+      if (nextUserPage > totalUserPages) usersLoadSentinel.hidden = true;
+
+      lucide.createIcons();
+      refreshBulkResetState();
+    } catch (error) {
+      usersLoadSentinel.hidden = true;
+      showToast("加载更多用户失败，请使用分页按钮继续。", "error");
+    } finally {
+      userPageLoading = false;
+    }
+  }
+
+  if (usersLoadSentinel && totalUserPages > nextUserPage - 1 && "IntersectionObserver" in window) {
+    const userPageObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadNextUserPage();
+      },
+      {rootMargin: "0px 0px 600px 0px"},
+    );
+    userPageObserver.observe(usersLoadSentinel);
+  }
+
+  // 批量重置：多选框联动与表单提交
+  const bulkResetForm = document.getElementById("bulk-reset-form");
+  const bulkResetAnlasBtn = document.getElementById("bulk-reset-anlas-btn");
+  const bulkResetDailyBtn = document.getElementById("bulk-reset-daily-btn");
+  const selectAllUsers = document.getElementById("select-all-users");
+
+  function userSelectBoxes() {
+    return Array.from(document.querySelectorAll(".user-select"));
   }
 
   function selectedUserIds() {
-    return visibleUserSelectBoxes().filter((box) => box.checked).map((box) => box.value);
+    return userSelectBoxes().filter((box) => box.checked).map((box) => box.value);
   }
 
   function refreshBulkResetState() {
-    const visibleBoxes = visibleUserSelectBoxes();
+    const visibleBoxes = userSelectBoxes();
     const count = selectedUserIds().length;
     [bulkResetAnlasBtn, bulkResetDailyBtn].forEach((button) => {
       if (button) button.disabled = count === 0;
@@ -476,62 +599,6 @@
       selectAllUsers.checked = visibleBoxes.length > 0 && count === visibleBoxes.length;
       selectAllUsers.indeterminate = count > 0 && count < visibleBoxes.length;
     }
-  }
-
-  function compareUserRows(a, b) {
-    const direction = userSortState.direction === "desc" ? -1 : 1;
-    if (userSortState.key === "name") {
-      return direction * normalizeSearchText(a.dataset.userName).localeCompare(
-        normalizeSearchText(b.dataset.userName),
-        "zh-CN",
-      );
-    }
-    const field = userSortState.key === "anlas" ? "userAnlas" : "userId";
-    return direction * (Number(a.dataset[field] || 0) - Number(b.dataset[field] || 0));
-  }
-
-  function updateSortButtonStates() {
-    userSortButtons.forEach((button) => {
-      const active = button.dataset.userSort === userSortState.key;
-      button.classList.toggle("active", active);
-      button.dataset.direction = active ? userSortState.direction : "";
-    });
-  }
-
-  function applyUserListState() {
-    const query = normalizeSearchText(userSearchInput ? userSearchInput.value : "");
-    const groupValue = userGroupFilter ? userGroupFilter.value : "";
-    const tierValue = userTierFilter ? userTierFilter.value : "";
-    const statusValue = userStatusFilter ? userStatusFilter.value : "";
-    let visibleCount = 0;
-    let lastVisibleRow = null;
-    const sortedRows = [...userRows].sort(compareUserRows);
-    sortedRows.forEach((row) => {
-      usersTableBody.insertBefore(row, usersEmptyRow);
-      const name = normalizeSearchText(row.dataset.userName);
-      const matchesSearch = !query || name.includes(query);
-      const matchesGroup = !groupValue || row.dataset.userGroupId === groupValue;
-      const matchesTier = !tierValue || row.dataset.userTier === tierValue;
-      const matchesStatus = !statusValue || row.dataset.userStatus === statusValue;
-      const matches = matchesSearch && matchesGroup && matchesTier && matchesStatus;
-      row.hidden = !matches;
-      row.classList.remove("is-last-visible");
-      if (matches) {
-        visibleCount += 1;
-        lastVisibleRow = row;
-      } else {
-        const checkbox = row.querySelector(".user-select");
-        if (checkbox) checkbox.checked = false;
-      }
-    });
-    if (lastVisibleRow) {
-      lastVisibleRow.classList.add("is-last-visible");
-    }
-    if (usersEmptyRow) {
-      usersEmptyRow.hidden = visibleCount > 0;
-    }
-    refreshBulkResetState();
-    updateSortButtonStates();
   }
 
   async function submitBulkReset(action, confirmMessage) {
@@ -553,32 +620,16 @@
     bulkResetForm.submit();
   }
 
-  userSelectBoxes.forEach((box) => box.addEventListener("change", refreshBulkResetState));
+  usersTableBody?.addEventListener("change", (event) => {
+    if (event.target instanceof Element && event.target.matches(".user-select")) refreshBulkResetState();
+  });
 
   if (selectAllUsers) {
     selectAllUsers.addEventListener("change", () => {
-      visibleUserSelectBoxes().forEach((box) => { box.checked = selectAllUsers.checked; });
+      userSelectBoxes().forEach((box) => { box.checked = selectAllUsers.checked; });
       refreshBulkResetState();
     });
   }
-
-  if (userSearchInput) {
-    userSearchInput.addEventListener("input", applyUserListState);
-    userSearchInput.addEventListener("search", applyUserListState);
-  }
-  [userGroupFilter, userTierFilter, userStatusFilter].forEach((filter) => {
-    filter?.addEventListener("change", applyUserListState);
-  });
-  userSortButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const key = button.dataset.userSort;
-      userSortState = {
-        key,
-        direction: userSortState.key === key && userSortState.direction === "asc" ? "desc" : "asc",
-      };
-      applyUserListState();
-    });
-  });
 
   if (bulkResetAnlasBtn) {
     bulkResetAnlasBtn.addEventListener("click", () => {
@@ -600,6 +651,6 @@
     });
   }
 
-  applyUserListState();
+  refreshBulkResetState();
 </script>
 {% endblock %}
