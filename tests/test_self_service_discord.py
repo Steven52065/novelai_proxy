@@ -375,6 +375,7 @@ def test_account_queue_status_uses_live_snapshot_and_refresh_controls(tmp_path: 
                 "running": None,
                 "running_items": [{"request_id": "running-a"}, {"request_id": "running-b"}],
                 "queued": [{"request_id": "queued-a"}, {"request_id": "queued-b"}, {"request_id": "queued-c"}],
+                "upstreams": [{"id": "upstream-a"}, {"id": "upstream-b"}],
             }
 
     with TestClient(app) as client:
@@ -386,13 +387,18 @@ def test_account_queue_status_uses_live_snapshot_and_refresh_controls(tmp_path: 
         assert page.status_code == 200
         text = _normalized_text(page.text)
         assert "生成队列状态" in text
-        assert "正在生成 2 正在排队 3" in text
+        assert "正在生成 2/2 正在排队 3/4" in text
         assert 'id="account-queue-refresh"' in page.text
         assert "/account/api/queue-status" in page.text
 
         status = client.get("/account/api/queue-status")
         assert status.status_code == 200
-        assert status.json() == {"running_count": 2, "queued_count": 3}
+        assert status.json() == {
+            "running_count": 2,
+            "running_total": 2,
+            "queued_count": 3,
+            "queued_total": 4,
+        }
 
 
 def test_account_shows_daily_anlas_reset_without_zero_day(tmp_path: Path, monkeypatch):

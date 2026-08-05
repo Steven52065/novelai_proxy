@@ -13,12 +13,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..allowlists import AllowedEndpoints, AllowedUpstreams
 from ..api_key_flash import ApiKeyFlashStore
-from ..config import DiscordSelfServiceConfig
+from ..config import AppConfig, DiscordSelfServiceConfig
 from ..cookies import delete_response_cookie, set_response_cookie
 from ..database import Database
 from ..discord_validation import parse_discord_snowflake
 from ..deps import (
     get_db,
+    get_config,
     get_discord_oauth_client,
     get_discord_self_service_config,
     get_free_small_daily_limit_manager,
@@ -164,6 +165,7 @@ async def discord_callback(
 async def account_page(
     request: Request,
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    app_config: AppConfig = Depends(get_config),
     db: Database = Depends(get_db),
     quota_manager: QuotaManager = Depends(get_quota_manager),
     free_small_daily_limit_manager: FreeSmallDailyLimitManager = Depends(get_free_small_daily_limit_manager),
@@ -193,7 +195,10 @@ async def account_page(
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
     if not int(user["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
-    queue_status = _queue_status_from_snapshot(proxy_queue.snapshot())
+    queue_status = _queue_status_from_snapshot(
+        proxy_queue.snapshot(),
+        max_queue_size=app_config.queue.max_queue_size,
+    )
     quota = quota_manager.get_snapshot(user_id)
     free_small_daily = free_small_daily_limit_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
@@ -223,6 +228,7 @@ async def account_page(
 async def account_queue_status(
     request: Request,
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    app_config: AppConfig = Depends(get_config),
     db: Database = Depends(get_db),
     proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
 ):
@@ -231,7 +237,10 @@ async def account_queue_status(
     if user_id is None:
         raise HTTPException(status_code=401, detail={"message": "Authentication required"})
     _ensure_self_service_account_active(db, user_id)
-    return _queue_status_from_snapshot(proxy_queue.snapshot())
+    return _queue_status_from_snapshot(
+        proxy_queue.snapshot(),
+        max_queue_size=app_config.queue.max_queue_size,
+    )
 
 
 @router.post("/account/image-format-policy")
@@ -317,13 +326,16 @@ def _account_user_to_dict(row) -> dict:
     }
 
 
-def _queue_status_from_snapshot(snapshot: dict) -> dict[str, int]:
+def _queue_status_from_snapshot(snapshot: dict, *, max_queue_size: int) -> dict[str, int]:
     running_items = snapshot.get("running_items")
     running_count = len(running_items) if running_items is not None else int(bool(snapshot.get("running")))
     queued_count = int(snapshot.get("queue_size", len(snapshot.get("queued", []))))
+    upstream_count = len(snapshot.get("upstreams") or [])
     return {
         "running_count": running_count,
+        "running_total": upstream_count,
         "queued_count": queued_count,
+        "queued_total": upstream_count * max_queue_size,
     }
 
 

@@ -151,11 +151,11 @@
       <div class="metrics metrics-flush account-queue-metrics">
         <div>
           <span>正在生成</span>
-          <strong id="account-queue-running-count">{{ queue_status.running_count }}</strong>
+          <strong id="account-queue-running-count">{{ queue_status.running_count }}/{{ queue_status.running_total }}</strong>
         </div>
         <div>
           <span>正在排队</span>
-          <strong id="account-queue-queued-count">{{ queue_status.queued_count }}</strong>
+          <strong id="account-queue-queued-count">{{ queue_status.queued_count }}/{{ queue_status.queued_total }}</strong>
         </div>
       </div>
       <p id="account-queue-refresh-status" class="muted muted-13 account-queue-refresh-status" role="status" aria-live="polite"></p>
@@ -251,11 +251,16 @@
         });
         if (!response.ok) throw new Error(`Queue status request failed: ${response.status}`);
         const data = await response.json();
-        if (!Number.isInteger(data.running_count) || !Number.isInteger(data.queued_count)) {
+        if (
+          !Number.isInteger(data.running_count) ||
+          !Number.isInteger(data.running_total) ||
+          !Number.isInteger(data.queued_count) ||
+          !Number.isInteger(data.queued_total)
+        ) {
           throw new Error("Invalid queue status response");
         }
-        accountQueueRunningCount.textContent = String(data.running_count);
-        accountQueueQueuedCount.textContent = String(data.queued_count);
+        accountQueueRunningCount.textContent = `${data.running_count}/${data.running_total}`;
+        accountQueueQueuedCount.textContent = `${data.queued_count}/${data.queued_total}`;
       } catch (error) {
         console.warn("Failed to refresh account queue status", error);
         if (accountQueueRefreshStatus) accountQueueRefreshStatus.textContent = "刷新失败，请稍后重试。";
