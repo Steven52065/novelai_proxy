@@ -371,11 +371,21 @@ def test_account_queue_status_uses_live_snapshot_and_refresh_controls(tmp_path: 
     class QueueSnapshot:
         def snapshot(self):
             return {
-                "queue_size": 3,
+                "queue_size": 5,
                 "running": None,
                 "running_items": [{"request_id": "running-a"}, {"request_id": "running-b"}],
-                "queued": [{"request_id": "queued-a"}, {"request_id": "queued-b"}, {"request_id": "queued-c"}],
-                "upstreams": [{"id": "upstream-a"}, {"id": "upstream-b"}],
+                "queued": [
+                    {"request_id": "dispatch-a", "status": "dispatch_queued"},
+                    {"request_id": "dispatch-b", "status": "dispatch_queued"},
+                    {"request_id": "queued-a", "status": "queued"},
+                    {"request_id": "queued-b", "status": "queued"},
+                    {"request_id": "queued-c", "status": "queued"},
+                ],
+                "dispatch_queue_size": 2,
+                "upstreams": [
+                    {"id": "upstream-a", "queue_size": 1},
+                    {"id": "upstream-b", "queue_size": 2},
+                ],
             }
 
     with TestClient(app) as client:

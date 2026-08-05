@@ -329,7 +329,18 @@ def _account_user_to_dict(row) -> dict:
 def _queue_status_from_snapshot(snapshot: dict, *, max_queue_size: int) -> dict[str, int]:
     running_items = snapshot.get("running_items")
     running_count = len(running_items) if running_items is not None else int(bool(snapshot.get("running")))
-    queued_count = int(snapshot.get("queue_size", len(snapshot.get("queued", []))))
+    upstreams = snapshot.get("upstreams")
+    if upstreams is not None:
+        queued_count = sum(
+            int(upstream.get("queue_size", len(upstream.get("queued", []))))
+            for upstream in upstreams
+        )
+    else:
+        queued_count = sum(
+            1
+            for item in snapshot.get("queued", [])
+            if item.get("status") != "dispatch_queued"
+        )
     upstream_count = len(snapshot.get("upstreams") or [])
     return {
         "running_count": running_count,
