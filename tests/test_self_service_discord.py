@@ -363,6 +363,38 @@ def test_account_shows_positive_anlas_quota_snapshot(tmp_path: Path, monkeypatch
         assert "Anlas额度重置规则：每周第 2 天" in text
 
 
+def test_account_queue_status_uses_live_snapshot_and_refresh_controls(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    class QueueSnapshot:
+        def snapshot(self):
+            return {
+                "queue_size": 3,
+                "running": None,
+                "running_items": [{"request_id": "running-a"}, {"request_id": "running-b"}],
+                "queued": [{"request_id": "queued-a"}, {"request_id": "queued-b"}, {"request_id": "queued-c"}],
+            }
+
+    with TestClient(app) as client:
+        assert client.get("/account/api/queue-status").status_code == 401
+        _complete_discord_login(client)
+        client.app.state.proxy_queue = QueueSnapshot()
+
+        page = client.get("/account")
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "生成队列状态" in text
+        assert "正在生成 2 正在排队 3" in text
+        assert 'id="account-queue-refresh"' in page.text
+        assert "/account/api/queue-status" in page.text
+
+        status = client.get("/account/api/queue-status")
+        assert status.status_code == 200
+        assert status.json() == {"running_count": 2, "queued_count": 3}
+
+
 def test_account_shows_daily_anlas_reset_without_zero_day(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(
         tmp_path,

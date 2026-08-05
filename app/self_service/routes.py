@@ -22,6 +22,7 @@ from ..deps import (
     get_discord_oauth_client,
     get_discord_self_service_config,
     get_free_small_daily_limit_manager,
+    get_proxy_queue,
     get_quota_manager,
 )
 from ..free_small_daily_limit import FreeSmallDailyLimitManager
@@ -32,6 +33,7 @@ from ..image_format_policies import (
 )
 from ..logging_utils import json_dumps, logger
 from ..quota_manager import QuotaManager
+from ..routing_queue import RoutingProxyQueue
 from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 from ..users import reset_api_key
@@ -165,6 +167,7 @@ async def account_page(
     db: Database = Depends(get_db),
     quota_manager: QuotaManager = Depends(get_quota_manager),
     free_small_daily_limit_manager: FreeSmallDailyLimitManager = Depends(get_free_small_daily_limit_manager),
+    proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
 ):
     _require_discord_enabled(config)
     user_id = _current_self_service_user_id(request, config.session_secret)
@@ -190,6 +193,7 @@ async def account_page(
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
     if not int(user["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
+    queue_status = _queue_status_from_snapshot(proxy_queue.snapshot())
     quota = quota_manager.get_snapshot(user_id)
     free_small_daily = free_small_daily_limit_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
@@ -205,6 +209,7 @@ async def account_page(
                 "day": user["quota_reset_day"],
             },
             "free_small_daily": free_small_daily,
+            "queue_status": queue_status,
             "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "new_api_key": new_api_key,
         },
@@ -212,6 +217,21 @@ async def account_page(
     if has_api_key_flash:
         delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
     return response
+
+
+@router.get("/account/api/queue-status")
+async def account_queue_status(
+    request: Request,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    db: Database = Depends(get_db),
+    proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
+):
+    _require_discord_enabled(config)
+    user_id = _current_self_service_user_id(request, config.session_secret)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail={"message": "Authentication required"})
+    _ensure_self_service_account_active(db, user_id)
+    return _queue_status_from_snapshot(proxy_queue.snapshot())
 
 
 @router.post("/account/image-format-policy")
@@ -294,6 +314,16 @@ def _account_user_to_dict(row) -> dict:
         "discord_username": row["discord_username"],
         "discord_global_name": row["discord_global_name"],
         "discord_avatar": row["discord_avatar"],
+    }
+
+
+def _queue_status_from_snapshot(snapshot: dict) -> dict[str, int]:
+    running_items = snapshot.get("running_items")
+    running_count = len(running_items) if running_items is not None else int(bool(snapshot.get("running")))
+    queued_count = int(snapshot.get("queue_size", len(snapshot.get("queued", []))))
+    return {
+        "running_count": running_count,
+        "queued_count": queued_count,
     }
 
 

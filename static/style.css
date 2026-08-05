@@ -865,6 +865,23 @@ option { background: #0f172a; color: #fff; }
 .btn-fit { min-height: 38px; padding: 0 var(--space-4); width: fit-content; }
 .metrics-flush { margin-bottom: 0; }
 .reset-note { margin-top: 14px; }
+.account-queue-panel .section-head { margin-bottom: var(--space-5); }
+.account-queue-refresh {
+  min-height: 36px;
+  padding: 7px 14px;
+}
+.account-queue-refresh[disabled] {
+  cursor: wait;
+  opacity: 0.7;
+  transform: none;
+  filter: none;
+}
+.account-queue-refresh-status {
+  min-height: 18px;
+  margin: var(--space-3) 0 0;
+  color: var(--danger-text);
+}
+.account-queue-refresh-status:empty { display: none; }
 
 .kv-strong { font-weight: 800; color: #fff; margin-top: 4px; }
 .kv-bold { font-weight: 700; color: var(--text-soft); margin-top: 4px; }

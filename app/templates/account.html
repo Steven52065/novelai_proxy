@@ -131,6 +131,36 @@
       </section>
     </div>
 
+    <section class="panel panel-mt account-queue-panel">
+      <div class="section-head account-queue-head">
+        <h2 class="h2-sm">
+          <i data-lucide="list-ordered" class="h2-icon"></i>
+          生成队列状态
+        </h2>
+        <button
+          id="account-queue-refresh"
+          class="secondary account-queue-refresh"
+          type="button"
+          title="刷新生成队列状态"
+          aria-label="刷新生成队列状态"
+        >
+          <i data-lucide="refresh-cw" class="btn-icon"></i>
+          <span>刷新</span>
+        </button>
+      </div>
+      <div class="metrics metrics-flush account-queue-metrics">
+        <div>
+          <span>正在生成</span>
+          <strong id="account-queue-running-count">{{ queue_status.running_count }}</strong>
+        </div>
+        <div>
+          <span>正在排队</span>
+          <strong id="account-queue-queued-count">{{ queue_status.queued_count }}</strong>
+        </div>
+      </div>
+      <p id="account-queue-refresh-status" class="muted muted-13 account-queue-refresh-status" role="status" aria-live="polite"></p>
+    </section>
+
     {% if free_small_daily.enabled %}
     <section class="panel panel-mt">
       <h2 class="h2-sm h2-mb">
@@ -202,6 +232,42 @@
   <script src="{{ static_url('csrf.js') }}"></script>
   <script>
     lucide.createIcons();
+    const accountQueueRefreshButton = document.getElementById("account-queue-refresh");
+    const accountQueueRefreshIcon = accountQueueRefreshButton?.querySelector("svg");
+    const accountQueueRunningCount = document.getElementById("account-queue-running-count");
+    const accountQueueQueuedCount = document.getElementById("account-queue-queued-count");
+    const accountQueueRefreshStatus = document.getElementById("account-queue-refresh-status");
+
+    async function refreshAccountQueueStatus() {
+      if (!accountQueueRefreshButton || accountQueueRefreshButton.disabled) return;
+      accountQueueRefreshButton.disabled = true;
+      accountQueueRefreshButton.setAttribute("aria-busy", "true");
+      accountQueueRefreshIcon?.classList.add("spin");
+      if (accountQueueRefreshStatus) accountQueueRefreshStatus.textContent = "";
+      try {
+        const response = await fetch("/account/api/queue-status", {
+          headers: {"Accept": "application/json"},
+          cache: "no-store",
+        });
+        if (!response.ok) throw new Error(`Queue status request failed: ${response.status}`);
+        const data = await response.json();
+        if (!Number.isInteger(data.running_count) || !Number.isInteger(data.queued_count)) {
+          throw new Error("Invalid queue status response");
+        }
+        accountQueueRunningCount.textContent = String(data.running_count);
+        accountQueueQueuedCount.textContent = String(data.queued_count);
+      } catch (error) {
+        console.warn("Failed to refresh account queue status", error);
+        if (accountQueueRefreshStatus) accountQueueRefreshStatus.textContent = "刷新失败，请稍后重试。";
+      } finally {
+        accountQueueRefreshButton.disabled = false;
+        accountQueueRefreshButton.removeAttribute("aria-busy");
+        accountQueueRefreshIcon?.classList.remove("spin");
+      }
+    }
+
+    accountQueueRefreshButton?.addEventListener("click", refreshAccountQueueStatus);
+
     document.querySelectorAll(".copy-button").forEach((button) => {
       button.addEventListener("click", async () => {
         const text = document.getElementById(button.dataset.copyTarget).textContent;
