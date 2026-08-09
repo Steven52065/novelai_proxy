@@ -457,23 +457,60 @@
     const ruleEmpty = document.getElementById("member-rule-empty");
     const ruleAddButton = document.getElementById("member-rule-add");
     const ruleTemplate = document.getElementById("member-rule-template");
-    const maxRules = parseInt(ruleAddButton.dataset.maxRules, 10) || 8;
+    const maxRules = parseInt(ruleAddButton.dataset.maxRules, 10) || 4;
+
+    const rulePeriods = Array.from(
+      ruleTemplate.content.querySelectorAll('[name="member_rule_period"] option')
+    ).map(function (option) {
+      return option.value;
+    });
 
     function memberRuleRows() {
       return Array.from(ruleRows.querySelectorAll("[data-member-rule-row]"));
     }
 
+    function periodSelects() {
+      return memberRuleRows().map(function (row) {
+        return row.querySelector('[name="member_rule_period"]');
+      });
+    }
+
+    function nextUnusedPeriod() {
+      const used = new Set(
+        periodSelects().map(function (select) {
+          return select.value;
+        })
+      );
+      return rulePeriods.find(function (period) {
+        return !used.has(period);
+      });
+    }
+
     function refreshRuleState() {
-      const count = memberRuleRows().length;
-      ruleEmpty.style.display = count ? "none" : "";
-      ruleAddButton.disabled = count >= maxRules;
+      const selects = periodSelects();
+      const used = new Set(
+        selects.map(function (select) {
+          return select.value;
+        })
+      );
+      // 周期不可重复，已被别的行占用的周期在下拉里禁选，避免保存时才报重复。
+      selects.forEach(function (select) {
+        Array.from(select.options).forEach(function (option) {
+          option.disabled = option.value !== select.value && used.has(option.value);
+        });
+      });
+      ruleEmpty.style.display = selects.length ? "none" : "";
+      ruleAddButton.disabled = selects.length >= maxRules || !nextUnusedPeriod();
     }
 
     ruleAddButton.addEventListener("click", function () {
-      if (memberRuleRows().length >= maxRules) {
+      const period = nextUnusedPeriod();
+      if (memberRuleRows().length >= maxRules || !period) {
         return;
       }
-      ruleRows.appendChild(ruleTemplate.content.cloneNode(true));
+      const fragment = ruleTemplate.content.cloneNode(true);
+      fragment.querySelector('[name="member_rule_period"]').value = period;
+      ruleRows.appendChild(fragment);
       refreshRuleState();
       if (window.lucide) {
         lucide.createIcons();
@@ -487,6 +524,12 @@
       }
       removeButton.closest("[data-member-rule-row]").remove();
       refreshRuleState();
+    });
+
+    ruleRows.addEventListener("change", function (event) {
+      if (event.target.name === "member_rule_period") {
+        refreshRuleState();
+      }
     });
 
     refreshRuleState();

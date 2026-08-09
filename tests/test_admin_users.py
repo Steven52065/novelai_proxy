@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.database import utc_now_iso
+from app.rate_limit_rules import MAX_RULES_PER_SCOPE
 from helpers import BlockingFakeUpstream, PAYLOAD, csrf_headers, write_test_config, write_test_config_with_upstreams
 
 
@@ -1317,7 +1318,8 @@ def test_group_member_rate_limit_rules_reject_invalid_payloads(tmp_path: Path, m
             auth=("admin", "admin123"),
             json={
                 "member_rate_limit_rules": [
-                    {"period": "minute", "max_requests": index + 1} for index in range(9)
+                    {"period": "minute", "max_requests": index + 1}
+                    for index in range(MAX_RULES_PER_SCOPE + 1)
                 ]
             },
         )
@@ -1393,6 +1395,198 @@ def test_group_member_rate_limit_rules_web_form_roundtrip(tmp_path: Path, monkey
         )
         assert misaligned.status_code == 400
         assert misaligned.json()["message"] == "Rate limit rule fields are misaligned"
+
+
+def test_group_member_rate_limit_rules_untouched_without_apply_group_defaults(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-untouched")
+        client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [{"period": "minute", "max_requests": 4}], "propagate": "none"},
+        )
+        user_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "untouched", "group_id": group_id},
+        ).json()["user_id"]
+        client.post(
+            f"/admin/api/users/{user_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "day", "max_requests": 500},
+        )
+        before = _user_rules(client, user_id)
+        assert before == [("minute", 4, 1), ("day", 500, 1)]
+
+        # 普通用户编辑（改名/改等级/停用）绝不能碰限频规则，否则每次保存都会静默清空。
+        for payload in (
+            {"name": "renamed"},
+            {"tier": "vip"},
+            {"is_active": False},
+            {"anlas_total": 42},
+            {"group_id": group_id},
+        ):
+            resp = client.patch(f"/admin/api/users/{user_id}", auth=("admin", "admin123"), json=payload)
+            assert resp.status_code == 200
+            assert _user_rules(client, user_id) == before
+
+
+def test_group_member_rate_limit_rules_apply_group_defaults_with_empty_template(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-empty-template")
+        configured_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "has-own-rules", "group_id": group_id},
+        ).json()["user_id"]
+        untouched_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "has-no-rules", "group_id": group_id},
+        ).json()["user_id"]
+        client.post(
+            f"/admin/api/users/{configured_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "day", "max_requests": 500},
+        )
+
+        # 组模板为空时套用组默认值 = 整体覆盖成空，个人规则会被清掉。
+        applied = client.patch(
+            f"/admin/api/users/{configured_id}",
+            auth=("admin", "admin123"),
+            json={"apply_group_defaults": True},
+        )
+        assert applied.status_code == 200
+        assert _user_rules(client, configured_id) == []
+
+        # 本就没有个人规则的成员是空操作，不会新增任何行。
+        applied = client.patch(
+            f"/admin/api/users/{untouched_id}",
+            auth=("admin", "admin123"),
+            json={"apply_group_defaults": True},
+        )
+        assert applied.status_code == 200
+        assert _user_rules(client, untouched_id) == []
+
+
+def test_group_member_rate_limit_rules_web_form_without_sentinel_keeps_rules(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-no-sentinel")
+        member_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "sentinel-member", "group_id": group_id},
+        ).json()["user_id"]
+        client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [{"period": "minute", "max_requests": 7}], "propagate": "all"},
+        )
+        assert _user_rules(client, member_id) == [("minute", 7, 1)]
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+
+        # 没有哨兵 = 该区块未提交，组模板与成员规则都必须原样保留。
+        save_resp = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                "name": "member-rate-no-sentinel",
+                "is_active": "on",
+                "default_tier": "vip",
+                "default_free_small_only": "on",
+                "default_allowed_endpoints": "generate-image",
+                "default_anlas_total": "0",
+                "default_reset_period": "month",
+                "default_reset_day": "1",
+                "free_small_daily_limit": "0",
+                "propagate_scope": "all",
+            },
+            follow_redirects=False,
+        )
+        assert save_resp.status_code == 303
+        assert _group_member_rules(client, group_id) == [("minute", 7, 1)]
+        assert _user_rules(client, member_id) == [("minute", 7, 1)]
+
+
+def test_group_member_rate_limit_rules_editor_offers_one_row_per_period(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+    from app.rate_limit_rules import PERIOD_CHOICES
+
+    periods = list(PERIOD_CHOICES)
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-editor")
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+
+        page = client.get(f"/admin/user-groups/{group_id}")
+        assert page.status_code == 200
+        # 周期不可重复，所以「添加一行」的行数上限必须正好是可选周期数，多一行就必然撞重复。
+        assert f'data-max-rules="{len(periods)}"' in page.text
+
+        base_form = {
+            "name": "member-rate-editor",
+            "is_active": "on",
+            "default_tier": "normal",
+            "default_free_small_only": "on",
+            "default_allowed_endpoints": "generate-image",
+            "default_anlas_total": "0",
+            "default_reset_period": "month",
+            "default_reset_day": "1",
+            "free_small_daily_limit": "0",
+            "member_rules_submitted": "1",
+            "propagate_scope": "none",
+        }
+
+        # 每个周期各一行，是编辑器能构造出的最大合法配置。
+        full_resp = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                **base_form,
+                "member_rule_period": periods,
+                "member_rule_max_requests": [str(index + 1) for index in range(len(periods))],
+                "member_rule_active": ["on"] * len(periods),
+            },
+            follow_redirects=False,
+        )
+        assert full_resp.status_code == 303
+        assert len(_group_member_rules(client, group_id)) == len(periods)
+
+        # 再多一行必然重复周期，服务端必须拒绝——这是编辑器禁用「添加一行」所对应的后端保证。
+        overflow_resp = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                **base_form,
+                "member_rule_period": [*periods, periods[0]],
+                "member_rule_max_requests": [str(index + 1) for index in range(len(periods) + 1)],
+                "member_rule_active": ["on"] * (len(periods) + 1),
+            },
+            follow_redirects=False,
+        )
+        assert overflow_resp.status_code == 400
+        # 已保存的配置不受这次失败提交影响。
+        assert len(_group_member_rules(client, group_id)) == len(periods)
+
+
+def _group_member_rules(client: TestClient, group_id: int) -> list[tuple[str, int, int]]:
+    rows = client.app.state.db.query_all(
+        "SELECT period, max_requests, is_active FROM group_member_rate_limit_rules WHERE group_id = ? ORDER BY id",
+        (group_id,),
+    )
+    return [(row["period"], row["max_requests"], row["is_active"]) for row in rows]
 
 
 def _user_rules(client: TestClient, user_id: int) -> list[tuple[str, int, int]]:

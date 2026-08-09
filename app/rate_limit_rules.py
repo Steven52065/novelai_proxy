@@ -34,8 +34,8 @@ PERIOD_CHOICES = {
 
 _PERIOD_ORDER = {period: index for index, period in enumerate(PERIOD_CHOICES)}
 
-# 单个用户或单个组模板允许配置的规则条数上限。
-MAX_RULES_PER_SCOPE = 8
+# 单个用户或单个组模板允许配置的规则条数上限。周期不可重复，因此上限就是周期总数。
+MAX_RULES_PER_SCOPE = len(PERIOD_CHOICES)
 
 EMPTY_DISPLAY = "未配置（不限频）"
 
