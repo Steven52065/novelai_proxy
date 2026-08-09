@@ -1054,7 +1054,19 @@ option { background: #0f172a; color: #fff; }
 .propagate-arrow { color: var(--warning); }
 .propagate-choices { gap: 10px; margin-bottom: 18px; }
 .check-top { align-items: flex-start; }
-.radio-top { margin-top: 3px; }
+.propagate-choices .radio-top {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 3px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--primary);
+}
 .muted-normal { font-weight: 400; }
 .propagate-actions { gap: var(--space-3); justify-content: flex-end; }
 .notice-icon-soft { stroke: #93c5fd; flex-shrink: 0; }
