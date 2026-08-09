@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..allowlists import (
     ALLOWED_ENDPOINT_CHOICES,
@@ -404,7 +405,7 @@ async def update_user_group_form(
     )
     result = await patch_user_group(
         group_id,
-        UpdateUserGroupRequest(
+        _build_group_update_request_or_400(
             name=name,
             is_active=is_active == "on",
             default_tier=default_tier,
@@ -427,6 +428,21 @@ async def update_user_group_form(
     if propagate_scope != "none":
         redirect_url += f"&propagated={summary['updated_users']}&propagate_scope={propagate_scope}"
     return RedirectResponse(redirect_url, status_code=303)
+
+
+def _build_group_update_request_or_400(**fields: object) -> UpdateUserGroupRequest:
+    """把表单字段装进请求模型，校验失败转成 400。
+
+    Web 表单直接构造模型，绕过了 FastAPI 的 RequestValidationError 处理，
+    不接住 pydantic 的异常就会返回 500。
+    """
+    try:
+        return UpdateUserGroupRequest(**fields)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Invalid request", "details": json.loads(exc.json())},
+        ) from exc
 
 
 def _parse_member_rate_limit_rules_form(
