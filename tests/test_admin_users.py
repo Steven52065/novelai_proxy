@@ -1344,7 +1344,7 @@ def test_group_member_rate_limit_rules_web_form_roundtrip(tmp_path: Path, monkey
 
         page = client.get(f"/admin/user-groups/{group_id}")
         assert page.status_code == 200
-        assert "组内每人限频" in page.text
+        assert "用户独享限流" in page.text
         assert "member_rules_submitted" in page.text
 
         base_form = {

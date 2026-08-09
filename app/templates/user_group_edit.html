@@ -52,6 +52,7 @@
 
       <form id="group-settings-form" method="post" action="/admin/user-groups/{{ group.id }}" class="stack">
         <input type="hidden" name="propagate_scope" value="unmodified">
+        <input type="hidden" name="member_rules_submitted" value="1">
         <div class="responsive-grid grid-14-1">
           <label>
             组名称
@@ -107,50 +108,6 @@
           </label>
         </div>
 
-        <div class="field-pad">
-          <div class="muted field-group-label">组内每人限频</div>
-          <p class="muted muted-sm hint-flush">
-            组内每个成员各自独立计数。与右侧「组共享限流」不同，后者是全组成员共用一个计数池。
-            保存时可选择把这套规则覆盖到成员各自的频率限制。
-          </p>
-          <input type="hidden" name="member_rules_submitted" value="1">
-          <div id="member-rule-rows">
-            {% for rule in member_rate_limit_rules %}
-            <div class="responsive-grid rate-limit-add-form rate-limit-add-form-sm" data-member-rule-row>
-              <label class="label-gap-sm">
-                周期
-                <select name="member_rule_period" class="control-h38">
-                  {% for period, label in rate_limit_period_choices.items() %}
-                  <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ label }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-              <label class="label-gap-sm">
-                每人请求上限
-                <input name="member_rule_max_requests" type="number" min="1" value="{{ rule.max_requests }}" required class="control-h38">
-              </label>
-              <label class="label-gap-sm">
-                状态
-                <select name="member_rule_active" class="control-h38">
-                  <option value="on" {{ "selected" if rule.is_active else "" }}>激活</option>
-                  <option value="off" {{ "selected" if not rule.is_active else "" }}>停用</option>
-                </select>
-              </label>
-              <button type="button" class="danger btn-h38" data-member-rule-remove>
-                <i data-lucide="trash-2" class="icon-edit"></i>
-                删除
-              </button>
-            </div>
-            {% endfor %}
-          </div>
-          <p id="member-rule-empty" class="muted muted-13"{% if member_rate_limit_rules %} style="display: none;"{% endif %}>未配置（不限频）</p>
-          <button type="button" id="member-rule-add" class="secondary btn-h38" data-max-rules="{{ max_rate_limit_rules }}">
-            <i data-lucide="plus" class="icon-edit"></i>
-            添加一行
-          </button>
-        </div>
-
-
         <label>
           默认图片输出格式
           <select name="default_image_format_policy">
@@ -199,6 +156,88 @@
         </form>
       </div>
     </section>
+
+    <section class="panel panel-flush">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="gauge" class="h2-icon h2-icon-warning"></i>
+        用户独享限流
+      </h2>
+      <p class="muted muted-sm hint-flush">
+        组内每个成员各自独立计数，与组共享限流使用不同的计数池。
+      </p>
+      <div class="inline-form responsive-grid rate-limit-add-form rate-limit-add-form-sm">
+        <label class="label-gap-sm" for="member-rule-add-period">
+          周期
+          <select id="member-rule-add-period" class="control-h38">
+            <option value="minute">minute</option>
+            <option value="hour">hour</option>
+            <option value="day">day</option>
+            <option value="month">month（滚动 30 天）</option>
+          </select>
+        </label>
+        <label class="label-gap-sm" for="member-rule-add-max">
+          每人请求上限
+          <input id="member-rule-add-max" type="number" min="1" value="10" required class="control-h38">
+        </label>
+        <button type="button" id="member-rule-add" class="btn-h38" data-max-rules="{{ max_rate_limit_rules }}">
+          <i data-lucide="plus" class="icon-edit"></i>
+          添加
+        </button>
+      </div>
+
+      <div id="member-rule-table-wrap" class="table-wrap"{% if not member_rate_limit_rules %} style="display: none;"{% endif %}>
+        <table class="responsive-card-table">
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th>周期</th>
+              <th>上限</th>
+              <th>状态</th>
+              <th>保存</th>
+              <th>删除</th>
+            </tr>
+          </thead>
+          <tbody id="member-rule-rows">
+            {% for rule in member_rate_limit_rules %}
+            <tr data-member-rule-row>
+              <td data-label="序号">#<span data-member-rule-number>{{ loop.index }}</span></td>
+              <td data-label="周期">
+                <select form="group-settings-form" name="member_rule_period" class="rule-select">
+                  <option value="minute" {{ "selected" if rule.period == "minute" else "" }}>minute</option>
+                  <option value="hour" {{ "selected" if rule.period == "hour" else "" }}>hour</option>
+                  <option value="day" {{ "selected" if rule.period == "day" else "" }}>day</option>
+                  <option value="month" {{ "selected" if rule.period == "month" else "" }}>month（滚动 30 天）</option>
+                </select>
+              </td>
+              <td data-label="上限">
+                <input form="group-settings-form" name="member_rule_max_requests" type="number" min="1" value="{{ rule.max_requests }}" required class="rule-input">
+              </td>
+              <td data-label="状态">
+                <input form="group-settings-form" type="hidden" name="member_rule_active" value="{{ 'on' if rule.is_active else 'off' }}" data-member-rule-active-value>
+                <label class="check check-inline">
+                  <input type="checkbox"{% if rule.is_active %} checked{% endif %} data-member-rule-active class="check-sm">
+                  激活
+                </label>
+              </td>
+              <td data-label="保存">
+                <button form="group-settings-form" type="submit" class="secondary log-btn-sm">
+                  <i data-lucide="save" class="icon-12"></i>
+                  保存
+                </button>
+              </td>
+              <td data-label="删除">
+                <button type="button" class="danger log-btn-sm" data-member-rule-remove>
+                  <i data-lucide="trash-2" class="icon-12"></i>
+                  删除
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p id="member-rule-empty" class="muted muted-13"{% if member_rate_limit_rules %} style="display: none;"{% endif %}>暂未配置用户独享限流。</p>
+    </section>
   </div>
 
   <div class="stack">
@@ -224,7 +263,7 @@
           </label>
           <label class="check check-muted">
             <input name="fields" type="checkbox" value="member_rate_limit_rules">
-            组内每人限频
+            用户独享限流
           </label>
           <label class="check check-muted">
             <input name="fields" type="checkbox" value="allowed_endpoints">
@@ -382,31 +421,39 @@
 </div>
 
 <template id="member-rule-template">
-  <div class="responsive-grid rate-limit-add-form rate-limit-add-form-sm" data-member-rule-row>
-    <label class="label-gap-sm">
-      周期
-      <select name="member_rule_period" class="control-h38">
-        {% for period, label in rate_limit_period_choices.items() %}
-        <option value="{{ period }}">{{ label }}</option>
-        {% endfor %}
+  <tr data-member-rule-row>
+    <td data-label="序号">#<span data-member-rule-number></span></td>
+    <td data-label="周期">
+      <select form="group-settings-form" name="member_rule_period" class="rule-select">
+        <option value="minute">minute</option>
+        <option value="hour">hour</option>
+        <option value="day">day</option>
+        <option value="month">month（滚动 30 天）</option>
       </select>
-    </label>
-    <label class="label-gap-sm">
-      每人请求上限
-      <input name="member_rule_max_requests" type="number" min="1" value="10" required class="control-h38">
-    </label>
-    <label class="label-gap-sm">
-      状态
-      <select name="member_rule_active" class="control-h38">
-        <option value="on">激活</option>
-        <option value="off">停用</option>
-      </select>
-    </label>
-    <button type="button" class="danger btn-h38" data-member-rule-remove>
-      <i data-lucide="trash-2" class="icon-edit"></i>
-      删除
-    </button>
-  </div>
+    </td>
+    <td data-label="上限">
+      <input form="group-settings-form" name="member_rule_max_requests" type="number" min="1" value="10" required class="rule-input">
+    </td>
+    <td data-label="状态">
+      <input form="group-settings-form" type="hidden" name="member_rule_active" value="on" data-member-rule-active-value>
+      <label class="check check-inline">
+        <input type="checkbox" checked data-member-rule-active class="check-sm">
+        激活
+      </label>
+    </td>
+    <td data-label="保存">
+      <button form="group-settings-form" type="submit" class="secondary log-btn-sm">
+        <i data-lucide="save" class="icon-12"></i>
+        保存
+      </button>
+    </td>
+    <td data-label="删除">
+      <button type="button" class="danger log-btn-sm" data-member-rule-remove>
+        <i data-lucide="trash-2" class="icon-12"></i>
+        删除
+      </button>
+    </td>
+  </tr>
 </template>
 
 <div id="propagate-overlay" class="propagate-overlay" style="display: none;"></div>
@@ -455,8 +502,11 @@
     const scopeInput = form.querySelector('input[name="propagate_scope"]');
     const ruleRows = document.getElementById("member-rule-rows");
     const ruleEmpty = document.getElementById("member-rule-empty");
+    const ruleTableWrap = document.getElementById("member-rule-table-wrap");
     const ruleAddButton = document.getElementById("member-rule-add");
     const ruleTemplate = document.getElementById("member-rule-template");
+    const ruleAddPeriod = document.getElementById("member-rule-add-period");
+    const ruleAddMax = document.getElementById("member-rule-add-max");
     const maxRules = parseInt(ruleAddButton.dataset.maxRules, 10) || 4;
 
     const rulePeriods = Array.from(
@@ -499,17 +549,41 @@
           option.disabled = option.value !== select.value && used.has(option.value);
         });
       });
+      const availablePeriod = nextUnusedPeriod();
+      Array.from(ruleAddPeriod.options).forEach(function (option) {
+        option.disabled = used.has(option.value);
+      });
+      if (availablePeriod && used.has(ruleAddPeriod.value)) {
+        ruleAddPeriod.value = availablePeriod;
+      }
+      memberRuleRows().forEach(function (row, index) {
+        const number = row.querySelector("[data-member-rule-number]");
+        if (number) {
+          number.textContent = String(index + 1);
+        }
+      });
+      ruleTableWrap.style.display = selects.length ? "" : "none";
       ruleEmpty.style.display = selects.length ? "none" : "";
-      ruleAddButton.disabled = selects.length >= maxRules || !nextUnusedPeriod();
+      ruleAddButton.disabled = selects.length >= maxRules || !availablePeriod;
     }
 
     ruleAddButton.addEventListener("click", function () {
-      const period = nextUnusedPeriod();
-      if (memberRuleRows().length >= maxRules || !period) {
+      const period = ruleAddPeriod.value;
+      const used = new Set(
+        periodSelects().map(function (select) {
+          return select.value;
+        })
+      );
+      if (memberRuleRows().length >= maxRules || !period || used.has(period)) {
+        refreshRuleState();
+        return;
+      }
+      if (!ruleAddMax.reportValidity()) {
         return;
       }
       const fragment = ruleTemplate.content.cloneNode(true);
       fragment.querySelector('[name="member_rule_period"]').value = period;
+      fragment.querySelector('[name="member_rule_max_requests"]').value = ruleAddMax.value;
       ruleRows.appendChild(fragment);
       refreshRuleState();
       if (window.lucide) {
@@ -530,6 +604,11 @@
       if (event.target.name === "member_rule_period") {
         refreshRuleState();
       }
+      if (event.target.matches("[data-member-rule-active]")) {
+        event.target
+          .closest("[data-member-rule-row]")
+          .querySelector("[data-member-rule-active-value]").value = event.target.checked ? "on" : "off";
+      }
     });
 
     refreshRuleState();
@@ -540,7 +619,7 @@
         return {
           period: row.querySelector('[name="member_rule_period"]').value,
           max_requests: Number.isNaN(maxRequests) ? 0 : maxRequests,
-          is_active: row.querySelector('[name="member_rule_active"]').value === "on",
+          is_active: row.querySelector('[data-member-rule-active-value]').value === "on",
         };
       });
     }
@@ -580,9 +659,10 @@
 
     function renderPreview(preview) {
       const rows = preview.fields.map((field) => {
+        const fieldLabel = field.field === "member_rate_limit_rules" ? "用户独享限流" : field.label;
         return (
           '<div class="propagate-change-row">' +
-          '<strong class="propagate-change-label">' + escapeHtml(field.label) + "</strong>" +
+          '<strong class="propagate-change-label">' + escapeHtml(fieldLabel) + "</strong>" +
           '<span class="muted">' + escapeHtml(field.old) + ' <span class="propagate-arrow">→</span> ' + escapeHtml(field.new) + "</span>" +
           '<span class="muted muted-sm">' +
           escapeHtml(field.unmodified_count) + " / " + escapeHtml(preview.member_count) +
