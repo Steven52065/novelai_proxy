@@ -157,7 +157,7 @@ MEMBER_FIELD_SPECS = (
     ),
     MemberFieldSpec(
         name="member_rate_limit_rules",
-        label="组内每人限频",
+        label="用户独享限流",
         group_value=lambda row: row["member_rate_limit_rules"],
         merged_value=lambda current, data: (
             data.member_rate_limit_rules if data.member_rate_limit_rules is not None else current

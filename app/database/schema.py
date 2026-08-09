@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS group_rate_limit_rules (
     created_at TEXT NOT NULL
 );
 
--- 组内每人限频模板：保存组配置时展开写入成员各自的 rate_limit_rules，
+-- 用户独享限流模板：保存组配置时展开写入成员各自的 rate_limit_rules，
 -- 与 group_rate_limit_rules（全组共享一个计数池）语义不同，两表并存互不影响。
 CREATE TABLE IF NOT EXISTS group_member_rate_limit_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

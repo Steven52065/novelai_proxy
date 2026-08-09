@@ -1056,6 +1056,7 @@ def test_admin_user_edit_page_can_change_group(tmp_path: Path, monkeypatch):
         detail = client.get(f"/admin/users/{user_id}")
         assert detail.status_code == 200
         assert "所属用户组" in detail.text
+        assert "用户独享限流" in detail.text
 
         update_resp = client.post(
             f"/admin/users/{user_id}",

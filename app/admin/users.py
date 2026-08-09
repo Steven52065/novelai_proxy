@@ -639,7 +639,7 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
     validate_free_small_daily_limit(free_small_daily_limit_enabled, free_small_daily_limit)
     reset_period = str(value("reset_period"))
     reset_day = normalize_reset_day_or_400(reset_period, value("reset_day"))
-    # 新建成员默认继承组的「组内每人限频」模板。
+    # 新建成员默认继承组的「用户独享限流」模板。
     rate_limit_rules = (
         load_group_member_rate_limit_rules(db, payload.group_id) if payload.group_id is not None else None
     )

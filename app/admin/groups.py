@@ -451,7 +451,7 @@ def _parse_member_rate_limit_rules_form(
     max_requests: list[int] | None,
     actives: list[str] | None,
 ) -> list[dict[str, object]] | None:
-    """解析组内每人限频的平行数组表单字段。
+    """解析用户独享限流的平行数组表单字段。
 
     删光所有规则行时三个数组都不会提交，与「表单里没有这个区块」无法区分，
     因此靠始终提交的 member_rules_submitted 哨兵判定：哨兵在而无行 = 清空规则。
