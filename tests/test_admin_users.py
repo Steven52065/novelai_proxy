@@ -1123,6 +1123,286 @@ def test_admin_user_group_rate_limit_rules_api_and_page(tmp_path: Path, monkeypa
         assert client.app.state.db.query_one("SELECT id FROM group_rate_limit_rules WHERE id = ?", (rule["id"],)) is None
 
 
+def test_group_member_rate_limit_rules_propagate_by_scope(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-group")
+        follower_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "rate-follower", "group_id": group_id},
+        ).json()["user_id"]
+        modified_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "rate-modified", "group_id": group_id},
+        ).json()["user_id"]
+        # 手动给一个成员配置规则，使其不再跟随组模板。
+        client.post(
+            f"/admin/api/users/{modified_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "hour", "max_requests": 99},
+        )
+
+        preview = client.post(
+            f"/admin/api/user-groups/{group_id}/propagation-preview",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [{"period": "minute", "max_requests": 5}]},
+        )
+        assert preview.status_code == 200
+        preview_field = next(
+            field for field in preview.json()["fields"] if field["field"] == "member_rate_limit_rules"
+        )
+        assert preview_field["old"] == "未配置（不限频）"
+        assert preview_field["new"] == "每分钟 5 次"
+        assert preview_field["unmodified_count"] == 1
+
+        patch_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [{"period": "minute", "max_requests": 5}]},
+        )
+        assert patch_resp.status_code == 200
+        summary = patch_resp.json()["propagation"]
+        field_updates = {item["field"]: item["updated"] for item in summary["fields"]}
+        assert field_updates == {"member_rate_limit_rules": 1}
+
+        assert _user_rules(client, follower_id) == [("minute", 5, 1)]
+        assert _user_rules(client, modified_id) == [("hour", 99, 1)]
+
+        # 覆盖全部成员时，手动改过的成员也被拉回组模板。
+        all_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "member_rate_limit_rules": [
+                    {"period": "minute", "max_requests": 7},
+                    {"period": "day", "max_requests": 100, "is_active": False},
+                ],
+                "propagate": "all",
+            },
+        )
+        assert all_resp.status_code == 200
+        assert all_resp.json()["propagation"]["updated_users"] == 2
+        expected = [("minute", 7, 1), ("day", 100, 0)]
+        assert _user_rules(client, follower_id) == expected
+        assert _user_rules(client, modified_id) == expected
+
+        # 只保存组配置时成员不受影响。
+        none_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "member_rate_limit_rules": [{"period": "minute", "max_requests": 1}],
+                "propagate": "none",
+            },
+        )
+        assert none_resp.status_code == 200
+        assert none_resp.json()["propagation"]["updated_users"] == 0
+        assert _user_rules(client, follower_id) == expected
+
+        # 清空组模板并覆盖全部成员。
+        clear_resp = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [], "propagate": "all"},
+        )
+        assert clear_resp.status_code == 200
+        assert _user_rules(client, follower_id) == []
+        assert _user_rules(client, modified_id) == []
+        assert (
+            client.app.state.db.query_one(
+                "SELECT COUNT(*) AS total FROM group_member_rate_limit_rules WHERE group_id = ?",
+                (group_id,),
+            )["total"]
+            == 0
+        )
+
+
+def test_group_member_rate_limit_rules_sync_and_inherit(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-sync")
+        existing_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "sync-existing", "group_id": group_id},
+        ).json()["user_id"]
+
+        client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "member_rate_limit_rules": [{"period": "minute", "max_requests": 4}],
+                "propagate": "none",
+            },
+        )
+        assert _user_rules(client, existing_id) == []
+
+        # 新建成员默认继承组模板。
+        inheritor_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "sync-inheritor", "group_id": group_id},
+        ).json()["user_id"]
+        assert _user_rules(client, inheritor_id) == [("minute", 4, 1)]
+
+        # 同步到成员：强制覆盖全部成员。
+        sync_resp = client.post(
+            f"/admin/api/user-groups/{group_id}/sync-members",
+            auth=("admin", "admin123"),
+            json={"fields": ["member_rate_limit_rules"]},
+        )
+        assert sync_resp.status_code == 200
+        # sync-members 是无条件强制覆盖，已经与模板一致的成员也计入。
+        assert sync_resp.json()["updated_users"] == 2
+        assert _user_rules(client, existing_id) == [("minute", 4, 1)]
+
+        # 手动改过之后，勾选套用组默认值会把规则整体拉回组模板。
+        client.post(
+            f"/admin/api/users/{existing_id}/rate-limit-rules",
+            auth=("admin", "admin123"),
+            json={"period": "day", "max_requests": 500},
+        )
+        assert len(_user_rules(client, existing_id)) == 2
+        apply_resp = client.patch(
+            f"/admin/api/users/{existing_id}",
+            auth=("admin", "admin123"),
+            json={"group_id": group_id, "apply_group_defaults": True},
+        )
+        assert apply_resp.status_code == 200
+        assert _user_rules(client, existing_id) == [("minute", 4, 1)]
+
+
+def test_group_member_rate_limit_rules_reject_invalid_payloads(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-invalid")
+
+        duplicated = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "member_rate_limit_rules": [
+                    {"period": "minute", "max_requests": 5},
+                    {"period": "minute", "max_requests": 6},
+                ]
+            },
+        )
+        assert duplicated.status_code == 400
+        assert "Duplicated" in duplicated.json()["message"]
+
+        bad_period = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [{"period": "year", "max_requests": 5}]},
+        )
+        assert bad_period.status_code == 400
+
+        zero_limit = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"member_rate_limit_rules": [{"period": "minute", "max_requests": 0}]},
+        )
+        assert zero_limit.status_code == 400
+
+        too_many = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={
+                "member_rate_limit_rules": [
+                    {"period": "minute", "max_requests": index + 1} for index in range(9)
+                ]
+            },
+        )
+        assert too_many.status_code == 400
+
+
+def test_group_member_rate_limit_rules_web_form_roundtrip(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="member-rate-web")
+        member_id = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "web-rate-member", "group_id": group_id},
+        ).json()["user_id"]
+
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+
+        page = client.get(f"/admin/user-groups/{group_id}")
+        assert page.status_code == 200
+        assert "组内每人限频" in page.text
+        assert "member_rules_submitted" in page.text
+
+        base_form = {
+            "name": "member-rate-web",
+            "is_active": "on",
+            "default_tier": "normal",
+            "default_free_small_only": "on",
+            "default_allowed_endpoints": "generate-image",
+            "default_anlas_total": "0",
+            "default_reset_period": "month",
+            "default_reset_day": "1",
+            "free_small_daily_limit": "0",
+            "member_rules_submitted": "1",
+            "propagate_scope": "all",
+        }
+
+        save_resp = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                **base_form,
+                "member_rule_period": ["minute", "hour"],
+                "member_rule_max_requests": ["3", "40"],
+                "member_rule_active": ["on", "off"],
+            },
+            follow_redirects=False,
+        )
+        assert save_resp.status_code == 303
+        assert _user_rules(client, member_id) == [("minute", 3, 1), ("hour", 40, 0)]
+
+        # 哨兵存在但没有任何规则行 = 清空规则，而不是「不修改」。
+        clear_resp = client.post(
+            f"/admin/user-groups/{group_id}",
+            data=base_form,
+            follow_redirects=False,
+        )
+        assert clear_resp.status_code == 303
+        assert _user_rules(client, member_id) == []
+
+        misaligned = client.post(
+            f"/admin/user-groups/{group_id}",
+            data={
+                **base_form,
+                "member_rule_period": ["minute", "hour"],
+                "member_rule_max_requests": ["3"],
+                "member_rule_active": ["on", "on"],
+            },
+            follow_redirects=False,
+        )
+        assert misaligned.status_code == 400
+        assert misaligned.json()["message"] == "Rate limit rule fields are misaligned"
+
+
+def _user_rules(client: TestClient, user_id: int) -> list[tuple[str, int, int]]:
+    rows = client.app.state.db.query_all(
+        "SELECT period, max_requests, is_active FROM rate_limit_rules WHERE user_id = ? ORDER BY id",
+        (user_id,),
+    )
+    return [(row["period"], row["max_requests"], row["is_active"]) for row in rows]
+
+
 def test_admin_missing_user_and_rule_operations_return_404(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app

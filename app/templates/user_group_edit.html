@@ -107,6 +107,50 @@
           </label>
         </div>
 
+        <div class="field-pad">
+          <div class="muted field-group-label">组内每人限频</div>
+          <p class="muted muted-sm hint-flush">
+            组内每个成员各自独立计数。与右侧「组共享限流」不同，后者是全组成员共用一个计数池。
+            保存时可选择把这套规则覆盖到成员各自的频率限制。
+          </p>
+          <input type="hidden" name="member_rules_submitted" value="1">
+          <div id="member-rule-rows">
+            {% for rule in member_rate_limit_rules %}
+            <div class="responsive-grid rate-limit-add-form rate-limit-add-form-sm" data-member-rule-row>
+              <label class="label-gap-sm">
+                周期
+                <select name="member_rule_period" class="control-h38">
+                  {% for period, label in rate_limit_period_choices.items() %}
+                  <option value="{{ period }}" {{ "selected" if rule.period == period else "" }}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="label-gap-sm">
+                每人请求上限
+                <input name="member_rule_max_requests" type="number" min="1" value="{{ rule.max_requests }}" required class="control-h38">
+              </label>
+              <label class="label-gap-sm">
+                状态
+                <select name="member_rule_active" class="control-h38">
+                  <option value="on" {{ "selected" if rule.is_active else "" }}>激活</option>
+                  <option value="off" {{ "selected" if not rule.is_active else "" }}>停用</option>
+                </select>
+              </label>
+              <button type="button" class="danger btn-h38" data-member-rule-remove>
+                <i data-lucide="trash-2" class="icon-edit"></i>
+                删除
+              </button>
+            </div>
+            {% endfor %}
+          </div>
+          <p id="member-rule-empty" class="muted muted-13"{% if member_rate_limit_rules %} style="display: none;"{% endif %}>未配置（不限频）</p>
+          <button type="button" id="member-rule-add" class="secondary btn-h38" data-max-rules="{{ max_rate_limit_rules }}">
+            <i data-lucide="plus" class="icon-edit"></i>
+            添加一行
+          </button>
+        </div>
+
+
         <label>
           默认图片输出格式
           <select name="default_image_format_policy">
@@ -177,6 +221,10 @@
           <label class="check check-muted">
             <input name="fields" type="checkbox" value="free_small_daily_limit">
             免费小图单日限制
+          </label>
+          <label class="check check-muted">
+            <input name="fields" type="checkbox" value="member_rate_limit_rules">
+            组内每人限频
           </label>
           <label class="check check-muted">
             <input name="fields" type="checkbox" value="allowed_endpoints">
@@ -333,6 +381,34 @@
   </div>
 </div>
 
+<template id="member-rule-template">
+  <div class="responsive-grid rate-limit-add-form rate-limit-add-form-sm" data-member-rule-row>
+    <label class="label-gap-sm">
+      周期
+      <select name="member_rule_period" class="control-h38">
+        {% for period, label in rate_limit_period_choices.items() %}
+        <option value="{{ period }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="label-gap-sm">
+      每人请求上限
+      <input name="member_rule_max_requests" type="number" min="1" value="10" required class="control-h38">
+    </label>
+    <label class="label-gap-sm">
+      状态
+      <select name="member_rule_active" class="control-h38">
+        <option value="on">激活</option>
+        <option value="off">停用</option>
+      </select>
+    </label>
+    <button type="button" class="danger btn-h38" data-member-rule-remove>
+      <i data-lucide="trash-2" class="icon-edit"></i>
+      删除
+    </button>
+  </div>
+</template>
+
 <div id="propagate-overlay" class="propagate-overlay" style="display: none;"></div>
 <div id="propagate-modal" class="propagate-modal" role="dialog" aria-modal="true" aria-labelledby="propagate-modal-title" style="display: none;">
   <section class="panel propagate-card">
@@ -377,6 +453,54 @@
     const cancelButton = document.getElementById("propagate-cancel");
     const confirmButton = document.getElementById("propagate-confirm");
     const scopeInput = form.querySelector('input[name="propagate_scope"]');
+    const ruleRows = document.getElementById("member-rule-rows");
+    const ruleEmpty = document.getElementById("member-rule-empty");
+    const ruleAddButton = document.getElementById("member-rule-add");
+    const ruleTemplate = document.getElementById("member-rule-template");
+    const maxRules = parseInt(ruleAddButton.dataset.maxRules, 10) || 8;
+
+    function memberRuleRows() {
+      return Array.from(ruleRows.querySelectorAll("[data-member-rule-row]"));
+    }
+
+    function refreshRuleState() {
+      const count = memberRuleRows().length;
+      ruleEmpty.style.display = count ? "none" : "";
+      ruleAddButton.disabled = count >= maxRules;
+    }
+
+    ruleAddButton.addEventListener("click", function () {
+      if (memberRuleRows().length >= maxRules) {
+        return;
+      }
+      ruleRows.appendChild(ruleTemplate.content.cloneNode(true));
+      refreshRuleState();
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    });
+
+    ruleRows.addEventListener("click", function (event) {
+      const removeButton = event.target.closest("[data-member-rule-remove]");
+      if (!removeButton) {
+        return;
+      }
+      removeButton.closest("[data-member-rule-row]").remove();
+      refreshRuleState();
+    });
+
+    refreshRuleState();
+
+    function memberRateLimitRules() {
+      return memberRuleRows().map(function (row) {
+        const maxRequests = parseInt(row.querySelector('[name="member_rule_max_requests"]').value, 10);
+        return {
+          period: row.querySelector('[name="member_rule_period"]').value,
+          max_requests: Number.isNaN(maxRequests) ? 0 : maxRequests,
+          is_active: row.querySelector('[name="member_rule_active"]').value === "on",
+        };
+      });
+    }
 
     function checkedValues(name) {
       return Array.from(form.querySelectorAll('input[name="' + name + '"]:checked')).map((input) => input.value);
@@ -401,6 +525,7 @@
         default_anlas_total: intValue("default_anlas_total"),
         default_reset_period: form.elements["default_reset_period"].value,
         default_reset_day: intValue("default_reset_day"),
+        member_rate_limit_rules: memberRateLimitRules(),
       };
     }
 

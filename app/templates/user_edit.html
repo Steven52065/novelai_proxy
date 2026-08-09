@@ -305,6 +305,7 @@
       </h2>
       <p class="muted muted-13 rate-limit-desc">
         为该用户添加和编辑 API 频率限制（Rate Limits），防止滥用。
+        勾选左侧「保存时套用组默认值」保存后，这里会被所属组的「组内每人限频」模板整体覆盖。
       </p>
 
       <form method="post" action="/admin/users/{{ user.id }}/rate-limit-rules" class="inline-form responsive-grid rate-limit-add-form">

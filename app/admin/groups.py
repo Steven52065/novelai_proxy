@@ -21,6 +21,7 @@ from ..image_format_policies import (
     normalize_image_format_policy,
 )
 from ..queue_tiers import TIER_NORMAL, USER_TIER_PATTERN
+from ..rate_limit_rules import PERIOD_CHOICES, MAX_RULES_PER_SCOPE
 from ..templating import templates
 from ..users import (
     UserGroupInput,
@@ -29,12 +30,14 @@ from ..users import (
     delete_or_disable_group,
     get_group,
     list_groups,
+    load_group_member_rate_limit_rules,
     preview_group_propagation,
     sync_group_members,
     update_group_with_propagation,
 )
 from .auth import require_admin_or_session, require_admin_page_session
 from .common import (
+    build_rate_limit_rule_set_or_400,
     normalize_image_format_policy_or_400,
     normalize_reset_day_or_400,
     notify_dashboard_change,
@@ -66,6 +69,12 @@ class CreateUserGroupRequest(BaseModel):
     default_reset_day: int = Field(default=1, ge=0, le=28)
 
 
+class GroupMemberRateLimitRuleRequest(BaseModel):
+    period: str = Field(..., pattern="^(minute|hour|day|month)$")
+    max_requests: int = Field(..., ge=1)
+    is_active: bool = True
+
+
 class UpdateUserGroupRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     is_active: bool | None = None
@@ -79,6 +88,11 @@ class UpdateUserGroupRequest(BaseModel):
     default_anlas_total: int | None = Field(default=None, ge=0)
     default_reset_period: str | None = Field(default=None, pattern="^(month|week|day|never)$")
     default_reset_day: int | None = Field(default=None, ge=0, le=28)
+    # None 表示不修改组模板；[] 表示清空。
+    member_rate_limit_rules: list[GroupMemberRateLimitRuleRequest] | None = Field(
+        default=None,
+        max_length=MAX_RULES_PER_SCOPE,
+    )
     propagate: Literal["unmodified", "all", "none"] = "unmodified"
 
 
@@ -88,6 +102,7 @@ class SyncGroupMembersRequest(BaseModel):
             "tier",
             "free_small_only",
             "free_small_daily_limit",
+            "member_rate_limit_rules",
             "allowed_endpoints",
             "allowed_upstreams",
             "image_format_policy",
@@ -177,6 +192,11 @@ def _build_group_update_input(
     if payload.default_allowed_upstreams is not None:
         validate_allowed_upstreams(payload.default_allowed_upstreams, request)
     default_reset_day = _normalize_update_reset_day_or_400(db, group_id, payload)
+    member_rate_limit_rules = (
+        build_rate_limit_rule_set_or_400(payload.member_rate_limit_rules)
+        if payload.member_rate_limit_rules is not None
+        else None
+    )
     return UserGroupUpdateInput(
         name=payload.name,
         is_active=payload.is_active,
@@ -190,6 +210,7 @@ def _build_group_update_input(
         default_anlas_total=payload.default_anlas_total,
         default_reset_period=payload.default_reset_period,
         default_reset_day=default_reset_day,
+        member_rate_limit_rules=member_rate_limit_rules,
     )
 
 
@@ -337,6 +358,9 @@ async def user_group_edit_page(group_id: int, request: Request):
             "active": "user_groups",
             "group": group,
             "group_rules": group_rules,
+            "member_rate_limit_rules": load_group_member_rate_limit_rules(db, group_id).as_dicts(),
+            "rate_limit_period_choices": PERIOD_CHOICES,
+            "max_rate_limit_rules": MAX_RULES_PER_SCOPE,
             "members": members,
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
@@ -364,10 +388,20 @@ async def update_user_group_form(
     default_anlas_total: int = Form(0),
     default_reset_period: str = Form("month"),
     default_reset_day: int = Form(1),
+    member_rules_submitted: str | None = Form(None),
+    member_rule_period: list[str] | None = Form(None),
+    member_rule_max_requests: list[int] | None = Form(None),
+    member_rule_active: list[str] | None = Form(None),
     propagate_scope: str = Form("unmodified"),
 ):
     if propagate_scope not in {"unmodified", "all", "none"}:
         propagate_scope = "unmodified"
+    member_rules = _parse_member_rate_limit_rules_form(
+        member_rules_submitted,
+        member_rule_period,
+        member_rule_max_requests,
+        member_rule_active,
+    )
     result = await patch_user_group(
         group_id,
         UpdateUserGroupRequest(
@@ -383,6 +417,7 @@ async def update_user_group_form(
             default_anlas_total=default_anlas_total,
             default_reset_period=default_reset_period,
             default_reset_day=default_reset_day,
+            member_rate_limit_rules=member_rules,
             propagate=propagate_scope,
         ),
         request,
@@ -392,6 +427,30 @@ async def update_user_group_form(
     if propagate_scope != "none":
         redirect_url += f"&propagated={summary['updated_users']}&propagate_scope={propagate_scope}"
     return RedirectResponse(redirect_url, status_code=303)
+
+
+def _parse_member_rate_limit_rules_form(
+    submitted: str | None,
+    periods: list[str] | None,
+    max_requests: list[int] | None,
+    actives: list[str] | None,
+) -> list[dict[str, object]] | None:
+    """解析组内每人限频的平行数组表单字段。
+
+    删光所有规则行时三个数组都不会提交，与「表单里没有这个区块」无法区分，
+    因此靠始终提交的 member_rules_submitted 哨兵判定：哨兵在而无行 = 清空规则。
+    """
+    if submitted != "1":
+        return None
+    rule_periods = periods or []
+    rule_max_requests = max_requests or []
+    rule_actives = actives or []
+    if not (len(rule_periods) == len(rule_max_requests) == len(rule_actives)):
+        raise HTTPException(status_code=400, detail={"message": "Rate limit rule fields are misaligned"})
+    return [
+        {"period": period, "max_requests": limit, "is_active": active == "on"}
+        for period, limit, active in zip(rule_periods, rule_max_requests, rule_actives)
+    ]
 
 
 @web_router.post("/user-groups/{group_id}/delete")

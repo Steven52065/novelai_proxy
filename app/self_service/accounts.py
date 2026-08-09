@@ -11,7 +11,7 @@ from ..domain_errors import (
     UserGroupNotFound,
 )
 from ..quota_manager import QuotaManager
-from ..users import CreateUserInput, group_defaults
+from ..users import CreateUserInput, group_defaults, load_group_member_rate_limit_rules_with_connection
 from ..users.service import insert_user_record
 
 
@@ -66,6 +66,7 @@ def login_or_register_discord_user(
 
         group = _get_enabled_group(conn, default_group_id)
         defaults = group_defaults(group)
+        rate_limit_rules = load_group_member_rate_limit_rules_with_connection(conn, default_group_id)
         now = utc_now_iso()
         created = insert_user_record(
             conn,
@@ -82,6 +83,7 @@ def login_or_register_discord_user(
                 anlas_total=int(defaults["anlas_total"]),
                 reset_period=str(defaults["reset_period"]),
                 reset_day=int(defaults["reset_day"]),
+                rate_limit_rules=rate_limit_rules,
             ),
             now=now,
         )

@@ -135,6 +135,17 @@ CREATE TABLE IF NOT EXISTS group_rate_limit_rules (
     created_at TEXT NOT NULL
 );
 
+-- 组内每人限频模板：保存组配置时展开写入成员各自的 rate_limit_rules，
+-- 与 group_rate_limit_rules（全组共享一个计数池）语义不同，两表并存互不影响。
+CREATE TABLE IF NOT EXISTS group_member_rate_limit_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    period TEXT NOT NULL,
+    max_requests INTEGER NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS discord_user_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -290,6 +301,13 @@ def initialize_schema(db: Any) -> None:
         db.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id)")
         db.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_group_rate_limit_rules_group_id ON group_rate_limit_rules(group_id)"
+        )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_group_member_rate_limit_rules_group_id "
+            "ON group_member_rate_limit_rules(group_id)"
+        )
+        db.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rate_limit_rules_user_id ON rate_limit_rules(user_id)"
         )
         db.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_usage_payload_archives_date "

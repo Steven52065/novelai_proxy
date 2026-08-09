@@ -902,6 +902,7 @@ def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_pa
     assert {
         "user_groups",
         "group_rate_limit_rules",
+        "group_member_rate_limit_rules",
         "discord_user_links",
         "usage_log_payload_archives",
         "usage_log_payload_archive_refs",
@@ -932,6 +933,8 @@ def test_init_schema_migrates_self_service_tables_and_nullable_user_group(tmp_pa
     }
     assert "idx_users_group_id" in indexes
     assert "idx_group_rate_limit_rules_group_id" in indexes
+    assert "idx_group_member_rate_limit_rules_group_id" in indexes
+    assert "idx_rate_limit_rules_user_id" in indexes
     assert {"idx_usage_created_at", "idx_usage_action_created", "idx_usage_status_created"} <= indexes
     assert "idx_usage_payload_archive_refs_archive" in {
         row["name"]

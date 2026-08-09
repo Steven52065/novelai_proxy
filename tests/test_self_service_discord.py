@@ -310,6 +310,35 @@ def test_discord_signup_creates_group_user_and_shows_api_key_once(tmp_path: Path
         assert sub.status_code == 200
 
 
+def test_discord_registration_inherits_group_member_rate_limit_rules(tmp_path: Path, monkeypatch):
+    config_path, group_id = _write_self_service_config(tmp_path)
+    db = Database(str(tmp_path / "test.db"))
+    now = utc_now_iso()
+    for period, max_requests in (("minute", 3), ("hour", 60)):
+        db.execute(
+            """
+            INSERT INTO group_member_rate_limit_rules (group_id, period, max_requests, is_active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+            """,
+            (group_id, period, max_requests, now),
+        )
+    db.close()
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        rules = client.app.state.db.query_all(
+            "SELECT period, max_requests, is_active FROM rate_limit_rules WHERE user_id = ? ORDER BY id",
+            (user_id,),
+        )
+        assert [dict(row) for row in rules] == [
+            {"period": "minute", "max_requests": 3, "is_active": 1},
+            {"period": "hour", "max_requests": 60, "is_active": 1},
+        ]
+
+
 def test_account_shows_group_daily_usage_and_hides_zero_anlas_quota(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(
         tmp_path,

@@ -6,6 +6,9 @@ import math
 from typing import Literal
 
 from .database import Database
+from .rate_limit_rules import PERIOD_SECONDS
+
+__all__ = ["PERIOD_SECONDS", "RateLimitResult", "RateLimiter"]
 
 
 @dataclass(frozen=True)
@@ -14,14 +17,6 @@ class RateLimitResult:
     message: str = ""
     retry_after: int = 0
     scope: Literal["user", "group"] | None = None
-
-
-PERIOD_SECONDS = {
-    "minute": 60,
-    "hour": 3600,
-    "day": 86400,
-    "month": 30 * 86400,
-}
 
 
 class RateLimiter:

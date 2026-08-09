@@ -26,6 +26,7 @@ from ..users import (
     get_enabled_group,
     group_defaults,
     list_groups,
+    load_group_member_rate_limit_rules,
     reset_api_key,
     update_user as update_user_record,
 )
@@ -638,6 +639,10 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
     validate_free_small_daily_limit(free_small_daily_limit_enabled, free_small_daily_limit)
     reset_period = str(value("reset_period"))
     reset_day = normalize_reset_day_or_400(reset_period, value("reset_day"))
+    # 新建成员默认继承组的「组内每人限频」模板。
+    rate_limit_rules = (
+        load_group_member_rate_limit_rules(db, payload.group_id) if payload.group_id is not None else None
+    )
     return CreateUserInput(
         name=payload.name,
         group_id=payload.group_id,
@@ -651,6 +656,7 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
         anlas_total=int(value("anlas_total")),
         reset_period=reset_period,
         reset_day=reset_day,
+        rate_limit_rules=rate_limit_rules,
     )
 
 
@@ -661,11 +667,14 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         get_enabled_group(db, payload.group_id)
 
     defaults = None
+    default_rate_limit_rules = None
     if payload.apply_group_defaults:
         default_group_id = payload.group_id if update_group_id else _get_user_group_id(db, user_id)
         if default_group_id is None:
             raise HTTPException(status_code=400, detail={"message": "No user group selected"})
         defaults = group_defaults(get_enabled_group(db, int(default_group_id)))
+        # 套用组默认值时，限频规则也整体拉回组模板。
+        default_rate_limit_rules = load_group_member_rate_limit_rules(db, int(default_group_id))
 
     def optional_value(field_name: str):
         if field_name in fields_set:
@@ -708,6 +717,7 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
         anlas_total=optional_value("anlas_total"),
         reset_period=reset_period,
         reset_day=reset_day,
+        rate_limit_rules=default_rate_limit_rules,
     )
 
 

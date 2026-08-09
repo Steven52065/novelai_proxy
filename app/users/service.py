@@ -10,6 +10,7 @@ from ..domain_errors import InvalidDomainInput, UserNotFound
 from ..image_format_policies import DEFAULT_IMAGE_FORMAT_POLICY, ImageFormatPolicy, normalize_image_format_policy
 from ..quota_manager import QuotaManager
 from ..queue_tiers import TIER_NORMAL
+from ..rate_limit_rules import RateLimitRuleSet
 from ..security import generate_api_key, hash_api_key
 
 
@@ -27,6 +28,8 @@ class CreateUserInput:
     anlas_total: int = 0
     reset_period: str = "month"
     reset_day: int | None = None
+    # None 表示不写入限频规则；空规则集表示明确不限频。
+    rate_limit_rules: RateLimitRuleSet | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,42 @@ class UpdateUserInput:
     anlas_total: int | None = None
     reset_period: str | None = None
     reset_day: int | None = None
+    # None 表示不修改；空规则集表示清空该用户的限频规则。
+    rate_limit_rules: RateLimitRuleSet | None = None
+
+
+def replace_user_rate_limit_rules_with_connection(
+    conn: Connection,
+    user_id: int,
+    rules: RateLimitRuleSet,
+    *,
+    now: str | None = None,
+) -> None:
+    """整体替换用户的限频规则：先清空再写入，与组模板的覆盖语义一致。"""
+    created_at = now or utc_now_iso()
+    conn.execute("DELETE FROM rate_limit_rules WHERE user_id = ?", (user_id,))
+    for rule in rules.rules:
+        conn.execute(
+            """
+            INSERT INTO rate_limit_rules (user_id, period, max_requests, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, rule.period, rule.max_requests, 1 if rule.is_active else 0, created_at),
+        )
+
+
+def load_user_rate_limit_rules(db: Database, user_id: int) -> RateLimitRuleSet:
+    return RateLimitRuleSet.from_rows(
+        db.query_all(
+            """
+            SELECT period, max_requests, is_active
+            FROM rate_limit_rules
+            WHERE user_id = ?
+            ORDER BY id
+            """,
+            (user_id,),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -85,7 +124,10 @@ def insert_user_record(
             now,
         ),
     )
-    return CreatedUser(user_id=int(cursor.lastrowid), api_key=api_key)
+    created = CreatedUser(user_id=int(cursor.lastrowid), api_key=api_key)
+    if data.rate_limit_rules is not None:
+        replace_user_rate_limit_rules_with_connection(conn, created.user_id, data.rate_limit_rules, now=now)
+    return created
 
 
 def create_user(db: Database, quota_manager: QuotaManager, data: CreateUserInput) -> CreatedUser:
@@ -144,6 +186,12 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
         params.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(params))
 
+    rules_changed = False
+    if data.rate_limit_rules is not None and load_user_rate_limit_rules(db, user_id) != data.rate_limit_rules:
+        with db.transaction() as conn:
+            replace_user_rate_limit_rules_with_connection(conn, user_id, data.rate_limit_rules)
+        rules_changed = True
+
     has_quota_update = data.anlas_total is not None or data.reset_period is not None or data.reset_day is not None
     if has_quota_update:
         quota = db.query_one(
@@ -162,7 +210,7 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
             quota_manager.create_or_update(user_id, total, reset_period, reset_day)
         except ValueError as exc:
             raise InvalidDomainInput(str(exc)) from exc
-    return bool(fields or has_quota_update)
+    return bool(fields or has_quota_update or rules_changed)
 
 
 def delete_user(db: Database, user_id: int) -> None:

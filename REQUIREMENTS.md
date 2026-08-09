@@ -46,6 +46,7 @@
 | 规则模式 | **所有规则均未超限才放行**（AND 逻辑）。例如：每分钟 ≤ 3 次 AND 每天 ≤ 100 次 AND 每月 ≤ 2000 次，全部满足才放行 |
 | 计数来源 | 从 `usage_logs` 表中统计对应时间窗口内的请求记录数 |
 | 超限响应 | 返回 `429 Too Many Requests`，附带 `Retry-After` 头和可读的错误信息 |
+| 组内每人限频 | 用户组可配置一套「组内每人限频」模板，保存时展开写入各成员自己的限频规则，每个成员独立计数。这是写入时复制，不是运行时继承 |
 
 ### 2.3 Anlas 额度管理
 
@@ -150,6 +151,8 @@ Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
 
 组共享限流与个人限流同时生效。请求先检查个人限流，再检查用户所属启用用户组的共享限流；任一超限都会返回 `429`。组限流按组内成员在窗口内非 `rejected` 的 `DISTINCT request_id` 统计，重试 attempt 不重复计数。
 
+用户组还有一套独立的「组内每人限频」模板（`group_member_rate_limit_rules`），语义与组共享限流不同：保存组配置时把模板展开写入每个成员自己的 `rate_limit_rules`，因此**每个成员各自独立计数**，超限时 `limit_scope` 仍是 `user`。与「每日免费小图限制」一致，它是写入时复制的默认值，不是运行时继承：新建成员和 Discord 自助注册会继承模板；修改组模板后可选择「仅覆盖跟随组配置的成员 / 覆盖全部成员 / 仅保存组配置」；成员被手动改过后，也可以在用户编辑页勾选「保存时套用组默认值」把规则拉回组模板。
+
 ### 2.9 暂不实现（预留扩展）
 
 - 文字生成（`/ai/generate`、`/ai/generate-stream`）代理
@@ -206,6 +209,19 @@ Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
 | group_id | INTEGER FK→user_groups | 关联用户组 |
 | period | TEXT | minute / hour / day / month |
 | max_requests | INTEGER | 组内共享周期请求上限 |
+| is_active | BOOL | 是否启用 |
+| created_at | TIMESTAMP | 创建时间 |
+
+### group_member_rate_limit_rules
+
+组内每人限频模板。保存组配置时按所选覆盖范围展开写入成员各自的 `rate_limit_rules`，运行时不参与限频判定。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PK | 自增主键 |
+| group_id | INTEGER FK→user_groups | 关联用户组 |
+| period | TEXT | minute / hour / day / month |
+| max_requests | INTEGER | 每个成员各自的周期请求上限 |
 | is_active | BOOL | 是否启用 |
 | created_at | TIMESTAMP | 创建时间 |
 

@@ -16,12 +16,18 @@ from ..image_format_policies import (
 )
 from ..quota_manager import QuotaManager
 from ..queue_tiers import TIER_NORMAL
-from .service import UpdateUserInput
+from ..rate_limit_rules import EMPTY_RATE_LIMIT_RULES, RateLimitRuleSet
+from .service import UpdateUserInput, replace_user_rate_limit_rules_with_connection
 
 PROPAGATE_SCOPE_UNMODIFIED = "unmodified"
 PROPAGATE_SCOPE_ALL = "all"
 PROPAGATE_SCOPE_NONE = "none"
 PROPAGATE_SCOPES = {PROPAGATE_SCOPE_UNMODIFIED, PROPAGATE_SCOPE_ALL, PROPAGATE_SCOPE_NONE}
+
+# 成员字段的写入方式：写 users 表的列、写 anlas 额度、或替换用户的限频规则。
+WRITER_COLUMNS = "columns"
+WRITER_QUOTA = "quota"
+WRITER_RATE_LIMIT_RULES = "rate_limit_rules"
 
 
 @dataclass(frozen=True)
@@ -54,17 +60,20 @@ class UserGroupUpdateInput:
     default_anlas_total: int | None = None
     default_reset_period: str | None = None
     default_reset_day: int | None = None
+    # None 表示不修改；空规则集表示清空组模板。
+    member_rate_limit_rules: RateLimitRuleSet | None = None
 
 
 @dataclass(frozen=True)
 class MemberFieldSpec:
     name: str
     label: str
-    group_value: Callable[[sqlite3.Row], object]
+    group_value: Callable[[Mapping[str, object]], object]
     merged_value: Callable[[object, UserGroupUpdateInput], object]
-    user_value: Callable[[sqlite3.Row], object]
+    user_value: Callable[[Mapping[str, object]], object]
     user_columns: Callable[[object], dict[str, object]] | None
     display_value: Callable[[object], str] = str
+    writer: str = WRITER_COLUMNS
 
 
 def _merge_daily_limit(current: object, data: UserGroupUpdateInput) -> tuple[int, int]:
@@ -147,6 +156,18 @@ MEMBER_FIELD_SPECS = (
         display_value=_display_daily_limit,
     ),
     MemberFieldSpec(
+        name="member_rate_limit_rules",
+        label="组内每人限频",
+        group_value=lambda row: row["member_rate_limit_rules"],
+        merged_value=lambda current, data: (
+            data.member_rate_limit_rules if data.member_rate_limit_rules is not None else current
+        ),
+        user_value=lambda row: row["member_rate_limit_rules"],
+        user_columns=None,
+        display_value=lambda value: value.display(),
+        writer=WRITER_RATE_LIMIT_RULES,
+    ),
+    MemberFieldSpec(
         name="allowed_endpoints",
         label="允许接口",
         group_value=lambda row: AllowedEndpoints.parse(row["default_allowed_endpoints"]).serialize(),
@@ -200,6 +221,7 @@ MEMBER_FIELD_SPECS = (
         ),
         user_columns=None,
         display_value=_display_anlas_quota,
+        writer=WRITER_QUOTA,
     ),
 )
 MEMBER_FIELD_LABELS = {spec.name: spec.label for spec in MEMBER_FIELD_SPECS}
@@ -337,6 +359,51 @@ def list_groups(db: Database) -> list[sqlite3.Row]:
     )
 
 
+def load_group_member_rate_limit_rules(db: Database, group_id: int) -> RateLimitRuleSet:
+    return RateLimitRuleSet.from_rows(
+        db.query_all(
+            """
+            SELECT period, max_requests, is_active
+            FROM group_member_rate_limit_rules
+            WHERE group_id = ?
+            ORDER BY id
+            """,
+            (group_id,),
+        )
+    )
+
+
+def load_group_member_rate_limit_rules_with_connection(conn: sqlite3.Connection, group_id: int) -> RateLimitRuleSet:
+    return RateLimitRuleSet.from_rows(
+        conn.execute(
+            """
+            SELECT period, max_requests, is_active
+            FROM group_member_rate_limit_rules
+            WHERE group_id = ?
+            ORDER BY id
+            """,
+            (group_id,),
+        ).fetchall()
+    )
+
+
+def replace_group_member_rate_limit_rules(db: Database, group_id: int, rules: RateLimitRuleSet) -> bool:
+    if load_group_member_rate_limit_rules(db, group_id) == rules:
+        return False
+    now = utc_now_iso()
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM group_member_rate_limit_rules WHERE group_id = ?", (group_id,))
+        for rule in rules.rules:
+            conn.execute(
+                """
+                INSERT INTO group_member_rate_limit_rules (group_id, period, max_requests, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (group_id, rule.period, rule.max_requests, 1 if rule.is_active else 0, now),
+            )
+    return True
+
+
 def group_defaults(row: sqlite3.Row) -> dict[str, object]:
     return {
         "tier": str(row["default_tier"]),
@@ -389,7 +456,7 @@ def sync_group_members(
         quota_manager,
         members,
         selected_fields,
-        _group_member_values(group),
+        _group_member_values(group, load_group_member_rate_limit_rules(db, group_id)),
         skip_unchanged=False,
     )
     return len(updated_users)
@@ -397,8 +464,9 @@ def sync_group_members(
 
 def preview_group_propagation(db: Database, group_id: int, data: UserGroupUpdateInput) -> dict[str, object]:
     group = get_group(db, group_id)
-    old_values = _group_member_values(group)
-    new_values = _merged_group_member_values(group, data)
+    group_rules = load_group_member_rate_limit_rules(db, group_id)
+    old_values = _group_member_values(group, group_rules)
+    new_values = _merged_group_member_values(group, group_rules, data)
     members = _load_group_members_with_values(db, group_id)
     fields: list[dict[str, object]] = []
     for field in MEMBER_FIELD_LABELS:
@@ -428,10 +496,15 @@ def update_group_with_propagation(
     if propagate_scope not in PROPAGATE_SCOPES:
         raise InvalidDomainInput(f"Unknown propagate scope: {propagate_scope}")
     group = get_group(db, group_id)
-    old_values = _group_member_values(group)
-    new_values = _merged_group_member_values(group, data)
+    # 组模板与成员现值都必须在任何写入之前读取，否则跟随判定会拿到新值。
+    group_rules = load_group_member_rate_limit_rules(db, group_id)
+    old_values = _group_member_values(group, group_rules)
+    new_values = _merged_group_member_values(group, group_rules, data)
     members = _load_group_members_with_values(db, group_id)
     group_changed = update_group(db, group_id, data)
+    if data.member_rate_limit_rules is not None:
+        rules_changed = replace_group_member_rate_limit_rules(db, group_id, data.member_rate_limit_rules)
+        group_changed = group_changed or rules_changed
 
     changed_fields = [field for field in MEMBER_FIELD_LABELS if new_values[field] != old_values[field]]
     summary: dict[str, object] = {
@@ -465,13 +538,26 @@ def update_group_with_propagation(
     return summary
 
 
-def _group_member_values(row: sqlite3.Row) -> dict[str, object]:
-    return {spec.name: spec.group_value(row) for spec in MEMBER_FIELD_SPECS}
+def _group_member_values(row: sqlite3.Row, rules: RateLimitRuleSet) -> dict[str, object]:
+    source = _with_member_rate_limit_rules(row, rules)
+    return {spec.name: spec.group_value(source) for spec in MEMBER_FIELD_SPECS}
 
 
-def _merged_group_member_values(row: sqlite3.Row, data: UserGroupUpdateInput) -> dict[str, object]:
-    current = _group_member_values(row)
+def _merged_group_member_values(
+    row: sqlite3.Row,
+    rules: RateLimitRuleSet,
+    data: UserGroupUpdateInput,
+) -> dict[str, object]:
+    current = _group_member_values(row, rules)
     return {spec.name: spec.merged_value(current[spec.name], data) for spec in MEMBER_FIELD_SPECS}
+
+
+def _with_member_rate_limit_rules(row: sqlite3.Row, rules: RateLimitRuleSet) -> dict[str, object]:
+    # 限频规则存在独立表里，取不到列，取值前先并进 dict。dict 与 sqlite3.Row
+    # 都支持下标访问，因此其余字段的取值函数无需区分来源。
+    values = dict(row)
+    values["member_rate_limit_rules"] = rules
+    return values
 
 
 def _load_group_members_with_values(db: Database, group_id: int) -> list[tuple[int, dict[str, object]]]:
@@ -488,11 +574,37 @@ def _load_group_members_with_values(db: Database, group_id: int) -> list[tuple[i
         """,
         (group_id,),
     )
-    return [(int(row["id"]), _user_member_values(row)) for row in rows]
+    rules_by_user = _load_member_rate_limit_rules(db, group_id)
+    return [
+        (
+            int(row["id"]),
+            _user_member_values(row, rules_by_user.get(int(row["id"]), EMPTY_RATE_LIMIT_RULES)),
+        )
+        for row in rows
+    ]
 
 
-def _user_member_values(row: sqlite3.Row) -> dict[str, object]:
-    return {spec.name: spec.user_value(row) for spec in MEMBER_FIELD_SPECS}
+def _load_member_rate_limit_rules(db: Database, group_id: int) -> dict[int, RateLimitRuleSet]:
+    # 一次取回全组成员的规则，避免逐个成员查询。
+    rows = db.query_all(
+        """
+        SELECT r.user_id, r.period, r.max_requests, r.is_active
+        FROM rate_limit_rules r
+        JOIN users u ON u.id = r.user_id
+        WHERE u.group_id = ? AND u.deleted_at IS NULL
+        ORDER BY r.user_id, r.id
+        """,
+        (group_id,),
+    )
+    grouped: dict[int, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(int(row["user_id"]), []).append(row)
+    return {user_id: RateLimitRuleSet.from_rows(items) for user_id, items in grouped.items()}
+
+
+def _user_member_values(row: sqlite3.Row, rules: RateLimitRuleSet) -> dict[str, object]:
+    source = _with_member_rate_limit_rules(row, rules)
+    return {spec.name: spec.user_value(source) for spec in MEMBER_FIELD_SPECS}
 
 
 def _apply_member_field_updates(
@@ -510,6 +622,7 @@ def _apply_member_field_updates(
     updated_users: set[int] = set()
     user_updates: dict[int, dict[str, object]] = {}
     quota_updates: dict[int, tuple[int, str, int]] = {}
+    rule_updates: dict[int, RateLimitRuleSet] = {}
 
     for user_id, member_values in members:
         for spec in specs:
@@ -519,14 +632,17 @@ def _apply_member_field_updates(
             if skip_unchanged and member_values[spec.name] == new_value:
                 # 已与新组配置一致的成员无需修改，也不计入覆盖人数。
                 continue
-            if spec.user_columns is None:
+            if spec.writer == WRITER_QUOTA:
                 quota_updates[user_id] = _quota_value(new_value)
+            elif spec.writer == WRITER_RATE_LIMIT_RULES:
+                rule_updates[user_id] = new_value
             else:
                 user_updates.setdefault(user_id, {}).update(spec.user_columns(new_value))
             field_counts[spec.name] += 1
             updated_users.add(user_id)
 
-    if user_updates:
+    if user_updates or rule_updates:
+        now = utc_now_iso()
         with db.transaction() as conn:
             for user_id, columns in user_updates.items():
                 assignments = ", ".join(f"{column} = ?" for column in columns)
@@ -534,6 +650,8 @@ def _apply_member_field_updates(
                     f"UPDATE users SET {assignments} WHERE id = ? AND deleted_at IS NULL",
                     (*columns.values(), user_id),
                 )
+            for user_id, rule_set in rule_updates.items():
+                replace_user_rate_limit_rules_with_connection(conn, user_id, rule_set, now=now)
     for user_id, (total, period, day) in quota_updates.items():
         quota_manager.create_or_update(user_id, total, period, day)
 

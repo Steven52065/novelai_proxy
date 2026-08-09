@@ -6,8 +6,10 @@ import uuid
 import pytest
 
 from app.database import Database, utc_now_iso
+from app.rate_limit_rules import RateLimitRule, RateLimitRuleSet
 import app.rate_limiter as rate_limiter_module
 from app.rate_limiter import RateLimiter
+from app.users import replace_user_rate_limit_rules_with_connection
 
 
 FIXED_NOW = datetime(2026, 6, 6, 12, 0, 0, tzinfo=timezone.utc)
@@ -323,3 +325,55 @@ def test_rate_limit_prefers_user_rule_when_waits_are_equal(rate_limit_db, monkey
     assert result.allowed is False
     assert result.scope == "user"
     assert result.retry_after == 30
+
+
+def test_group_member_rules_expand_to_independent_per_user_counters(rate_limit_db, monkeypatch):
+    """组模板展开成每人各自的规则，一人超限不影响同组其他成员。
+
+    这是与 group_rate_limit_rules（全组共用一个计数池）的关键区别。
+    """
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    group_id = _create_group(rate_limit_db)
+    first_id = _create_user(rate_limit_db, group_id=group_id)
+    second_id = _create_user(rate_limit_db, group_id=group_id)
+    rules = RateLimitRuleSet.of([RateLimitRule(period="minute", max_requests=1)])
+    with rate_limit_db.transaction() as conn:
+        replace_user_rate_limit_rules_with_connection(conn, first_id, rules)
+        replace_user_rate_limit_rules_with_connection(conn, second_id, rules)
+    _insert_log(
+        rate_limit_db,
+        first_id,
+        request_id="member-independent",
+        status="success",
+        created_at=FIXED_NOW - timedelta(seconds=30),
+    )
+
+    limiter = RateLimiter(rate_limit_db)
+    first_result = limiter.check(first_id)
+    second_result = limiter.check(second_id)
+
+    assert first_result.allowed is False
+    assert first_result.scope == "user"
+    assert first_result.retry_after == 30
+    assert second_result.allowed is True
+
+
+def test_group_shared_rule_still_pools_all_members(rate_limit_db, monkeypatch):
+    """对照组：group_rate_limit_rules 仍按全组聚合，一人用满则全组被挡。"""
+    monkeypatch.setattr(rate_limiter_module, "datetime", FrozenDateTime)
+    group_id = _create_group(rate_limit_db)
+    first_id = _create_user(rate_limit_db, group_id=group_id)
+    second_id = _create_user(rate_limit_db, group_id=group_id)
+    _add_group_rule(rate_limit_db, group_id, period="minute", max_requests=1)
+    _insert_log(
+        rate_limit_db,
+        first_id,
+        request_id="shared-pool",
+        status="success",
+        created_at=FIXED_NOW - timedelta(seconds=30),
+    )
+
+    result = RateLimiter(rate_limit_db).check(second_id)
+
+    assert result.allowed is False
+    assert result.scope == "group"
