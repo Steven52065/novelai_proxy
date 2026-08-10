@@ -176,6 +176,46 @@
     </section>
     {% endif %}
 
+    <section class="panel panel-mt">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="gauge" class="h2-icon h2-icon-warning"></i>
+        用户独享限流
+      </h2>
+      {% if rate_limit_rules %}
+      <div class="table-wrap">
+        <table class="responsive-card-table">
+          <thead>
+            <tr>
+              <th>周期</th>
+              <th>请求上限</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rule in rate_limit_rules %}
+            <tr data-rate-limit-rule="{{ rule.period }}">
+              <td data-label="周期">{{ rule.period_label }}</td>
+              <td data-label="请求上限">每个周期 {{ rule.max_requests }} 次</td>
+              <td data-label="状态">
+                {% if rule.is_active %}
+                <span class="badge badge-active">启用</span>
+                {% else %}
+                <span class="badge badge-inactive">已停用</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-stack empty-pad-lg">
+        <i data-lucide="sparkles" class="empty-icon"></i>
+        <span class="muted muted-13">暂未配置用户独享限流（不限频）</span>
+      </div>
+      {% endif %}
+    </section>
+
     {% if quota.total > 0 %}
     <section class="panel panel-mt">
       <h2 class="h2-sm h2-mb">

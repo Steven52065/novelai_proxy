@@ -34,10 +34,11 @@ from ..image_format_policies import (
 )
 from ..logging_utils import json_dumps, logger
 from ..quota_manager import QuotaManager
+from ..rate_limit_rules import PERIOD_CHOICES
 from ..routing_queue import RoutingProxyQueue
 from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
-from ..users import reset_api_key
+from ..users import load_user_rate_limit_rules, reset_api_key
 from .accounts import DiscordProfile, disable_linked_discord_user, login_or_register_discord_user
 from .discord import DiscordOAuthClient, discord_guild_ids
 
@@ -214,6 +215,7 @@ async def account_page(
                 "day": user["quota_reset_day"],
             },
             "free_small_daily": free_small_daily,
+            "rate_limit_rules": _self_service_rate_limit_rules(db, user_id),
             "queue_status": queue_status,
             "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "new_api_key": new_api_key,
@@ -222,6 +224,20 @@ async def account_page(
     if has_api_key_flash:
         delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
     return response
+
+
+@router.get("/account/api/rate-limit-rules")
+async def account_rate_limit_rules(
+    request: Request,
+    config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    db: Database = Depends(get_db),
+):
+    _require_discord_enabled(config)
+    user_id = _current_self_service_user_id(request, config.session_secret)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail={"message": "Authentication required"})
+    _ensure_self_service_account_active(db, user_id)
+    return {"rules": _self_service_rate_limit_rules(db, user_id)}
 
 
 @router.get("/account/api/queue-status")
@@ -466,6 +482,18 @@ def _ensure_self_service_account_active(db: Database, user_id: int) -> None:
         raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
     if not int(user["is_active"]):
         raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
+
+
+def _self_service_rate_limit_rules(db: Database, user_id: int) -> list[dict[str, object]]:
+    return [
+        {
+            "period": rule.period,
+            "period_label": PERIOD_CHOICES.get(rule.period, rule.period),
+            "max_requests": rule.max_requests,
+            "is_active": rule.is_active,
+        }
+        for rule in load_user_rate_limit_rules(db, user_id).rules
+    ]
 
 
 def _discord_string_field(value: object, *, field: str, required: bool = False) -> str | None:

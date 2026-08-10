@@ -339,6 +339,64 @@ def test_discord_registration_inherits_group_member_rate_limit_rules(tmp_path: P
         ]
 
 
+def test_account_shows_only_user_rate_limit_rules_with_session_auth(tmp_path: Path, monkeypatch):
+    config_path, group_id = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        endpoint = "/account/api/rate-limit-rules"
+        assert client.get(endpoint).status_code == 401
+
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        now = utc_now_iso()
+        for period, max_requests, is_active in (
+            ("minute", 3, 1),
+            ("hour", 60, 0),
+            ("month", 500, 1),
+        ):
+            client.app.state.db.execute(
+                """
+                INSERT INTO rate_limit_rules (user_id, period, max_requests, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, period, max_requests, is_active, now),
+            )
+        client.app.state.db.execute(
+            """
+            INSERT INTO group_rate_limit_rules (group_id, period, max_requests, is_active, created_at)
+            VALUES (?, 'day', 999, 1, ?)
+            """,
+            (group_id, now),
+        )
+
+        page = client.get("/account")
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "用户独享限流" in text
+        assert "组共享限流" not in text
+        assert "每分钟" in text
+        assert "每小时" in text
+        assert "每 30 天（滚动）" in text
+        assert "每个周期 3 次" in text
+        assert "每个周期 60 次" in text
+        assert "每个周期 500 次" in text
+        assert "已停用" in text
+        assert "999" not in page.text
+        assert page.text.count("data-rate-limit-rule=") == 3
+
+        rules = client.get(endpoint)
+        assert rules.status_code == 200
+        assert rules.json() == {
+            "rules": [
+                {"period": "minute", "period_label": "每分钟", "max_requests": 3, "is_active": True},
+                {"period": "hour", "period_label": "每小时", "max_requests": 60, "is_active": False},
+                {"period": "month", "period_label": "每 30 天（滚动）", "max_requests": 500, "is_active": True},
+            ]
+        }
+
+
 def test_account_shows_group_daily_usage_and_hides_zero_anlas_quota(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(
         tmp_path,
