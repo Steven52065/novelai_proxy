@@ -985,6 +985,170 @@ def test_failed_discord_member_request_does_not_disable_existing_account(tmp_pat
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
 
 
+def _verification_state(client: TestClient, user_id: int) -> tuple[int, int]:
+    row = client.app.state.db.query_one(
+        "SELECT is_active, disabled_by_discord_verification FROM users WHERE id = ?",
+        (user_id,),
+    )
+    return int(row["is_active"]), int(row["disabled_by_discord_verification"])
+
+
+def _admin_set_active(client: TestClient, user_id: int, is_active: bool) -> None:
+    resp = client.patch(
+        f"/admin/api/users/{user_id}",
+        auth=("admin", "admin123"),
+        json={"is_active": is_active},
+    )
+    assert resp.status_code == 200
+
+
+def test_discord_login_reactivates_account_disabled_by_verification(tmp_path: Path, monkeypatch):
+    """掉身份组被停用后，重新拿回身份组登录应自动恢复启用。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert _verification_state(client, user_id) == (1, 0)
+        # 恢复后原 API Key 立即可用，不需要重置；也不应重复注册出第二个账号
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+        assert _count_rows(client.app.state.db, "users") == 1
+
+
+def test_admin_disabled_account_is_not_reactivated_by_passing_verification(tmp_path: Path, monkeypatch):
+    """管理员手工停用的账号，即使用户通过验证也不得自动恢复，否则等于可以自助解封。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        _admin_set_active(client, user_id, False)
+        assert _verification_state(client, user_id) == (0, 0)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Account is disabled"
+        assert _verification_state(client, user_id) == (0, 0)
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 403
+
+
+def test_admin_disable_after_verification_disable_is_not_undone_by_verification(tmp_path: Path, monkeypatch):
+    """验证停用→管理员启用→管理员再停用后，通过验证也不得自动恢复。
+
+    这是残留标记的回归用例：若管理员改动启用状态时不清除标记，
+    管理员后来的停用会被用户下一次验证通过悄悄撤销。
+    """
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        _admin_set_active(client, user_id, True)
+        assert _verification_state(client, user_id) == (1, 0)
+        _admin_set_active(client, user_id, False)
+        assert _verification_state(client, user_id) == (0, 0)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Account is disabled"
+        assert _verification_state(client, user_id) == (0, 0)
+
+
+def test_admin_can_enable_account_disabled_by_verification(tmp_path: Path, monkeypatch):
+    """被验证停用的账号必须仍然可以由管理员手工启用。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 403
+
+        _admin_set_active(client, user_id, True)
+
+        assert _verification_state(client, user_id) == (1, 0)
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+
+
+def test_account_disabled_by_verification_recovers_when_verification_is_disabled(tmp_path: Path, monkeypatch):
+    """关闭验证后验证平凡通过，之前被验证停用的账号下次登录即自动恢复。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_guild=False)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+        # 等价于关闭验证开关之前那一轮验证失败造成的停用
+        accounts.disable_linked_discord_user(client.app.state.db, discord_user_id=DISCORD_USER_ID)
+        assert _verification_state(client, user_id) == (0, 1)
+
+        resp = _complete_discord_login(client)
+
+        assert resp.status_code == 200
+        assert _verification_state(client, user_id) == (1, 0)
+
+
+def test_account_disabled_before_upgrade_is_not_reactivated(tmp_path: Path, monkeypatch):
+    """升级前停用的存量账号没有来源标记，必须按管理员停用处理，不得被自动放出来。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+        # 旧版本只会写 is_active，不会写来源标记
+        client.app.state.db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        assert _verification_state(client, user_id) == (0, 0)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Account is disabled"
+        assert _verification_state(client, user_id) == (0, 0)
+
+
 def _write_self_service_config(
     tmp_path: Path,
     *,

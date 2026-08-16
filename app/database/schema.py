@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     tier TEXT NOT NULL DEFAULT 'normal',
     is_active INTEGER NOT NULL DEFAULT 1,
+    disabled_by_discord_verification INTEGER NOT NULL DEFAULT 0,
     free_small_only INTEGER NOT NULL DEFAULT 0,
     free_small_daily_limit_enabled INTEGER NOT NULL DEFAULT 0,
     free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
@@ -268,6 +269,8 @@ CREATE TABLE IF NOT EXISTS novelai_settings (
 
 USERS_COLUMNS = (
     ("api_key", "TEXT"),
+    # 默认 0 表示“停用来源未知”，升级前就已停用的存量账号因此不会被自助登录自动恢复。
+    ("disabled_by_discord_verification", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_only", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0"),

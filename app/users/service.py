@@ -161,6 +161,9 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
     if data.is_active is not None:
         fields.append("is_active = ?")
         params.append(1 if data.is_active else 0)
+        # 管理员显式改动启用状态后，“由 Discord 验证停用”的标记即失效。保留它会让管理员
+        # 随后的停用被下一次验证通过自动撤销，等于用户可以自行解除封禁。
+        fields.append("disabled_by_discord_verification = 0")
     if data.free_small_only is not None:
         fields.append("free_small_only = ?")
         params.append(1 if data.free_small_only else 0)

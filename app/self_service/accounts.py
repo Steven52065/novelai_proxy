@@ -43,7 +43,10 @@ def disable_linked_discord_user(db: Database, *, discord_user_id: str) -> int | 
         if row is None or row["deleted_at"] is not None or not int(row["is_active"]):
             return None
         user_id = int(row["id"])
-        conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        conn.execute(
+            "UPDATE users SET is_active = 0, disabled_by_discord_verification = 1 WHERE id = ?",
+            (user_id,),
+        )
         return user_id
 
 
@@ -54,13 +57,25 @@ def login_or_register_discord_user(
     default_group_id: int,
     profile: DiscordProfile,
 ) -> DiscordLoginResult:
+    """登录或注册 Discord 自助账号。
+
+    调用方必须已经完成配置要求的服务器/身份组验证：本函数把“能走到这里”视为验证通过，
+    并据此恢复此前因验证失败而被停用的账号。
+    """
     with db.transaction() as conn:
         row = _get_discord_link(conn, profile.user_id)
         if row is not None:
             if row["deleted_at"] is not None:
                 raise SelfServiceAccountDeleted()
             if not int(row["is_active"]):
-                raise SelfServiceAccountDisabled()
+                # 只恢复由验证失败停用的账号。管理员手工停用的必须保持停用，
+                # 否则用户重新走一次 Discord 登录就能绕过封禁。
+                if not int(row["disabled_by_discord_verification"]):
+                    raise SelfServiceAccountDisabled()
+                conn.execute(
+                    "UPDATE users SET is_active = 1, disabled_by_discord_verification = 0 WHERE id = ?",
+                    (int(row["user_id"]),),
+                )
             _sync_existing_discord_link(conn, row, profile)
             return DiscordLoginResult(user_id=int(row["user_id"]), api_key=None)
 
@@ -131,7 +146,7 @@ def _get_discord_link(conn: Connection, discord_user_id: str):
     return conn.execute(
         """
         SELECT l.id AS link_id, l.user_id, l.discord_username, l.discord_global_name, l.discord_avatar,
-               u.name, u.is_active, u.deleted_at
+               u.name, u.is_active, u.disabled_by_discord_verification, u.deleted_at
         FROM discord_user_links l
         JOIN users u ON u.id = l.user_id
         WHERE l.discord_user_id = ?
