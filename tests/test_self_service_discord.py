@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app.self_service.accounts as accounts
 from app.database import Database, utc_now_iso
 from app.quota_manager import QuotaManager
+from app.self_service.discord import DiscordMemberNotFound
 from app.self_service.routes import API_KEY_FLASH_COOKIE
 from helpers import PAYLOAD, FakeUpstream, csrf_form, write_test_config
 
@@ -19,20 +20,33 @@ DISCORD_USER_ID = "100000000000000001"
 SECOND_DISCORD_USER_ID = "100000000000000002"
 REQUIRED_GUILD_ID = "200000000000000001"
 OTHER_GUILD_ID = "200000000000000002"
+REQUIRED_ROLE_ID = "300000000000000001"
+SECOND_REQUIRED_ROLE_ID = "300000000000000003"
+OTHER_ROLE_ID = "300000000000000002"
 
 
 class FakeDiscordClient:
-    def __init__(self, *, user: object | None = None, guilds: object | None = None, fail_at: str | None = None):
+    def __init__(
+        self,
+        *,
+        user: object | None = None,
+        guilds: object | None = None,
+        member: object | None = None,
+        fail_at: str | None = None,
+        member_not_found: bool = False,
+    ):
         self.user = (
             user
             if user is not None
             else {"id": DISCORD_USER_ID, "username": "tester", "global_name": "Tester", "avatar": "avatar"}
         )
         self.guilds = guilds if guilds is not None else [{"id": REQUIRED_GUILD_ID}]
+        self.member = member if member is not None else {"roles": [REQUIRED_ROLE_ID]}
         self.fail_at = fail_at
+        self.member_not_found = member_not_found
 
-    def authorization_url(self, *, redirect_uri: str, state: str) -> str:
-        return f"https://discord.example/oauth?state={state}&redirect_uri={redirect_uri}&scope=identify+guilds"
+    def authorization_url(self, *, redirect_uri: str, state: str, scope: str = "identify guilds") -> str:
+        return f"https://discord.example/oauth?state={state}&redirect_uri={redirect_uri}&scope={scope}"
 
     async def exchange_code(self, *, code: str, redirect_uri: str) -> dict:
         if self.fail_at == "token":
@@ -48,6 +62,13 @@ class FakeDiscordClient:
         if self.fail_at == "guilds":
             raise RuntimeError("guilds failed")
         return self.guilds
+
+    async def fetch_guild_member(self, *, access_token: str, guild_id: str) -> object:
+        if self.member_not_found:
+            raise DiscordMemberNotFound()
+        if self.fail_at == "member":
+            raise RuntimeError("member failed")
+        return self.member
 
 
 class HTTPStatusErrorDiscordClient(FakeDiscordClient):
@@ -747,6 +768,223 @@ def test_self_service_reset_key_invalidates_old_key_and_does_not_store_discord_t
         assert "secret-refresh-token" not in str([tuple(row) for row in link_rows])
 
 
+def test_discord_oauth_scope_requests_only_identify_when_no_verification(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, require_guild=False)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        start = client.get("/auth/discord/start", follow_redirects=False)
+
+        assert start.status_code == 303
+        scope = parse_qs(urlparse(start.headers["location"]).query)["scope"][0]
+        assert scope == "identify"
+
+
+def test_discord_oauth_scope_requests_guilds_when_only_guild_verification(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        start = client.get("/auth/discord/start", follow_redirects=False)
+
+        assert start.status_code == 303
+        scope = parse_qs(urlparse(start.headers["location"]).query)["scope"][0]
+        assert scope == "identify guilds"
+
+
+def test_discord_oauth_scope_narrows_to_members_read_when_role_verification_enabled(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        start = client.get("/auth/discord/start", follow_redirects=False)
+
+        assert start.status_code == 303
+        scope = parse_qs(urlparse(start.headers["location"]).query)["scope"][0]
+        # guilds.members.read 只暴露指定服务器的成员信息，不再索取用户的全部服务器列表
+        assert scope == "identify guilds.members.read"
+        assert "guilds " not in f"{scope} "
+
+
+def test_discord_registration_without_verification_accepts_any_user(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, require_guild=False)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        # fail_at 覆盖两个验证端点：一旦被调用就会抛错，用来证明关闭验证后不会发起这些请求
+        client.app.state.discord_oauth_client = FakeDiscordClient(
+            guilds=[{"id": OTHER_GUILD_ID}],
+            fail_at="guilds",
+        )
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert _count_rows(client.app.state.db, "users") == 1
+
+
+def test_discord_registration_with_required_role_succeeds(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(
+            member={"roles": [OTHER_ROLE_ID, REQUIRED_ROLE_ID]},
+        )
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert _extract_api_key(resp.text)
+        assert _count_rows(client.app.state.db, "users") == 1
+
+
+def test_discord_registration_accepts_any_one_of_the_required_roles(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(
+        tmp_path,
+        require_role=True,
+        required_role_ids=[REQUIRED_ROLE_ID, SECOND_REQUIRED_ROLE_ID],
+    )
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [SECOND_REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert _count_rows(client.app.state.db, "users") == 1
+
+
+@pytest.mark.parametrize("roles", [[OTHER_ROLE_ID], []])
+def test_discord_user_without_required_role_is_rejected(tmp_path: Path, monkeypatch, roles: list[str]):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": roles})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Discord user does not have the required role"
+        assert _count_rows(client.app.state.db, "users") == 0
+
+
+def test_discord_non_member_is_rejected_as_guild_failure_when_role_verification_enabled(
+    tmp_path: Path,
+    monkeypatch,
+):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        # 成员接口在非成员时返回 404，等价于服务器验证失败
+        client.app.state.discord_oauth_client = FakeDiscordClient(member_not_found=True)
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Discord user is not in the required guild"
+        assert _count_rows(client.app.state.db, "users") == 0
+
+
+def test_discord_login_without_required_role_disables_existing_account(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Discord user does not have the required role"
+        user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert user["is_active"] == 0
+        api_resp = client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"})
+        assert api_resp.status_code == 403
+        assert api_resp.json()["message"] == "Account disabled"
+        assert client.get("/account").status_code == 403
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        [{"roles": []}],
+        {},
+        {"roles": None},
+        {"roles": REQUIRED_ROLE_ID},
+        {"roles": [None]},
+        {"roles": [300000000000000001]},
+        {"roles": [True]},
+        {"roles": [{"unexpected": True}]},
+        {"roles": ["not-a-snowflake"]},
+        {"roles": ["0300000000000000001"]},
+        {"roles": [str(1 << 64)]},
+        {"roles": [REQUIRED_ROLE_ID, {"unexpected": True}]},
+    ],
+)
+def test_invalid_discord_member_response_does_not_disable_existing_account(
+    tmp_path: Path,
+    monkeypatch,
+    member: object,
+):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member=member)
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        # 响应格式不可信属于“情况不明”，必须 502 且绝不停用账号
+        assert resp.status_code == 502
+        assert resp.json()["message"] == "Discord OAuth request failed"
+        user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert user["is_active"] == 1
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+
+
+def test_failed_discord_member_request_does_not_disable_existing_account(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(fail_at="member")
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 502
+        assert resp.json()["message"] == "Discord OAuth request failed"
+        user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
+        assert user["is_active"] == 1
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+
+
 def _write_self_service_config(
     tmp_path: Path,
     *,
@@ -756,6 +994,9 @@ def _write_self_service_config(
     free_small_daily_limit_enabled: bool = False,
     free_small_daily_limit: int = 0,
     default_image_format_policy: str = "follow_global",
+    require_guild: bool = True,
+    require_role: bool = False,
+    required_role_ids: list[str] | None = None,
 ) -> tuple[Path, int]:
     config_path = write_test_config(tmp_path)
     db = Database(str(tmp_path / "test.db"))
@@ -770,6 +1011,8 @@ def _write_self_service_config(
         default_image_format_policy=default_image_format_policy,
     )
     db.close()
+    role_ids = required_role_ids if required_role_ids is not None else [REQUIRED_ROLE_ID]
+    formatted_role_ids = ", ".join(f'"{role_id}"' for role_id in role_ids)
     with config_path.open("a", encoding="utf-8") as f:
         f.write(
             f"""
@@ -779,7 +1022,10 @@ self_service:
     client_id: "client-id"
     client_secret: "client-secret"
     redirect_uri: "http://testserver/auth/discord/callback"
+    require_guild: {"true" if require_guild else "false"}
     required_guild_id: "{REQUIRED_GUILD_ID}"
+    require_role: {"true" if require_role else "false"}
+    required_role_ids: [{formatted_role_ids}]
     default_group_id: {group_id}
     session_secret: "test-session-secret"
 """

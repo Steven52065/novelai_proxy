@@ -1028,6 +1028,134 @@ def test_discord_self_service_validation_rejects_invalid_required_guild_id(
     db.close()
 
 
+def test_discord_self_service_validation_skips_guild_id_when_guild_check_disabled(tmp_path: Path):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 1, ?)",
+        ("enabled", utc_now_iso()),
+    )
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": True,
+                    "client_id": "client",
+                    "client_secret": "secret",
+                    "require_guild": False,
+                    "required_guild_id": "",
+                    "default_group_id": 1,
+                    "session_secret": "session-secret",
+                }
+            }
+        }
+    )
+
+    validate_discord_self_service_config(db, config)
+    db.close()
+
+
+def test_discord_self_service_validation_requires_role_ids_when_role_check_enabled(tmp_path: Path):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 1, ?)",
+        ("enabled", utc_now_iso()),
+    )
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": True,
+                    "client_id": "client",
+                    "client_secret": "secret",
+                    "required_guild_id": "200000000000000001",
+                    "require_role": True,
+                    "required_role_ids": [],
+                    "default_group_id": 1,
+                    "session_secret": "session-secret",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="self_service.discord.required_role_ids"):
+        validate_discord_self_service_config(db, config)
+
+    db.close()
+
+
+def test_discord_self_service_validation_requires_guild_check_for_role_check(tmp_path: Path):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 1, ?)",
+        ("enabled", utc_now_iso()),
+    )
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": True,
+                    "client_id": "client",
+                    "client_secret": "secret",
+                    "require_guild": False,
+                    "require_role": True,
+                    "required_role_ids": ["300000000000000001"],
+                    "default_group_id": 1,
+                    "session_secret": "session-secret",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="require_role requires"):
+        validate_discord_self_service_config(db, config)
+
+    db.close()
+
+
+@pytest.mark.parametrize(
+    "required_role_id",
+    [
+        "role",
+        "0300000000000000001",
+        str(1 << 64),
+    ],
+)
+def test_discord_self_service_validation_rejects_invalid_required_role_id(
+    tmp_path: Path,
+    required_role_id: str,
+):
+    db = Database(str(tmp_path / "test.db"))
+    db.init_schema()
+    db.execute(
+        "INSERT INTO user_groups(name, is_active, created_at) VALUES (?, 1, ?)",
+        ("enabled", utc_now_iso()),
+    )
+    config = AppConfig.model_validate(
+        {
+            "self_service": {
+                "discord": {
+                    "enabled": True,
+                    "client_id": "client",
+                    "client_secret": "secret",
+                    "required_guild_id": "200000000000000001",
+                    "require_role": True,
+                    "required_role_ids": ["300000000000000001", required_role_id],
+                    "default_group_id": 1,
+                    "session_secret": "session-secret",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="valid Discord role snowflake"):
+        validate_discord_self_service_config(db, config)
+
+    db.close()
+
+
 def test_usage_logs_unique_constraint_migration_allows_retry_attempts(tmp_path: Path):
     db_path = tmp_path / "old-schema.db"
     conn = sqlite3.connect(db_path)

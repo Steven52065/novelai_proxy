@@ -16,6 +16,9 @@ def test_self_service_config_defaults_to_disabled():
 
     assert config.self_service.discord.enabled is False
     assert config.self_service.discord.client_id == ""
+    assert config.self_service.discord.require_guild is True
+    assert config.self_service.discord.require_role is False
+    assert config.self_service.discord.required_role_ids == []
     assert config.self_service.discord.default_group_id is None
     assert config.free_small_daily_limit.reset_hour_utc8 == 0
     assert config.image_hosting.local_format_conversion is False

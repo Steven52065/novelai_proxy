@@ -172,7 +172,10 @@ class DiscordSelfServiceConfig(BaseModel):
     client_id: str = ""
     client_secret: str = ""
     redirect_uri: str = "http://127.0.0.1:8080/auth/discord/callback"
+    require_guild: bool = True
     required_guild_id: str = ""
+    require_role: bool = False
+    required_role_ids: list[str] = Field(default_factory=list)
     default_group_id: int | None = Field(default=None, ge=1)
     session_secret: str = ""
 

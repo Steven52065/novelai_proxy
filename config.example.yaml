@@ -149,8 +149,18 @@ self_service:
     client_secret: ""
     # Discord OAuth2 Redirect URI，必须与 Developer Portal 中登记的地址完全一致。
     redirect_uri: "http://127.0.0.1:8080/auth/discord/callback"
+    # 是否验证用户在指定 Discord 服务器中。默认 true，关闭后任何 Discord 用户都能自助注册。
+    require_guild: true
     # 允许自助注册的 Discord 服务器 ID（Guild ID），必须是纯数字 Snowflake 字符串，不是频道 ID 或角色 ID。
+    # require_guild 为 true 时必填。
     required_guild_id: ""
+    # 是否额外验证用户在该服务器中拥有指定身份组。默认 false，需要同时保持 require_guild: true。
+    # 开启后 OAuth 申请的权限会从「读取全部服务器列表」收窄为「只读取该服务器的成员信息」，
+    # 但已授权的用户下次登录会重新看到一次 Discord 授权页。
+    require_role: false
+    # 允许自助注册的身份组 ID 列表，拥有其中任意一个即可通过。必须是纯数字 Snowflake 字符串。
+    # require_role 为 true 时必填。在 Discord 开启开发者模式后，右键身份组即可复制 ID。
+    required_role_ids: []
     # 本地 user_groups.id。启用 Discord 自助注册时必须指向一个存在且启用的用户组。
     default_group_id:
     # 自助登录 session 签名密钥。生产环境请使用高强度随机字符串，不能提交真实值。

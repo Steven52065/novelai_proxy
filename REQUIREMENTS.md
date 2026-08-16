@@ -144,6 +144,11 @@ Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
 
 - `redirect_uri` 必须与 Discord Developer Portal 中登记的 OAuth2 Redirect URI 完全一致。
 - `required_guild_id` 是允许注册的 Discord 服务器 ID（Guild ID），不是频道 ID 或角色 ID。
+- `require_guild` 控制是否验证服务器成员身份，默认开启；关闭后任何 Discord 用户都可自助注册。
+- `require_role` 控制是否额外验证身份组，默认关闭，需要 `require_guild: true` 同时开启。
+- `required_role_ids` 是允许注册的身份组 ID 列表，用户拥有其中任意一个即通过。
+- 开启 `require_role` 后 OAuth scope 由 `identify guilds` 变为 `identify guilds.members.read`，申请的权限范围**收窄**（只读取指定服务器的成员信息，不再读取用户的全部服务器列表），但已授权用户下次登录会重新看到一次 Discord 授权页。不需要 Bot Token，也不需要特权 Server Members Intent。
+- 用户退出服务器**或**失去指定身份组后再次登录，已绑定账号会被自动停用。
 - `default_group_id` 是本地 `user_groups.id`，服务启动时会校验该组存在且启用。
 - `client_secret` 和 `session_secret` 只能写入本地 `config.yaml`，不能提交到 Git。
 - 自助账号页只展示和重置本项目 Proxy API Key；代理 API 不接受 Discord token。

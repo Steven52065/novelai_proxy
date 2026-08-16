@@ -40,7 +40,13 @@ from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 from ..users import load_user_rate_limit_rules, reset_api_key
 from .accounts import DiscordProfile, disable_linked_discord_user, login_or_register_discord_user
-from .discord import DiscordOAuthClient, discord_guild_ids
+from .discord import (
+    DiscordMemberNotFound,
+    DiscordOAuthClient,
+    discord_guild_ids,
+    discord_member_role_ids,
+    discord_oauth_scope,
+)
 
 
 router = APIRouter()
@@ -73,7 +79,11 @@ async def discord_start(
     _require_discord_enabled(config)
     state = secrets.token_urlsafe(24)
     response = RedirectResponse(
-        oauth.authorization_url(redirect_uri=config.redirect_uri, state=state),
+        oauth.authorization_url(
+            redirect_uri=config.redirect_uri,
+            state=state,
+            scope=discord_oauth_scope(config),
+        ),
         status_code=303,
     )
     set_response_cookie(
@@ -129,24 +139,38 @@ async def discord_callback(
     except (TypeError, ValueError) as exc:
         _raise_discord_oauth_failure("parse_user_response", exc)
 
-    try:
-        guilds_payload = await oauth.fetch_guilds(access_token=access_token)
-    except Exception as exc:
-        _raise_discord_oauth_failure("fetch_guilds", exc)
-
-    try:
-        guild_ids = discord_guild_ids(guilds_payload)
-    except (TypeError, ValueError) as exc:
-        _raise_discord_oauth_failure("parse_guilds_response", exc)
-
-    if config.required_guild_id not in guild_ids:
-        disabled_user_id = disable_linked_discord_user(db, discord_user_id=profile.user_id)
-        if disabled_user_id is not None:
-            logger.info(
-                "discord-linked account disabled because user is not in required guild user_id=%s",
-                disabled_user_id,
+    if config.require_role:
+        try:
+            member_payload = await oauth.fetch_guild_member(
+                access_token=access_token,
+                guild_id=config.required_guild_id,
             )
-        raise HTTPException(status_code=403, detail={"message": "Discord user is not in the required guild"})
+        except DiscordMemberNotFound:
+            _reject_discord_user(db, profile, "Discord user is not in the required guild")
+        except Exception as exc:
+            _raise_discord_oauth_failure("fetch_guild_member", exc)
+
+        try:
+            role_ids = discord_member_role_ids(member_payload)
+        except (TypeError, ValueError) as exc:
+            _raise_discord_oauth_failure("parse_guild_member_response", exc)
+
+        if role_ids.isdisjoint(config.required_role_ids):
+            _reject_discord_user(db, profile, "Discord user does not have the required role")
+
+    elif config.require_guild:
+        try:
+            guilds_payload = await oauth.fetch_guilds(access_token=access_token)
+        except Exception as exc:
+            _raise_discord_oauth_failure("fetch_guilds", exc)
+
+        try:
+            guild_ids = discord_guild_ids(guilds_payload)
+        except (TypeError, ValueError) as exc:
+            _raise_discord_oauth_failure("parse_guilds_response", exc)
+
+        if config.required_guild_id not in guild_ids:
+            _reject_discord_user(db, profile, "Discord user is not in the required guild")
 
     login = login_or_register_discord_user(
         db,
@@ -370,6 +394,17 @@ def _require_discord_enabled(config: DiscordSelfServiceConfig) -> DiscordSelfSer
     if not config.enabled:
         raise HTTPException(status_code=404, detail={"message": "Discord self-service is disabled"})
     return config
+
+
+def _reject_discord_user(db: Database, profile: DiscordProfile, message: str) -> NoReturn:
+    disabled_user_id = disable_linked_discord_user(db, discord_user_id=profile.user_id)
+    if disabled_user_id is not None:
+        logger.info(
+            "discord-linked account disabled because verification failed user_id=%s reason=%s",
+            disabled_user_id,
+            message,
+        )
+    raise HTTPException(status_code=403, detail={"message": message})
 
 
 def _raise_discord_oauth_failure(phase: str, exc: Exception, *, extra: dict[str, Any] | None = None) -> NoReturn:
