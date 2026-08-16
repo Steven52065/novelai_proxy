@@ -1002,6 +1002,44 @@ def _admin_set_active(client: TestClient, user_id: int, is_active: bool) -> None
     assert resp.status_code == 200
 
 
+def _admin_rename_via_edit_form(client: TestClient, user_id: int, new_name: str) -> None:
+    """通过后台用户编辑表单改名，复现管理员在页面上保存一次的真实请求。
+
+    表单对停用中的账号不会提交 is_active（复选框未勾选），其余字段按页面回填当前值原样提交，
+    因此这次保存并没有改动启用状态。
+    """
+    login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+    assert login.status_code == 200
+    row = client.app.state.db.query_one(
+        """
+        SELECT u.tier, u.is_active, u.group_id, u.allowed_endpoints, u.image_format_policy,
+               q.total, q.reset_period, q.reset_day
+        FROM users u
+        LEFT JOIN user_anlas_quota q ON q.user_id = u.id
+        WHERE u.id = ?
+        """,
+        (user_id,),
+    )
+    data: dict[str, object] = {
+        "name": new_name,
+        "tier": str(row["tier"]),
+        "group_id": str(row["group_id"]),
+        "anlas_total": str(int(row["total"] or 0)),
+        "reset_period": str(row["reset_period"] or "month"),
+        "reset_day": str(int(row["reset_day"] or 1)),
+        "allowed_endpoints": str(row["allowed_endpoints"]).split(","),
+        "image_format_policy": str(row["image_format_policy"]),
+    }
+    if int(row["is_active"]):
+        data["is_active"] = "on"
+    resp = client.post(
+        f"/admin/users/{user_id}",
+        data=csrf_form(client, data),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+
 def test_discord_login_reactivates_account_disabled_by_verification(tmp_path: Path, monkeypatch):
     """掉身份组被停用后，重新拿回身份组登录应自动恢复启用。"""
     config_path, _ = _write_self_service_config(tmp_path, require_role=True)
@@ -1084,6 +1122,68 @@ def test_admin_disable_after_verification_disable_is_not_undone_by_verification(
         assert resp.status_code == 403
         assert resp.json()["message"] == "Account is disabled"
         assert _verification_state(client, user_id) == (0, 0)
+
+
+def test_admin_editing_other_fields_does_not_revoke_auto_recovery(tmp_path: Path, monkeypatch):
+    """管理员在后台编辑表单里改别的字段，不得让验证停用的账号失去自动恢复能力。
+
+    编辑表单每次保存都会原样回传当前启用状态，若据此认定“管理员手工停用”，
+    管理员改个名字就会把验证停用悄悄升级成永久停用，用户重新拿回身份组也回不来。
+    只有管理员真的改动了启用状态才算手工停用。
+    """
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        _admin_rename_via_edit_form(client, user_id, "管理员备注名")
+
+        assert client.app.state.db.query_one("SELECT name FROM users WHERE id = ?", (user_id,))["name"] == "管理员备注名"
+        assert _verification_state(client, user_id) == (0, 1)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 200
+        assert _verification_state(client, user_id) == (1, 0)
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
+
+
+def test_admin_resubmitting_current_active_state_does_not_revoke_auto_recovery(tmp_path: Path, monkeypatch):
+    """同上，但走 JSON 接口：请求里带了 is_active 却与当前值相同，同样不算手工停用。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        resp = client.patch(
+            f"/admin/api/users/{user_id}",
+            auth=("admin", "admin123"),
+            json={"name": "仅改名", "is_active": False},
+        )
+        assert resp.status_code == 200
+        assert _verification_state(client, user_id) == (0, 1)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 200
+        assert _verification_state(client, user_id) == (1, 0)
 
 
 def test_admin_can_enable_account_disabled_by_verification(tmp_path: Path, monkeypatch):
