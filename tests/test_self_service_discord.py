@@ -1002,11 +1002,17 @@ def _admin_set_active(client: TestClient, user_id: int, is_active: bool) -> None
     assert resp.status_code == 200
 
 
-def _admin_rename_via_edit_form(client: TestClient, user_id: int, new_name: str) -> None:
-    """通过后台用户编辑表单改名，复现管理员在页面上保存一次的真实请求。
+def _admin_save_via_edit_form(
+    client: TestClient,
+    user_id: int,
+    new_name: str,
+    *,
+    hard_disable: bool = False,
+) -> None:
+    """通过后台用户编辑表单保存一次，复现管理员在页面上点保存的真实请求。
 
     表单对停用中的账号不会提交 is_active（复选框未勾选），其余字段按页面回填当前值原样提交，
-    因此这次保存并没有改动启用状态。
+    因此默认这次保存并没有改动启用状态。hard_disable 对应页面上显式的“永久停用”开关。
     """
     login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
     assert login.status_code == 200
@@ -1032,6 +1038,8 @@ def _admin_rename_via_edit_form(client: TestClient, user_id: int, new_name: str)
     }
     if int(row["is_active"]):
         data["is_active"] = "on"
+    if hard_disable:
+        data["hard_disable"] = "on"
     resp = client.post(
         f"/admin/users/{user_id}",
         data=csrf_form(client, data),
@@ -1145,7 +1153,7 @@ def test_admin_editing_other_fields_does_not_revoke_auto_recovery(tmp_path: Path
         assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
         assert _verification_state(client, user_id) == (0, 1)
 
-        _admin_rename_via_edit_form(client, user_id, "管理员备注名")
+        _admin_save_via_edit_form(client, user_id, "管理员备注名")
 
         assert client.app.state.db.query_one("SELECT name FROM users WHERE id = ?", (user_id,))["name"] == "管理员备注名"
         assert _verification_state(client, user_id) == (0, 1)
@@ -1157,8 +1165,8 @@ def test_admin_editing_other_fields_does_not_revoke_auto_recovery(tmp_path: Path
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
 
 
-def test_admin_resubmitting_current_active_state_does_not_revoke_auto_recovery(tmp_path: Path, monkeypatch):
-    """同上，但走 JSON 接口：请求里带了 is_active 却与当前值相同，同样不算手工停用。"""
+def test_admin_api_omitting_is_active_does_not_revoke_auto_recovery(tmp_path: Path, monkeypatch):
+    """同上，但走 JSON 接口：请求里没有 is_active 时只改别的字段，不影响自动恢复。"""
     config_path, _ = _write_self_service_config(tmp_path, require_role=True)
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
     from app.main import app
@@ -1175,7 +1183,7 @@ def test_admin_resubmitting_current_active_state_does_not_revoke_auto_recovery(t
         resp = client.patch(
             f"/admin/api/users/{user_id}",
             auth=("admin", "admin123"),
-            json={"name": "仅改名", "is_active": False},
+            json={"name": "仅改名"},
         )
         assert resp.status_code == 200
         assert _verification_state(client, user_id) == (0, 1)
@@ -1184,6 +1192,104 @@ def test_admin_resubmitting_current_active_state_does_not_revoke_auto_recovery(t
         client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
         assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 200
         assert _verification_state(client, user_id) == (1, 0)
+
+
+def test_admin_api_explicit_disable_is_treated_as_hard_ban(tmp_path: Path, monkeypatch):
+    """管理 API 显式提交 is_active=false 即视为管理员手工停用，通过验证也不得自动恢复。
+
+    管理 API 只在请求里真的出现 is_active 时才下发该字段，所以“显式提交”本身就是管理员意图，
+    不需要再与当前值比对：即使账号此刻已经是停用状态，这一次提交也算管理员确认封禁。
+    """
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        _admin_set_active(client, user_id, False)
+        assert _verification_state(client, user_id) == (0, 0)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Account is disabled"
+        assert _verification_state(client, user_id) == (0, 0)
+
+
+def test_admin_hard_disable_via_edit_form_blocks_auto_recovery(tmp_path: Path, monkeypatch):
+    """后台编辑表单勾选“永久停用”后，账号不再因通过 Discord 验证而自动恢复。
+
+    表单里“未勾选启用”对停用账号来说和“没碰这个字段”无法区分，因此提供独立的开关，
+    让管理员在不先启用再停用的前提下也能一步确认封禁。
+    """
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = _complete_discord_login(client)
+        api_key = _extract_api_key(page.text)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        _admin_save_via_edit_form(client, user_id, "封禁用户", hard_disable=True)
+        assert _verification_state(client, user_id) == (0, 0)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "Account is disabled"
+        assert _verification_state(client, user_id) == (0, 0)
+        assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 403
+
+
+def test_user_edit_page_shows_hard_disable_only_for_verification_disabled_account(tmp_path: Path, monkeypatch):
+    """“永久停用”开关只对因验证停用的账号出现，否则管理员看不出该账号会自动恢复。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+
+        page = client.get(f"/admin/users/{user_id}")
+        assert page.status_code == 200
+        assert "hard_disable" not in page.text
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        page = client.get(f"/admin/users/{user_id}")
+        assert page.status_code == 200
+        assert "hard_disable" in page.text
+        assert "永久停用" in page.text
+
+        _admin_set_active(client, user_id, True)
+        assert _verification_state(client, user_id) == (1, 0)
+
+        page = client.get(f"/admin/users/{user_id}")
+        assert page.status_code == 200
+        assert "hard_disable" not in page.text
 
 
 def test_admin_can_enable_account_disabled_by_verification(tmp_path: Path, monkeypatch):

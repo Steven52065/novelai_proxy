@@ -236,6 +236,16 @@
           </label>
         </div>
 
+        {% if not user.is_active and user.disabled_by_discord_verification %}
+        <p class="muted muted-sm form-hint-neg">该账号因 Discord 验证失败被停用，重新通过验证后会自动恢复启用。</p>
+        <div class="responsive-actions check-row">
+          <label class="check check-muted">
+            <input name="hard_disable" type="checkbox">
+            永久停用（不再因 Discord 验证通过而自动恢复）
+          </label>
+        </div>
+        {% endif %}
+
         <div class="responsive-grid grid-12-1 grid-align-end">
           <label class="check check-muted">
             <input name="free_small_daily_limit_enabled" type="checkbox" {{ "checked" if user.free_small_daily_limit_enabled else "" }}>

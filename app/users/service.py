@@ -161,12 +161,11 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
     if data.is_active is not None:
         fields.append("is_active = ?")
         params.append(1 if data.is_active else 0)
-        # 管理员真的改动了启用状态后，“由 Discord 验证停用”的标记即失效。保留它会让管理员
-        # 随后的停用被下一次验证通过自动撤销，等于用户可以自行解除封禁。
-        # 必须先比对当前值：后台编辑表单每次提交都会原样回传当前启用状态，若无条件清零，
-        # 管理员只改个名字也会让验证停用的账号失去自动恢复，退化成永久停用。
-        if bool(data.is_active) != _current_is_active(db, user_id):
-            fields.append("disabled_by_discord_verification = 0")
+        # 收到启用状态即视为管理员的手工操作，“由 Discord 验证停用”的标记随之失效，
+        # 之后再通过验证也不会撤销管理员的决定，用户无法靠重新登录自行解封。
+        # 调用方负责只在管理员确实表达了意图时才传值：后台编辑表单每次保存都会原样回传
+        # 当前启用状态，因此由表单侧先与当前值比对，避免改别的字段时误伤自动恢复。
+        fields.append("disabled_by_discord_verification = 0")
     if data.free_small_only is not None:
         fields.append("free_small_only = ?")
         params.append(1 if data.free_small_only else 0)
@@ -260,8 +259,3 @@ def user_is_available(db: Database, user_id: int) -> bool:
         (user_id,),
     )
     return row is not None and bool(row["is_active"]) and row["deleted_at"] is None
-
-
-def _current_is_active(db: Database, user_id: int) -> bool:
-    row = db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
-    return row is not None and bool(row["is_active"])

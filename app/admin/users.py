@@ -453,7 +453,7 @@ async def user_edit_page(user_id: int, request: Request):
     user = db.query_one(
         """
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
-               u.tier, u.is_active, u.free_small_only,
+               u.tier, u.is_active, u.disabled_by_discord_verification, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
                u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, NULL AS api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
@@ -519,6 +519,7 @@ async def update_user_form(
     name: str = Form(...),
     tier: str = Form(TIER_NORMAL),
     is_active: str | None = Form(None),
+    hard_disable: str | None = Form(None),
     anlas_total: int = Form(0),
     reset_period: str = Form("month"),
     reset_day: int = Form(1),
@@ -532,11 +533,17 @@ async def update_user_form(
     apply_group_defaults: str | None = Form(None),
 ):
     parsed_group_id = optional_form_int(group_id)
-    current_group_id = _get_user_group_id(request.app.state.db, user_id)
-    payload_data = {
-        "name": name,
-        "is_active": is_active == "on",
-    }
+    db = request.app.state.db
+    current_group_id = _get_user_group_id(db, user_id)
+    submitted_is_active = is_active == "on"
+    payload_data: dict[str, object] = {"name": name}
+    # 编辑表单每次保存都会原样回传当前启用状态，只有与当前值不同才算管理员改动了启用状态。
+    # 否则管理员改个名字就会清除“由 Discord 验证停用”标记，把自动恢复退化成永久停用。
+    # 想在不改动启用状态的前提下确认封禁，走下面显式的“永久停用”开关。
+    if submitted_is_active != _get_user_is_active(db, user_id):
+        payload_data["is_active"] = submitted_is_active
+    elif not submitted_is_active and hard_disable == "on":
+        payload_data["is_active"] = False
     if apply_group_defaults == "on":
         payload_data.update(
             {
@@ -739,6 +746,11 @@ def _get_user_group_id(db: Database, user_id: int) -> int | None:
     if row is None or row["group_id"] is None:
         return None
     return int(row["group_id"])
+
+
+def _get_user_is_active(db: Database, user_id: int) -> bool:
+    row = db.query_one("SELECT is_active FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,))
+    return row is not None and bool(row["is_active"])
 
 
 def _get_user_reset_period(db: Database, user_id: int) -> str:
