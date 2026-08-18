@@ -8,3 +8,5 @@ config.yaml
 *.db-shm
 *.db-wal
 logs/
+anlas_sync/cache/
+anlas_sync/generated/js_snippets/
