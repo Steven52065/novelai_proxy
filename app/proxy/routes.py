@@ -6,11 +6,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from novelai_python._exceptions import APIError
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
-from ..api_errors import api_error_status_code
+from ..api_errors import APIError, api_error_status_code
 from ..allowlists import (
     ENDPOINT_AUGMENT_IMAGE,
     ENDPOINT_ENCODE_VIBE,

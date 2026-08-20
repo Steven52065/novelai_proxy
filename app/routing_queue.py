@@ -8,7 +8,7 @@ import random
 import time
 from typing import Any, Awaitable, Callable, Literal
 
-from novelai_python._exceptions import APIError
+from .api_errors import APIError
 
 from .config import LoggingConfig
 from .logging_utils import logger

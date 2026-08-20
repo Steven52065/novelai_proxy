@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from novelai_python._exceptions import APIError
+from app.api_errors import APIError
 
 from app.config import UpstreamAutoDisableConfig
 from app.upstream_auto_disable import UpstreamAutoDisableService

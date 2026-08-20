@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from novelai_python._exceptions import APIError
+from app.api_errors import APIError
 
 from helpers import FakeUpstream
 

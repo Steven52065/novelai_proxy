@@ -6,9 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from novelai_python._exceptions import APIError
-
-from ..api_errors import api_error_status_code
+from ..api_errors import APIError, api_error_status_code
 from ..auth import UserContext
 from ..config import LoggingConfig
 from ..free_small_daily_limit import (

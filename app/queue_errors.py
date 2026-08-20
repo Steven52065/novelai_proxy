@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from novelai_python._exceptions import APIError
+from .api_errors import APIError
 
 
 class QueueFull(Exception):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from novelai_python._exceptions import APIError
+from .api_errors import APIError
 
 from .admin_notifications import AdminNotificationRepository
 from .config import UpstreamAutoDisableConfig

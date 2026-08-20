@@ -9,9 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-from novelai_python._exceptions import APIError
-
-from ..api_errors import api_error_status_code
+from ..api_errors import APIError, api_error_status_code
 from ..novelai_endpoints import ENCODE_VIBE_ENDPOINT, replay_endpoint_for
 from ..payload_archive import PayloadArchiveError, PayloadArchiveService, PayloadNotFoundError
 from ..queue_errors import NoAvailableUpstream, QueueFull, UpstreamExecutionTimeout

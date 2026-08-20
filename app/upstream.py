@@ -5,12 +5,12 @@ import io
 import zipfile
 from typing import Any, Protocol
 
-from novelai_python._exceptions import APIError, AuthError, DataSerializationError
 from novelai_python.credential import ApiCredential, JwtCredential, SecretStr
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.generate_image.suggest_tags import SuggestTags
 from novelai_python.sdk.ai.upscale import Upscale
 
+from .api_errors import APIError, AuthError, DataSerializationError
 from .novelai_endpoints import ENCODE_VIBE_ENDPOINT, GENERATE_IMAGE_ENDPOINT
 
 

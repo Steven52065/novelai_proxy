@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any, Callable
 
-from novelai_python._exceptions import APIError
+from .api_errors import APIError
 
 from .logging_utils import logger
 from .queue_errors import QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable

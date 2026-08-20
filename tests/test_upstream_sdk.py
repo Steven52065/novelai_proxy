@@ -4,8 +4,9 @@ import asyncio
 import json
 
 import pytest
-from novelai_python._exceptions import APIError, AuthError, DataSerializationError
 from novelai_python.credential import ApiCredential, JwtCredential
+
+from app.api_errors import APIError, AuthError, DataSerializationError
 
 from app.upstream import UpstreamClient
 

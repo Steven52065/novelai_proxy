@@ -5,7 +5,7 @@ import threading
 import time
 
 import pytest
-from novelai_python._exceptions import APIError
+from app.api_errors import APIError
 
 from app.queue_errors import (
     NoAvailableUpstream,

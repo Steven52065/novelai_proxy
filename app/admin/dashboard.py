@@ -11,11 +11,10 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
-from novelai_python._exceptions import APIError
 from novelai_python.sdk.ai._enum import Model, Sampler
 from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 
-from ..api_errors import api_error_status_code
+from ..api_errors import APIError, api_error_status_code
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger

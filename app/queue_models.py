@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
-from novelai_python._exceptions import APIError
+from .api_errors import APIError
 
 from .config import LoggingConfig
 from .request_accounting import RequestAccounting

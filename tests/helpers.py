@@ -17,7 +17,7 @@ def csrf_headers(client, *, cookie_name: str = "novelai_proxy_admin_csrf") -> di
     return {"X-CSRF-Token": client.cookies.get(cookie_name)}
 
 from fastapi.testclient import TestClient
-from novelai_python._exceptions import APIError
+from app.api_errors import APIError
 
 
 PAYLOAD = {

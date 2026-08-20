@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from novelai_python._exceptions import APIError
+from app.api_errors import APIError
 import pytest
 
 from helpers import PAYLOAD, BlockingFakeUpstream, FakeUpstream, write_test_config_with_upstreams
