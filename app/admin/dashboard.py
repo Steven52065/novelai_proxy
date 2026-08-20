@@ -11,8 +11,6 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
-from novelai_python.sdk.ai._enum import Model, Sampler
-from novelai_python.sdk.ai.generate_image import GenerateImageInfer
 
 from ..api_errors import APIError, api_error_status_code
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
@@ -36,21 +34,6 @@ web_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_page
 ws_router = APIRouter(prefix="/admin")
 DASHBOARD_WS_HEARTBEAT_SECONDS = 30.0
 DASHBOARD_QUEUE_DISPLAY_LIMIT = 80
-ADMIN_UPSTREAM_TEST_PAYLOAD = {
-    "input": "A simple red apple on a white plate.",
-    "model": "nai-diffusion-4-5-full",
-    "action": "generate",
-    "parameters": {
-        "width": 512,
-        "height": 512,
-        "scale": 5.0,
-        "sampler": "k_euler_ancestral",
-        "steps": 28,
-        "n_samples": 1,
-        "ucPreset": 0,
-        "qualityToggle": False,
-    },
-}
 UpstreamTestRuleValue = int | str | Callable[[BaseException], int | str]
 
 
@@ -380,20 +363,69 @@ def _upstream_weights_payload(request: Request | WebSocket) -> dict:
 
 
 def _admin_upstream_test_payload() -> dict:
-    params = ADMIN_UPSTREAM_TEST_PAYLOAD["parameters"]
-    req = GenerateImageInfer.build_generate(
-        ADMIN_UPSTREAM_TEST_PAYLOAD["input"],
-        model=Model(ADMIN_UPSTREAM_TEST_PAYLOAD["model"]),
-        width=params["width"],
-        height=params["height"],
-        sampler=Sampler(params["sampler"]),
-        steps=params["steps"],
-        ucPreset=params["ucPreset"],
-        qualityToggle=params["qualityToggle"],
-    )
-    req.parameters.scale = params["scale"]
-    req.parameters.n_samples = params["n_samples"]
-    return req.model_dump(mode="json", exclude_none=True)
+    # Snapshot of GenerateImageInfer.build_generate from novelai-python commit
+    # 3b2229f. Keep this explicit so the admin probe remains stable after the
+    # unmaintained SDK is removed.
+    return {
+        "input": "A simple red apple on a white plate.",
+        "model": "nai-diffusion-4-5-full",
+        "action": "generate",
+        "parameters": {
+            "params_version": 3,
+            "width": 512,
+            "height": 512,
+            "scale": 5.0,
+            "sampler": "k_euler_ancestral",
+            "steps": 28,
+            "n_samples": 1,
+            "ucPreset": 0,
+            "qualityToggle": False,
+            "autoSmea": False,
+            "dynamic_thresholding": False,
+            "controlnet_strength": 1.0,
+            "legacy": False,
+            "add_original_image": True,
+            "cfg_rescale": 0.0,
+            "noise_schedule": "karras",
+            "legacy_v3_extend": False,
+            "skip_cfg_above_sigma": None,
+            "use_coords": False,
+            "legacy_uc": False,
+            "normalize_reference_strength_multiple": True,
+            "inpaintImg2ImgStrength": 1.0,
+            "seed": 3603493819,
+            "characterPrompts": [],
+            "v4_prompt": {
+                "caption": {
+                    "base_caption": "A simple red apple on a white plate.",
+                    "char_captions": [],
+                },
+                "use_coords": False,
+                "use_order": True,
+            },
+            "v4_negative_prompt": {
+                "caption": {
+                    "base_caption": (
+                        "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, "
+                        "bad quality, jpeg artifacts, very displeasing, chromatic aberration, "
+                        "dithering, halftone, screentone, multiple views, logo, too many "
+                        "watermarks, negative space, blank page"
+                    ),
+                    "char_captions": [],
+                },
+                "legacy_uc": False,
+            },
+            "negative_prompt": (
+                "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, "
+                "bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, "
+                "halftone, screentone, multiple views, logo, too many watermarks, negative "
+                "space, blank page"
+            ),
+            "deliberate_euler_ancestral_bug": False,
+            "prefer_brownian": True,
+        },
+        "use_new_shared_trial": False,
+    }
 
 
 def _upstream_test_failure_response(
