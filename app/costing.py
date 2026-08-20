@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from novelai_python.sdk.ai._cost import CostCalculator
-from novelai_python.sdk.ai._enum import Sampler
 
+from .novelai_enums import Sampler
 from .policies.free_small_only import FreeSmallOnlyPolicy
 
 
@@ -106,7 +106,10 @@ class GenerateCostEstimator:
                 n_samples=params.n_samples,
                 account_tier=3 if is_opus else 1,
                 strength=params.strength,
-                sampler=params.sampler,
+                # The SDK cost model validates against its own Enum class.
+                # Pass the wire value while the calculator is still present;
+                # the anlas_sync migration removes this compatibility edge.
+                sampler=params.sampler.value if params.sampler is not None else None,
                 is_sm_enabled=params.sm,
                 is_sm_dynamic=params.sm_dyn,
                 is_account_active=True,

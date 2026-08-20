@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from novelai_python.sdk.ai._enum import Action, Model
+from ..novelai_enums import Action, Model
 
 
 FREE_SMALL_ONLY_ALLOWED_PARAMETERS = {
