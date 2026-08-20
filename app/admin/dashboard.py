@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from collections.abc import Callable
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
@@ -288,15 +289,18 @@ async def dashboard_ws(websocket: WebSocket):
                     "version": last_version,
                 }
             )
-    except (WebSocketDisconnect, asyncio.CancelledError):
+    except WebSocketDisconnect:
         return
     finally:
-        if receive_task is not None and not receive_task.done():
-            receive_task.cancel()
-            await asyncio.gather(receive_task, return_exceptions=True)
-        if event_task is not None and not event_task.done():
-            event_task.cancel()
-            await asyncio.gather(event_task, return_exceptions=True)
+        tasks = [task for task in (receive_task, event_task) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            # Starlette 的 TestClient 和服务器关闭都会取消外层 ASGI 任务；
+            # 屏蔽该取消直到子任务完成收尾，避免泄漏任务或把正常断连报告为失败。
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @web_router.get("/", response_class=HTMLResponse)
