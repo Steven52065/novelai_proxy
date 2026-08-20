@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from os import environ
 from pathlib import Path
@@ -216,5 +217,6 @@ async def domain_error_handler(request: Request, exc: DomainError):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.error("request validation failed path=%s errors=%s", request.url.path, json_dumps(exc.errors()))
-    return JSONResponse(status_code=400, content={"message": "Invalid request", "details": exc.errors()})
+    errors = json.loads(json_dumps(exc.errors()))
+    logger.error("request validation failed path=%s errors=%s", request.url.path, json_dumps(errors))
+    return JSONResponse(status_code=400, content={"message": "Invalid request", "details": errors})

@@ -7,8 +7,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from anlas_sync import anlas_pricing
-from novelai_python.sdk.ai.augment_image import AugmentImageInfer
-from novelai_python.sdk.ai.upscale import Upscale
 
 from ..api_errors import APIError, api_error_status_code
 from ..allowlists import (
@@ -38,6 +36,7 @@ from ..free_small_daily_limit import FreeSmallDailyLimitManager
 from ..image_format_policies import effective_image_format_config
 from ..queue_tiers import is_vip_tier
 from ..logging_utils import dump_model_payload, logger
+from ..novelai_models import AugmentImageRequest, UpscaleRequest
 from ..quota_manager import QuotaManager
 from ..request_accounting import mark_request_total_duration
 from ..routing_queue import RoutingProxyQueue
@@ -109,7 +108,7 @@ async def generate_image(
 
 @router.post("/ai/upscale")
 async def upscale(
-    req: Upscale,
+    req: UpscaleRequest,
     request: Request,
     user: UserContext = Depends(get_current_user),
     proxy_service: ProxyRequestService = Depends(get_proxy_service),
@@ -150,7 +149,7 @@ async def upscale(
 
 @router.post("/ai/augment-image")
 async def augment_image(
-    req: AugmentImageInfer,
+    req: AugmentImageRequest,
     request: Request,
     user: UserContext = Depends(get_current_user),
     proxy_service: ProxyRequestService = Depends(get_proxy_service),

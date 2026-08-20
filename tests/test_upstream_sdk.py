@@ -6,7 +6,7 @@ import json
 import pytest
 
 from app.api_errors import APIError, AuthError, DataSerializationError
-
+from app.novelai_models import AugmentImageRequest, UpscaleRequest
 from app.upstream import UpstreamClient
 
 
@@ -27,6 +27,7 @@ class RecordingSession:
     def __init__(self, response: FakeResponse):
         self.response = response
         self.posts = []
+        self.gets = []
 
     async def __aenter__(self):
         return self
@@ -36,6 +37,10 @@ class RecordingSession:
 
     async def post(self, url, data):
         self.posts.append((url, data))
+        return self.response
+
+    async def get(self, url):
+        self.gets.append(url)
         return self.response
 
 
@@ -142,6 +147,61 @@ def test_encode_vibe_posts_official_url_and_json_body(monkeypatch):
     assert result == b"vibe"
     assert session.posts == [
         ("https://image.novelai.net/ai/encode-vibe", json.dumps(payload).encode("utf-8")),
+    ]
+
+
+def test_upscale_posts_official_url_and_preserves_complete_zip(monkeypatch):
+    zip_payload = b"zip-with-multiple-files"
+    client, session = _client_with_response(monkeypatch, FakeResponse(content=zip_payload))
+    request = UpscaleRequest(image="aW1n", width=64, height=32, scale=2)
+
+    result = asyncio.run(client.upscale_zip(request))
+
+    assert result == zip_payload
+    assert session.posts == [
+        (
+            "https://api.novelai.net/ai/upscale",
+            json.dumps(request.model_dump(mode="json", exclude_none=True)).encode("utf-8"),
+        )
+    ]
+
+
+def test_augment_posts_official_url_and_json_body(monkeypatch):
+    client, session = _client_with_response(monkeypatch, FakeResponse())
+    request = AugmentImageRequest(
+        req_type="sketch",
+        width=64,
+        height=32,
+        image="aW1n",
+        defry=0,
+    )
+
+    result = asyncio.run(client.augment_image_zip(request))
+
+    assert result == b"zip-bytes"
+    assert session.posts == [
+        (
+            "https://image.novelai.net/ai/augment-image",
+            json.dumps(request.model_dump(mode="json", exclude_none=True)).encode("utf-8"),
+        )
+    ]
+
+
+def test_suggest_tags_uses_url_encoded_query_and_returns_json(monkeypatch):
+    body = {"tags": [{"tag": "red hair", "count": 3, "confidence": 0.9}]}
+    client, session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=200, json_body=body, content_type="application/json"),
+    )
+
+    result = asyncio.run(
+        client.suggest_tags("nai-diffusion-3", "red hair & blue eyes", "en")
+    )
+
+    assert result == body
+    assert session.gets == [
+        "https://image.novelai.net/ai/generate-image/suggest-tags?"
+        "model=nai-diffusion-3&prompt=red+hair+%26+blue+eyes&lang=en"
     ]
 
 

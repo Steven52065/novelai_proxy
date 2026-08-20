@@ -103,3 +103,63 @@ def test_upscale_and_augment_are_queued_and_logged(tmp_path: Path, monkeypatch):
         assert upscale.status_code == 201
         assert augment.status_code == 201
         assert {row["action"] for row in logs} >= {"upscale", "sketch"}
+        by_action = {row["action"]: row for row in logs if row["status"] == "success"}
+        assert by_action["upscale"]["request_payload"] == {
+            "image": "aW1n",
+            "width": 64,
+            "height": 64,
+            "scale": 2.0,
+        }
+        assert by_action["sketch"]["request_payload"] == {
+            "req_type": "sketch",
+            "width": 64,
+            "height": 64,
+            "image": "aW1n",
+            "defry": 0,
+        }
+
+
+def test_upscale_and_augment_models_preserve_request_validation(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "validation-user",
+                "tier": "vip",
+                "anlas_total": 100,
+                "allowed_endpoints": ["upscale", "augment-image"],
+            },
+        ).json()
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+
+        bad_upscale = client.post(
+            "/ai/upscale",
+            headers=headers,
+            json={"image": "data:image/png;base64,aW1n", "width": 64, "height": 64},
+        )
+        missing_dimensions = client.post(
+            "/ai/upscale",
+            headers=headers,
+            json={"image": "aW1n"},
+        )
+        bad_emotion = client.post(
+            "/ai/augment-image",
+            headers=headers,
+            json={
+                "req_type": "emotion",
+                "width": 64,
+                "height": 64,
+                "image": "aW1n",
+                "prompt": "smile",
+            },
+        )
+
+        assert bad_upscale.status_code == 400
+        assert missing_dimensions.status_code == 400
+        assert bad_emotion.status_code == 400
+        assert bad_upscale.json()["message"] == "Invalid request"
+        assert isinstance(bad_upscale.json()["details"], list)
