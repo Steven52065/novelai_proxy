@@ -4,7 +4,6 @@ import asyncio
 import json
 
 import pytest
-from novelai_python.credential import ApiCredential, JwtCredential
 
 from app.api_errors import APIError, AuthError, DataSerializationError
 
@@ -55,18 +54,18 @@ def _client_with_response(monkeypatch, response: FakeResponse) -> tuple[Upstream
     return client, session
 
 
-def test_upstream_uses_api_credential_for_pst_token():
+def test_upstream_uses_api_token_session_factory_for_pst_token():
     credential = UpstreamClient("pst-secret-token")._credential()
 
-    assert isinstance(credential, ApiCredential)
-    assert credential.api_token.get_secret_value() == "pst-secret-token"
+    assert credential.token_kind == "api"
+    assert credential.token == "pst-secret-token"
 
 
-def test_upstream_uses_jwt_credential_for_jwt_token():
+def test_upstream_uses_jwt_token_session_factory_for_jwt_token():
     credential = UpstreamClient("eyJhbGciOiJIUzI1NiJ9.token.signature")._credential()
 
-    assert isinstance(credential, JwtCredential)
-    assert credential.jwt_token.get_secret_value() == "eyJhbGciOiJIUzI1NiJ9.token.signature"
+    assert credential.token_kind == "jwt"
+    assert credential.token == "eyJhbGciOiJIUzI1NiJ9.token.signature"
 
 
 def test_upstream_reuses_api_key_credential_instance():
@@ -81,7 +80,29 @@ def test_upstream_config_uses_jwt_credential_for_ey_token():
     credential = client._credential()
 
     assert client.api_key == "eyJhbGciOiJIUzI1NiJ9.payload.signature"
-    assert isinstance(credential, JwtCredential)
+    assert credential.token_kind == "jwt"
+
+
+def test_session_factory_builds_sdk_compatible_headers_and_options(monkeypatch):
+    captured = {}
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.upstream.AsyncSession", FakeAsyncSession)
+    factory = UpstreamClient("pst-secret-token")._credential()
+    session = asyncio.run(factory.get_session(timeout=42, update_headers={"x-extra": "yes"}))
+
+    assert isinstance(session, FakeAsyncSession)
+    assert captured["timeout"] == 42
+    assert captured["impersonate"] == "chrome136"
+    assert captured["headers"]["Authorization"] == "Bearer pst-secret-token"
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["headers"]["x-correlation-id"] == factory.x_correlation_id
+    assert len(factory.x_correlation_id) == 6
+    assert captured["headers"]["x-extra"] == "yes"
+    assert captured["headers"]["x-initiated-at"].endswith("Z")
 
 
 @pytest.mark.parametrize(
