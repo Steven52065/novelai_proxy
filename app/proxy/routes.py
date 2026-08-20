@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from anlas_sync import anlas_pricing
 from novelai_python.sdk.ai.augment_image import AugmentImageInfer
 from novelai_python.sdk.ai.upscale import Upscale
 
@@ -19,7 +20,13 @@ from ..allowlists import (
 )
 from ..auth import UserContext, get_current_user
 from ..config import AppConfig, ImageFormatConfig
-from ..costing import GenerateCostEstimator, GenerateCostInputs, IMAGE_ANLAS_PER_VIBE_ENCODING
+from ..costing import (
+    GenerateCostEstimator,
+    GenerateCostInputs,
+    IMAGE_ANLAS_PER_VIBE_ENCODING,
+    build_anlas_subscription,
+    ensure_supported_anlas_price,
+)
 from ..deps import (
     get_config,
     get_free_small_daily_limit_manager,
@@ -111,6 +118,18 @@ async def upscale(
     if endpoint_denied is not None:
         return endpoint_denied
 
+    novelai_settings = _load_novelai_settings(request)
+    try:
+        estimated_cost = ensure_supported_anlas_price(
+            anlas_pricing.price_upscale(
+                req.width,
+                req.height,
+                build_anlas_subscription(is_opus=novelai_settings.account_tier >= 3),
+            )
+        )
+    except Exception:
+        return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
+
     return await _submit_zip_task(
         request=request,
         user=user,
@@ -123,7 +142,7 @@ async def upscale(
             "n_samples": 1,
         },
         request_payload=dump_model_payload(req),
-        estimated_cost=_load_novelai_settings(request).upscale_anlas_cost,
+        estimated_cost=estimated_cost,
         handler=lambda upstream: upstream.upscale_zip(req),
         proxy_service=proxy_service,
     )
@@ -142,7 +161,25 @@ async def augment_image(
 
     novelai_settings = _load_novelai_settings(request)
     try:
-        estimated_cost = int(req.calculate_cost(is_opus=novelai_settings.account_tier >= 3))
+        augment_params = {
+            "width": req.width,
+            "height": req.height,
+            "steps": 28,
+            "n_samples": 1,
+            "sampler": "k_euler_ancestral",
+            "sm": False,
+            "sm_dyn": False,
+            "image": True,
+            "strength": 1,
+        }
+        estimated_cost = anlas_pricing.price_generate(
+            augment_params,
+            build_anlas_subscription(is_opus=novelai_settings.account_tier >= 3),
+            "nai-diffusion-3",
+        )
+        estimated_cost = ensure_supported_anlas_price(estimated_cost)
+        if req.req_type.value == "bg-removal":
+            estimated_cost = estimated_cost * 3 + 5
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 

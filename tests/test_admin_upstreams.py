@@ -278,4 +278,6 @@ def test_novelai_settings_drive_proxy_costing(tmp_path: Path, monkeypatch):
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         costs = {row["action"]: row["estimated_anlas_cost"] for row in logs if row["status"] == "success"}
         assert costs["generate"] == 17
-        assert costs["upscale"] == 7
+        # Upscale is priced from the request dimensions and subscription tier;
+        # the legacy admin setting no longer overrides the frontend table.
+        assert costs["upscale"] == 1

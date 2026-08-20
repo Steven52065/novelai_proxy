@@ -79,6 +79,12 @@ def test_reference_cost_calculator_charges_precise_and_extra_vibe_references():
     assert cost == 12
 
 
+def test_reference_cost_calculator_multiplies_precise_references_by_samples():
+    assert ReferenceCostCalculator().calculate(
+        {"director_reference_images": ["precise"], "n_samples": 2}
+    ) == 10
+
+
 def test_free_small_only_rejects_reference_requests_even_when_transport_fields_are_known():
     payload = FREE_SMALL_PAYLOAD | {
         "parameters": FREE_SMALL_PAYLOAD["parameters"] | {

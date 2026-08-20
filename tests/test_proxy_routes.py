@@ -385,4 +385,6 @@ def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: P
         params = success_log["request_payload"]["parameters"]
         assert params["director_reference_images"] == ["ref-a", "ref-b"]
         assert params["reference_image_multiple"] == ["v1", "v2", "v3", "v4", "v5"]
-        assert success_log["estimated_anlas_cost"] == 12
+        # New frontend-compatible total: 17 base generation + 10 precise
+        # reference cost (2 refs × 5) + 2 extra vibe-reference surcharge.
+        assert success_log["estimated_anlas_cost"] == 29

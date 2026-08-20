@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.costing import GenerateCostEstimator, ReferenceCostCalculator
+from app.costing import (
+    GenerateCostEstimator,
+    ReferenceCostCalculator,
+    ensure_supported_anlas_price,
+)
 from helpers import PAYLOAD
 
 
@@ -88,3 +92,13 @@ def test_generate_cost_keeps_unknown_official_parameters_but_disallows_free_smal
     assert estimated_cost == 0
     assert free_small_allowed is False
     assert payload["parameters"]["future_official_parameter"] == {"kept": True}
+
+
+def test_anlas_adapter_rejects_frontend_unsupported_prices():
+    import math
+
+    with pytest.raises(ValueError):
+        ensure_supported_anlas_price(float("nan"))
+    with pytest.raises(ValueError):
+        ensure_supported_anlas_price(-3)
+    assert ensure_supported_anlas_price(17.0) == 17
