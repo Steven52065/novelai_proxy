@@ -36,7 +36,7 @@ from ..free_small_daily_limit import FreeSmallDailyLimitManager
 from ..image_format_policies import effective_image_format_config
 from ..queue_tiers import is_vip_tier
 from ..logging_utils import dump_model_payload, logger
-from ..novelai_models import AugmentImageRequest, UpscaleRequest
+from ..novelai_models import AugmentImageRequest, ReqType, UpscaleRequest
 from ..quota_manager import QuotaManager
 from ..request_accounting import mark_request_total_duration
 from ..routing_queue import RoutingProxyQueue
@@ -171,13 +171,15 @@ async def augment_image(
             "image": True,
             "strength": 1,
         }
+        is_bg_removal = req.req_type == ReqType.BG_REMOVAL
         estimated_cost = anlas_pricing.price_generate(
             augment_params,
             build_anlas_subscription(is_opus=novelai_settings.account_tier >= 3),
             "nai-diffusion-3",
+            free_small_disabled=is_bg_removal,
         )
         estimated_cost = ensure_supported_anlas_price(estimated_cost)
-        if req.req_type.value == "bg-removal":
+        if is_bg_removal:
             estimated_cost = estimated_cost * 3 + 5
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})

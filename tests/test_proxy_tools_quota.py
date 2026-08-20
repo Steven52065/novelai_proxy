@@ -119,6 +119,61 @@ def test_upscale_and_augment_are_queued_and_logged(tmp_path: Path, monkeypatch):
         }
 
 
+def test_bg_removal_disables_opus_free_sample_and_charges_expected_cost(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    expected_costs = {
+        (512, 512): 20,
+        (512, 768): 29,
+        (832, 1216): 65,
+        (1024, 1024): 65,
+    }
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "bg-removal-opus",
+                "tier": "vip",
+                "anlas_total": sum(expected_costs.values()),
+                "allowed_endpoints": ["augment-image"],
+            },
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        for width, height in expected_costs:
+            response = client.post(
+                "/ai/augment-image",
+                headers=headers,
+                json={
+                    "req_type": "bg-removal",
+                    "width": width,
+                    "height": height,
+                    "image": "aW1n",
+                },
+            )
+            assert response.status_code == 201
+
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        bg_removal_logs = {
+            (row["width"], row["height"]): row
+            for row in logs
+            if row["action"] == "bg-removal" and row["status"] == "success"
+        }
+        assert {
+            dimensions: row["estimated_anlas_cost"]
+            for dimensions, row in bg_removal_logs.items()
+        } == expected_costs
+        assert all(row["final_anlas_cost"] == expected_costs[dimensions] for dimensions, row in bg_removal_logs.items())
+
+        quota = client.get("/user/subscription", headers=headers).json()["proxyQuota"]
+        assert quota["used"] == sum(expected_costs.values())
+        assert quota["available"] == 0
+
+
 def test_upscale_and_augment_models_preserve_request_validation(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
