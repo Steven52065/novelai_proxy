@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import zipfile
 
 import pytest
 
@@ -57,6 +59,14 @@ def _client_with_response(monkeypatch, response: FakeResponse) -> tuple[Upstream
     session = RecordingSession(response)
     monkeypatch.setattr(client, "_credential", lambda: FakeCredential(session))
     return client, session
+
+
+def _zip_payload(*files: tuple[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as archive:
+        for filename, content in files:
+            archive.writestr(filename, content)
+    return buffer.getvalue()
 
 
 def test_upstream_uses_api_token_session_factory_for_pst_token():
@@ -151,7 +161,7 @@ def test_encode_vibe_posts_official_url_and_json_body(monkeypatch):
 
 
 def test_upscale_posts_official_url_and_preserves_complete_zip(monkeypatch):
-    zip_payload = b"zip-with-multiple-files"
+    zip_payload = _zip_payload(("first.png", b"first"), ("second.png", b"second"))
     client, session = _client_with_response(monkeypatch, FakeResponse(content=zip_payload))
     request = UpscaleRequest(image="aW1n", width=64, height=32, scale=2)
 
@@ -167,7 +177,8 @@ def test_upscale_posts_official_url_and_preserves_complete_zip(monkeypatch):
 
 
 def test_augment_posts_official_url_and_json_body(monkeypatch):
-    client, session = _client_with_response(monkeypatch, FakeResponse())
+    zip_payload = _zip_payload(("image.png", b"image"))
+    client, session = _client_with_response(monkeypatch, FakeResponse(content=zip_payload))
     request = AugmentImageRequest(
         req_type="sketch",
         width=64,
@@ -178,13 +189,39 @@ def test_augment_posts_official_url_and_json_body(monkeypatch):
 
     result = asyncio.run(client.augment_image_zip(request))
 
-    assert result == b"zip-bytes"
+    assert result == zip_payload
     assert session.posts == [
         (
             "https://image.novelai.net/ai/augment-image",
             json.dumps(request.model_dump(mode="json", exclude_none=True)).encode("utf-8"),
         )
     ]
+
+
+@pytest.mark.parametrize("method", ["upscale_zip", "augment_image_zip"])
+def test_tool_zip_response_rejects_invalid_zip(monkeypatch, method: str):
+    client, _session = _client_with_response(monkeypatch, FakeResponse(content=b"not-a-zip"))
+    request = (
+        UpscaleRequest(image="aW1n", width=64, height=32, scale=2)
+        if method == "upscale_zip"
+        else AugmentImageRequest(req_type="sketch", width=64, height=32, image="aW1n", defry=0)
+    )
+
+    with pytest.raises(DataSerializationError, match="Invalid ZIP"):
+        asyncio.run(getattr(client, method)(request))
+
+
+@pytest.mark.parametrize("method", ["upscale_zip", "augment_image_zip"])
+def test_tool_zip_response_rejects_empty_zip(monkeypatch, method: str):
+    client, _session = _client_with_response(monkeypatch, FakeResponse(content=_zip_payload()))
+    request = (
+        UpscaleRequest(image="aW1n", width=64, height=32, scale=2)
+        if method == "upscale_zip"
+        else AugmentImageRequest(req_type="sketch", width=64, height=32, image="aW1n", defry=0)
+    )
+
+    with pytest.raises(DataSerializationError, match="contains no files"):
+        asyncio.run(getattr(client, method)(request))
 
 
 def test_suggest_tags_uses_url_encoded_query_and_returns_json(monkeypatch):

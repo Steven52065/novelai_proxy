@@ -35,3 +35,4 @@ def test_api_error_subtypes_and_status_mapping():
 
     assert api_error_status_code(APIError("failed", {}, {}, "403")) == 403
     assert api_error_status_code(APIError("failed", {}, {}, "unknown")) == 502
+    assert api_error_status_code(DataSerializationError("invalid payload", {}, {}, "201")) == 502

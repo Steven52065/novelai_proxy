@@ -4,7 +4,18 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.api_errors import DataSerializationError
 from helpers import PAYLOAD, FakeUpstream, write_test_config
+
+
+class InvalidToolZipUpstream(FakeUpstream):
+    async def upscale_zip(self, req):
+        raise DataSerializationError(
+            "Invalid ZIP file received from the API.",
+            request=req.model_dump(mode="json", exclude_none=True),
+            response={},
+            code="201",
+        )
 
 
 def test_encode_vibe_is_queued_and_charged(tmp_path: Path, monkeypatch):
@@ -172,6 +183,42 @@ def test_bg_removal_disables_opus_free_sample_and_charges_expected_cost(tmp_path
         quota = client.get("/user/subscription", headers=headers).json()["proxyQuota"]
         assert quota["used"] == sum(expected_costs.values())
         assert quota["available"] == 0
+
+
+def test_invalid_tool_zip_returns_gateway_error_and_releases_quota(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = InvalidToolZipUpstream()
+        user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "invalid-tool-zip",
+                "tier": "vip",
+                "anlas_total": 100,
+                "allowed_endpoints": ["upscale"],
+            },
+        ).json()
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+
+        response = client.post(
+            "/ai/upscale",
+            headers=headers,
+            json={"image": "aW1n", "width": 64, "height": 64, "scale": 2},
+        )
+
+        assert response.status_code == 502
+        assert response.json() == {"message": "Upstream request failed"}
+        quota = client.get("/user/subscription", headers=headers).json()["proxyQuota"]
+        assert quota["used"] == 0
+        assert quota["reserved"] == 0
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        failed_log = next(row for row in logs if row["action"] == "upscale")
+        assert failed_log["status"] == "failed"
+        assert failed_log["error_code"] == "201"
+        assert failed_log["final_anlas_cost"] is None
 
 
 def test_upscale_and_augment_models_preserve_request_validation(tmp_path: Path, monkeypatch):

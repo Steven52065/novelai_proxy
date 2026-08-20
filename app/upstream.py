@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import io
 import json
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlencode
+from zipfile import ZipFile
 
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random
 from curl_cffi.requests import AsyncSession
@@ -77,10 +79,12 @@ class UpstreamClient:
         return await self._post_binary(url, payload)
 
     async def upscale_zip(self, req: UpscaleRequest) -> bytes:
-        return await self._post_binary(UPSCALE_ENDPOINT, dump_model_payload(req))
+        payload = dump_model_payload(req)
+        return await self._post_zip(UPSCALE_ENDPOINT, payload)
 
     async def augment_image_zip(self, req: AugmentImageRequest) -> bytes:
-        return await self._post_binary(AUGMENT_IMAGE_ENDPOINT, dump_model_payload(req))
+        payload = dump_model_payload(req)
+        return await self._post_zip(AUGMENT_IMAGE_ENDPOINT, payload)
 
     async def suggest_tags(self, model: str, prompt: str, lang: str = "en") -> dict[str, Any]:
         params = {"model": model, "prompt": prompt, "lang": lang}
@@ -112,6 +116,11 @@ class UpstreamClient:
                     code=response.status_code,
                 )
             return response.content
+
+    async def _post_zip(self, url: str, payload: dict[str, Any]) -> bytes:
+        response_content = await self._post_binary(url, payload)
+        _validate_zip_response(response_content, request=payload)
+        return response_content
 
     @retry(
         wait=wait_random(min=1, max=3),
@@ -145,6 +154,35 @@ class UpstreamClient:
 
 def _utc_initiated_at() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _validate_zip_response(content: bytes, *, request: dict[str, Any]) -> None:
+    """Validate a tool response without changing the ZIP returned downstream."""
+    try:
+        with ZipFile(io.BytesIO(content)) as archive:
+            members = archive.infolist()
+            has_nonempty_file = False
+            for member in members:
+                if member.is_dir():
+                    continue
+                if archive.read(member):
+                    has_nonempty_file = True
+            if not has_nonempty_file:
+                raise DataSerializationError(
+                    "The ZIP response contains no files.",
+                    request=request,
+                    response={},
+                    code="201",
+                )
+    except DataSerializationError:
+        raise
+    except Exception as exc:
+        raise DataSerializationError(
+            "Invalid ZIP file received from the API.",
+            request=request,
+            response={},
+            code="201",
+        ) from exc
 
 
 def _response_error(response) -> dict[str, Any]:
