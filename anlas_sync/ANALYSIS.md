@@ -60,12 +60,12 @@ analysis/
 ## 3. 环境准备
 
 - Node.js >= 18（oracle 用，已验证 v22）
-- 项目 venv：`.\.venv\Scripts\python.exe`，已装 `requests`
+- 项目 venv：`.\.venv\Scripts\python.exe`，已装 `httpx`
 - 联网（下载 novelai.net 前端文件；沙箱中需申请网络权限）
 
 ```powershell
 node --version
-.\.venv\Scripts\python.exe -c "import requests; print(requests.__version__)"
+.\.venv\Scripts\python.exe -c "import httpx; print(httpx.__version__)"
 ```
 
 ---

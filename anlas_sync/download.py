@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-import requests
+import httpx
 
 BASE = "https://novelai.net"
 PAGE_URL = BASE + "/image"
@@ -45,7 +45,12 @@ def sha256(data: bytes) -> str:
 
 
 def fetch(url: str, timeout: int = 120) -> bytes:
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
+    r = httpx.get(
+        url,
+        headers={"User-Agent": UA},
+        timeout=timeout,
+        follow_redirects=True,
+    )
     r.raise_for_status()
     return r.content
 
