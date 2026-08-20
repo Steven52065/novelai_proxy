@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-import anlas_pricing as ap
+from anlas_sync import anlas_pricing as ap
 
 ROOT = Path(__file__).resolve().parent
 DATA = ap.DATA
@@ -159,6 +159,6 @@ HAS_ORACLE = _node_available() and (ROOT / "cache" / "_app.js").exists()
 def test_oracle_compare():
     import sys
     rc = subprocess.run(
-        [sys.executable, str(ROOT / "compare.py"), "--cases", "300", "--seed", "7"],
-        capture_output=True, text=True, timeout=180)
+        [sys.executable, "-m", "anlas_sync.compare", "--cases", "300", "--seed", "7"],
+        capture_output=True, text=True, timeout=180, cwd=ROOT.parent)
     assert rc.returncode == 0, rc.stdout + rc.stderr
