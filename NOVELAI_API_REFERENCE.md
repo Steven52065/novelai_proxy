@@ -2,7 +2,7 @@
 
 整理日期：2026-05-25
 
-本文件只整理当前 `REQUIREMENTS.md` 可能需要的 API 信息，作为实现代理层时的工程参考。字段以官方 Swagger/OpenAPI 为主，并补充与当前 `novelai-python` SDK 和代理需求相关的注意事项。
+本文件只整理当前 `REQUIREMENTS.md` 可能需要的 API 信息，作为实现代理层时的工程参考。字段以官方 Swagger/OpenAPI 为主，并补充实际抓包、历史 SDK 行为与当前项目自有实现的兼容性注意事项。项目运行时不再依赖 `novelai-python`。
 
 ## 来源
 
@@ -103,7 +103,7 @@ Swagger 2 security definition:
 - `401`: unauthorized
 - `500`: internal server error
 
-注意：Image API 官方 Swagger 对 `/ai/generate-image` 只列出 `201/401/500`，但实际 SDK 对 `400/402/409/429` 也有处理。代理实现应保留对这些状态码的兼容处理。
+注意：Image API 官方 Swagger 对 `/ai/generate-image` 只列出 `201/401/500`，但实际服务还会出现 `400/402/409/429`。当前自有传输层保留了这些状态码的兼容处理。
 
 ## Primary API
 
@@ -142,7 +142,7 @@ Swagger 2 security definition:
 }
 ```
 
-代理层 anlas 可用量通常可按 SDK 逻辑理解为：
+代理层 anlas 可用量按当前兼容口径计算为：
 
 ```text
 upstream_anlas_left = fixedTrainingStepsLeft + purchasedTrainingSteps
@@ -162,8 +162,8 @@ upstream_anlas_left = fixedTrainingStepsLeft + purchasedTrainingSteps
 
 注意事项：
 
-- `novelai-python` 的 `SubscriptionResp` 额外包含 `accountType`，但当前 Primary API schema 中未在 `SubscriptionResponse` 找到该字段。实现代理伪造 `/user/subscription` 时应优先兼容目标客户端；如果目标客户端使用 `novelai-python`，建议保留 `accountType`。
-- 当前 Primary API schema 的 `perks` 未列出旧 SDK 中的 `imageGeneration`、`unlimitedImageGeneration`、`voiceGeneration` 等字段。若客户端依赖这些字段，代理需要按 SDK 预期补齐。
+- 历史 `novelai-python` 的 `SubscriptionResp` 额外包含 `accountType`，但当前 Primary API schema 中未在 `SubscriptionResponse` 找到该字段。代理伪造 `/user/subscription` 时为兼容既有客户端可继续保留该字段。
+- 当前 Primary API schema 的 `perks` 未列出部分旧客户端使用的 `imageGeneration`、`unlimitedImageGeneration`、`voiceGeneration` 等字段。若目标客户端依赖这些字段，代理需要按兼容格式补齐。
 
 ## Image Generation API
 
@@ -199,7 +199,7 @@ upstream_anlas_left = fixedTrainingStepsLeft + purchasedTrainingSteps
 
 - `action` 常见值：`generate`、`img2img`、`infill`。Primary API 旧 schema 明确列出这些值；Image API schema 中仅声明为 string。
 - 成本预估所需字段主要在 `parameters` 中：`width`、`height`、`steps`、`n_samples`、`sampler`、`strength`、`sm`、`sm_dyn`、`image`、`model`。
-- 成功响应是 ZIP。代理如果用 SDK 解包后再返回，需要重新打 ZIP 并保持客户端可接受的 `Content-Type`。
+- 成功响应是 ZIP。当前传输层直接保留完整上游 ZIP，不再经第三方 SDK 解包和重打包；代理仍接受五种已观察到的二进制 `Content-Type`。
 
 ### `image.RequestParameters`
 
@@ -304,9 +304,9 @@ V4 prompt structures:
 
 代理实现建议：
 
-- 第一版不要手写字段白名单丢弃未知字段。对官方 schema 已知但 SDK 可能未覆盖的字段，应优先透传或显式返回不支持。
+- 第一版不要手写字段白名单丢弃未知字段。对官方 schema 已知但本地模型未显式读取的字段，应优先透传或显式返回不支持。
 - 对成本预估只读取必要字段，其他字段保留原样交给上游。
-- `steps` 在 Image API schema 中是 `number`，SDK 中多按 `int` 使用；实现时应校验为整数或可安全转整数。
+- `steps` 在 Image API schema 中是 `number`；当前计费适配层要求它为整数或可安全转整数。
 
 ### POST `/ai/generate-image-stream`
 
@@ -357,7 +357,7 @@ lang: string, optional, defaults to en, available: en, jp
 注意事项：
 
 - 官方路径是 `/ai/generate-image/suggest-tags`，不是 `/ai/generate-image/suggest_tags`。
-- 当前需求文档和 `novelai-python.server` 示例中出现了 `suggest_tags` 下划线路径，但 SDK 的 `SuggestTags` 类使用的是 `suggest-tags` 连字符路径。
+- 历史客户端和示例中出现过 `suggest_tags` 下划线路径，而官方路径使用 `suggest-tags` 连字符。
 - 代理实现建议同时支持两个路径：官方 `suggest-tags` 为主，`suggest_tags` 作为兼容别名。
 
 ### POST `/ai/augment-image`
@@ -387,8 +387,8 @@ lang: string, optional, defaults to en, available: en, jp
 
 代理实现注意：
 
-- SDK 中 `AugmentImageInfer.calculate_cost()` 注释说明部分工具成本不完全明确。代理层应把 augment 成本标记为预估。
-- `req_type` 的合法值未在 Image API schema 中枚举。可参考 SDK 的 `ReqType`，但仍需实测。
+- augment 成本使用 `anlas_sync.price_generate` 按 `nai-diffusion-3`、28 steps、单样本、图生图强度 1 预估；`bg-removal` 使用基础价 `×3+5`。该结果仍属于代理预算预估，不是服务端账单证明。
+- `req_type` 的合法值未在 Image API schema 中枚举。项目自有 `ReqType` 保留已验证的 7 项，并通过请求模型做本地校验。
 
 ### POST `/ai/encode-vibe`
 
@@ -423,13 +423,13 @@ lang: string, optional, defaults to en, available: en, jp
 
 ## Primary API 中的旧图像端点
 
-Primary API `https://api.novelai.net/docs/` 仍能看到旧的 `/ai/generate-image`、`/ai/upscale`、`/ai/generate-image/suggest-tags` 等端点说明。官方 Image API 文档说明生成 API 已拆分到 `image.novelai.net`，因此代理实现应以上游 SDK 当前使用的域名为准：
+Primary API `https://api.novelai.net/docs/` 仍能看到旧的 `/ai/generate-image`、`/ai/upscale`、`/ai/generate-image/suggest-tags` 等端点说明。官方 Image API 文档说明生成 API 已拆分到 `image.novelai.net`；当前自有传输层使用以下地址：
 
 - 图像生成：`https://image.novelai.net/ai/generate-image`
 - Director Tools：`https://image.novelai.net/ai/augment-image`
 - 标签建议：`https://image.novelai.net/ai/generate-image/suggest-tags`
 - 订阅信息：`https://api.novelai.net/user/subscription`
-- 放大：SDK 当前使用 `https://api.novelai.net/ai/upscale`；Primary API schema 中存在 `/ai/upscale`
+- 放大：`https://api.novelai.net/ai/upscale`；Primary API schema 中存在 `/ai/upscale`
 
 ### POST `/ai/upscale`
 
@@ -457,27 +457,25 @@ Primary API `https://api.novelai.net/docs/` 仍能看到旧的 `/ai/generate-ima
 
 代理实现注意：
 
-- `novelai-python` 的 `Upscale` 类默认 endpoint 是 `https://api.novelai.net`，和 Primary API schema 一致。
-- 放大是否消耗 anlas、如何计费，当前整理到的官方 schema 未给出成本公式。第一版可以将其纳入队列和日志，但额度扣减需要实测或保守配置。
+- 当前自有 `UpscaleRequest` 保留 `image/width/height/scale` 字段、图片尺寸探测和显式尺寸回退规则。
+- 放大价格使用 `anlas_sync.price_upscale(width, height, sub)` 的前端查表口径；官方 schema 本身未提供成本公式，因此仍需用真实账号 smoke test 监测漂移。
 
-## 与 `novelai-python` 的一致性检查
+## 当前自有实现的一致性检查
 
 已确认一致：
 
-- `GenerateImageInfer.base_url` 使用 `/ai/generate-image`，官方 Image API 存在。
-- `AugmentImageInfer.base_url` 使用 `/ai/augment-image`，官方 Image API 存在。
-- `SuggestTags.base_url` 使用 `/ai/generate-image/suggest-tags`，官方 Image API 存在。
-- `Upscale.base_url` 使用 `/ai/upscale`，Primary API 存在。
-- `Subscription.base_url` 使用 `/user/subscription`，Primary API 存在。
+- `app/novelai_endpoints.py` 的 generate、augment、suggest-tags、upscale 地址分别与官方 Image/Primary API 对应。
+- `app/upstream.py` 使用 Bearer token、`x-correlation-id`、`x-initiated-at` 和 `chrome136` 指纹直接发起请求。
+- `app/novelai_models.py` 保留 upscale/augment 的字段名、枚举和序列化结构。
 - 图像生成请求核心结构 `input/model/action/parameters/url` 与官方 Image API schema 一致。
-- 图像生成响应为 ZIP，与 SDK 解 ZIP 再重打 ZIP 的实现路径一致。
+- 图像生成、放大和增强的成功响应均以完整 ZIP 返回。
 
 需要注意的差异：
 
-- `novelai-python.server` 示例暴露的是 `/ai/generate-image/suggest_tags`，但官方路径和 SDK 类是 `/ai/generate-image/suggest-tags`。
-- SDK 的 `SubscriptionResp` 字段比当前 Primary API schema 多，特别是 `accountType` 和一些旧 perks 字段。代理伪造响应时需要按目标客户端补齐。
-- SDK 的成本计算不是官方 schema 的一部分，只能作为代理层预估。
-- Image API schema 对部分字段只给出 `string/number`，没有枚举或范围；SDK 对这些字段有更严格的本地校验。代理应优先复用 SDK 校验，或在透传模式中避免误删字段。
+- 历史示例暴露的是 `/ai/generate-image/suggest_tags`，官方路径是 `/ai/generate-image/suggest-tags`；代理同时保留二者。
+- 部分旧客户端的订阅响应字段比当前 Primary API schema 多，特别是 `accountType` 和一些旧 perks 字段。代理伪造响应时需要按目标客户端补齐。
+- `anlas_sync` 的成本计算不是官方 schema 的一部分，只能作为代理层预估，并应定期与 NovelAI 前端和真实扣费对拍。
+- Image API schema 对部分字段只给出 `string/number`，没有枚举或范围；代理仅对已确认字段做自有校验，其余生成参数保持透传，避免静默丢失。
 
 ## 建议映射到代理需求
 
@@ -521,4 +519,3 @@ sm_dyn     <- request.parameters.sm_dyn
 - 成功标签建议：保持 JSON 响应。
 - 上游错误：尽量保留 `statusCode/message/details`，同时映射到代理定义的错误规范。
 - 队列满、限频、用户禁用、代理额度不足属于代理层错误，不应伪装为上游错误。
-

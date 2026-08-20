@@ -24,8 +24,11 @@
 - `app/upstream_queue.py`：单个上游的串行执行队列。
 - `app/quota_manager.py`：anlas 额度管理。
 - `app/rate_limiter.py`：用户请求频率限制。
-- `app/upstream.py`：NovelAI 上游 SDK 调用封装。
-- `novelai-python/`：第三方 NovelAI Python SDK，作为 Git 子模块记录。
+- `app/upstream.py`：基于 `curl-cffi` 的 NovelAI 上游 HTTP 调用与错误映射。
+- `app/novelai_models.py`：放大和 Director Tools 的自有请求模型与校验。
+- `app/novelai_enums.py`：项目使用的 NovelAI 模型、动作和采样器枚举。
+- `app/costing.py`：应用计费适配层。
+- `anlas_sync/`：从 NovelAI 前端同步并离线复现的 anlas 计费公式与数据。
 
 ## 本地配置
 
@@ -44,12 +47,6 @@ SQLite 运行数据库默认是 `novelai_proxy.db`，以及对应的 `*.db-shm`�
 ```powershell
 uv venv
 uv pip install -r requirements-dev.txt
-```
-
-注意：`novelai-python` 是本地 Git 子模块，需要先拉取子模块后才能安装：
-
-```powershell
-git submodule update --init --recursive
 ```
 
 ### 日常运行

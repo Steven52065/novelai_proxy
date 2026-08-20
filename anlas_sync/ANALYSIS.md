@@ -225,7 +225,7 @@ sub 键：`tier, expiresAt, accountType`。
 
 ```powershell
 # 随机对拍：Python 实现 vs 网页原始函数
-.\.venv\Scripts\python.exe anlas_sync\compare.py --cases 5000 --seed 20260818
+.\.venv\Scripts\python.exe -m anlas_sync.compare --cases 5000 --seed 20260818
 
 # 单元测试（含 300 组对拍集成测试）
 .\.venv\Scripts\python.exe -m pytest anlas_sync\test_anlas_pricing.py -q
@@ -251,7 +251,7 @@ sub 键：`tier, expiresAt, accountType`。
 .\.venv\Scripts\python.exe anlas_sync\extract.py
 
 # 3) 随机对拍验证（全绿才算同步成功）
-.\.venv\Scripts\python.exe anlas_sync\compare.py --cases 5000 --seed 20260818
+.\.venv\Scripts\python.exe -m anlas_sync.compare --cases 5000 --seed 20260818
 
 # 4) 单元测试
 .\.venv\Scripts\python.exe -m pytest anlas_sync\test_anlas_pricing.py -q

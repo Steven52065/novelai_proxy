@@ -9,7 +9,7 @@ class NovelAIProxyError(Exception):
     message: str
 
     def __init__(self, message: str) -> None:
-        # Keep the SDK's BaseException.args behavior for compatibility.  The
+        # Keep the former exception contract's BaseException.args behavior. The
         # concrete API errors are constructed with four positional arguments,
         # and existing logs may rely on that representation.
         self.message = message

@@ -363,9 +363,9 @@ def _upstream_weights_payload(request: Request | WebSocket) -> dict:
 
 
 def _admin_upstream_test_payload() -> dict:
-    # Snapshot of GenerateImageInfer.build_generate from novelai-python commit
-    # 3b2229f. Keep this explicit so the admin probe remains stable after the
-    # unmaintained SDK is removed.
+    # Snapshot captured from the former generator builder at commit 3b2229f.
+    # Keep it explicit so the admin probe remains deterministic and independent
+    # of third-party request builders.
     return {
         "input": "A simple red apple on a white plate.",
         "model": "nai-diffusion-4-5-full",

@@ -19,7 +19,8 @@
 
 - Python 3.11+
 - FastAPI（代理 API + 管理后端）
-- novelai-python SDK（上游 API 调用、消耗计算）
+- curl-cffi（直接调用 NovelAI 上游 API）
+- anlas_sync（基于 NovelAI 前端规则的 anlas 消耗预估）
 - SQLite（数据持久化）
 - Jinja2（管理面板模板渲染）
 - asyncio（请求队列）
@@ -52,8 +53,8 @@
 
 | 需求 | 说明 |
 |------|------|
-| 消耗预估 | 使用 novelai-python SDK 中的 `CostCalculator.calculate()` 方法，根据模型、尺寸、步数、采样器等参数预估每个请求的 anlas 消耗 |
-| 预估边界 | `CostCalculator` 属于代理层预算控制依据，不视为 NovelAI 官方账单真相；当 NovelAI 模型、采样器、工具或免费额度规则变化时，预估结果可能产生偏差 |
+| 消耗预估 | 使用 `anlas_sync/anlas_pricing.py` 中从 NovelAI 前端同步的公式和 `pricing_data.json`，根据模型、尺寸、步数、采样器、订阅等级与引用参数预估 anlas 消耗 |
+| 预估边界 | 本地前端公式属于代理层预算控制依据，不视为 NovelAI 服务端账单真相；当模型、工具或免费额度规则变化时，应重新运行 `anlas_sync` 同步与对拍流程 |
 | 免费/收费判断 | 预估消耗为 0 = 免费小图（不占用用户 anlas 额度）；> 0 = 收费请求（需要预占/扣减用户 anlas 额度） |
 | 用户额度 | 每个用户有独立的 anlas 额度池 |
 | 额度预占 | 收费请求入队前必须在数据库事务中预占额度，避免多个排队请求同时看到余额充足导致超发 |
@@ -75,7 +76,7 @@
 
 ### 2.5 代理 API（兼容 NovelAI 原生格式）
 
-第一版只承诺兼容下表列出的端点。兼容性以官方 API 文档、实际抓包样例和 `novelai-python` 当前请求模型三者交叉验证为准；未验证字段应透传或显式拒绝，避免静默丢弃导致用户误以为原生参数生效。
+第一版只承诺兼容下表列出的端点。兼容性以官方 API 文档、实际抓包样例和项目自有请求模型交叉验证为准；未验证字段应透传或显式拒绝，避免静默丢弃导致用户误以为原生参数生效。
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
@@ -83,7 +84,9 @@
 | `/ai/generate-image` | POST | 文生图/图生图/重绘（核心端点） |
 | `/ai/upscale` | POST | 图片放大 |
 | `/ai/augment-image` | POST | 图片增强（情感/调色） |
-| `/ai/generate-image/suggest_tags` | GET | 标签建议 |
+| `/ai/encode-vibe` | POST | Vibe 编码 |
+| `/ai/generate-image/suggest-tags` | GET | 标签建议（官方路径） |
+| `/ai/generate-image/suggest_tags` | GET | 标签建议兼容别名 |
 | `/user/subscription` | GET | 用户订阅信息（代理层返回配额数据） |
 
 **请求格式**：兼容已验证端点的 NovelAI 原生请求/响应格式，Header 中传入：
@@ -91,12 +94,12 @@
 Authorization: Bearer <proxy-api-key>
 ```
 
-已验证客户端只需将 SDK 的 endpoint 指向代理地址即可使用；未验证客户端不承诺完全无缝兼容。
+已验证客户端只需将 NovelAI API endpoint 指向代理地址即可使用；未验证客户端不承诺完全无缝兼容。
 
 请求流程：
 
 ```
-请求 → API Key 验证 → 限频检查 → anlas 消耗预估 → 数据库事务预占额度 → 入队等待 → Worker 调用上游 SDK → 结果返回 → 确认扣减或释放预占额度 → 记录日志
+请求 → API Key 验证 → 限频检查 → anlas 消耗预估 → 数据库事务预占额度 → 入队等待 → Worker 直接调用上游 HTTP API → 结果返回 → 确认扣减或释放预占额度 → 记录日志
 ```
 
 ### 2.6 Web 管理面板
@@ -296,51 +299,27 @@ available = total - used - reserved
 novelai_proxy/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              # FastAPI 入口 + 启动逻辑
-│   ├── config.py            # config.yaml 加载
-│   ├── database.py          # SQLite 初始化 & 连接管理
-│   │
-│   ├── models/              # 数据模型（aiosqlite 或 SQLAlchemy）
-│   │   ├── __init__.py
-│   │   ├── user.py
-│   │   ├── rate_limit.py
-│   │   ├── anlas_quota.py
-│   │   └── usage_log.py
-│   │
-│   ├── auth.py              # API Key 验证（Depends 注入）
-│   ├── rate_limiter.py      # 限频检查逻辑
-│   ├── quota_manager.py     # Anlas 额度管理（计算、扣减、重置）
-│   ├── queue_manager.py     # 请求队列 + Worker
-│   │
-│   ├── proxy/               # 代理路由（兼容 NovelAI 原生格式）
-│   │   ├── __init__.py
-│   │   ├── generate_image.py
-│   │   ├── upscale.py
-│   │   ├── augment_image.py
-│   │   └── subscription.py
-│   │
-│   ├── admin/               # 管理面板路由
-│   │   ├── __init__.py
-│   │   ├── auth.py
-│   │   ├── dashboard.py
-│   │   ├── users.py
-│   │   └── logs.py
-│   │
-│   └── templates/           # Jinja2 模板
-│       ├── base.html
-│       ├── login.html
-│       ├── dashboard.html
-│       ├── users.html
-│       ├── user_edit.html
-│       └── logs.html
-│
-├── static/                  # 静态文件（CSS）
-│   └── style.css
-│
-├── config.yaml              # 配置文件
+│   ├── main.py                 # FastAPI 入口与生命周期
+│   ├── proxy/routes.py         # 代理端点
+│   ├── upstream.py             # curl-cffi 上游传输层
+│   ├── novelai_models.py       # 自有请求模型
+│   ├── novelai_enums.py        # 自有 NovelAI 枚举
+│   ├── costing.py              # anlas 计费适配层
+│   ├── routing_queue.py        # 多上游调度
+│   ├── upstream_queue.py       # 单上游执行队列
+│   ├── quota_manager.py        # Anlas 额度管理
+│   ├── rate_limiter.py         # 限频检查
+│   ├── database/               # SQLite 连接、schema 与迁移
+│   ├── admin/                  # 管理后台与管理 API
+│   └── templates/              # Jinja2 模板
+├── anlas_sync/
+│   ├── anlas_pricing.py        # 前端计费公式的 Python 实现
+│   └── generated/pricing_data.json
+├── tests/                       # 自动化测试
+├── static/                      # 静态资源
+├── config.example.yaml          # 可提交配置模板
 ├── requirements.txt
-├── novelai-python/          # 上游 SDK（已有）
-└── run.py                   # 启动入口
+└── run.py                       # 启动入口
 ```
 
 ---

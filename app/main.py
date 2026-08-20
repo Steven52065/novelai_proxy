@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import asyncio
 import json
 from contextlib import asynccontextmanager
@@ -8,9 +7,6 @@ from os import environ
 from pathlib import Path
 
 repo_root = Path(__file__).resolve().parents[1]
-sdk_src = repo_root / "novelai-python" / "src"
-if sdk_src.exists() and str(sdk_src) not in sys.path:
-    sys.path.insert(0, str(sdk_src))
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError

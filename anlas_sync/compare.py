@@ -2,7 +2,7 @@
 """随机参数对拍：Python 实现 vs Node oracle（网页真实逻辑）。
 
 用法:
-    .\\.venv\\Scripts\\python.exe anlas_sync\\compare.py [--cases N] [--seed S]
+    .\\.venv\\Scripts\\python.exe -m anlas_sync.compare [--cases N] [--seed S]
 
 对拍覆盖: GI(生图价格), tY(放大), H_(vibe附加), Dk(参数校验), ax(订阅判断)
 任何不一致会打印差异并以非零退出码结束。

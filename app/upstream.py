@@ -32,7 +32,7 @@ _CORRELATION_ID = uuid.uuid4().hex[:6]
 
 @dataclass
 class _ApiKeySessionFactory:
-    """Small replacement for the SDK's Api/JwtCredential classes."""
+    """Create authenticated curl-cffi sessions for API and JWT tokens."""
 
     token: str
     token_kind: str
