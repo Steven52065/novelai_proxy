@@ -104,6 +104,7 @@ class FreeSmallOnlyPolicy:
             and not has_image
         )
 
+    # 警告：不要放松此枚举白名单；只加枚举不同步 anlas_sync 计费数据，会让 free_small_only 用户绕过免费限制。
     def is_known_text_to_image_model(self, model: str) -> bool:
         try:
             parsed = Model(model)

@@ -30,6 +30,7 @@ class Action(Enum):
     """Inpainting"""
 
 
+# 警告：此枚举是 free_small_only 策略的硬性白名单，新增模型前必须先同步 anlas_sync 计费数据并人工确认免费规则，否则不要加入。
 class Model(Enum):
     """
     Nai Diffusion series
