@@ -109,7 +109,8 @@ node --version
 |---|---|---|
 | 61225 | chunks/1052-*.js | **定价模块**：GI(生图)/tY(放大)/H_(vibe附加)/Lq(vibe单价) |
 | 57863 | chunks/1052-*.js | 尺寸/校验：Dk(参数校验)、xM(3145728)、放大/增强尺寸工具 |
-| 53856 | pages/_app-*.js | 枚举：Jg(模型->家族)、l1(采样器)、oM(模型)、lh(家族)、PE(能力含 opusUsageLimit)、VI(禁用 sm 的采样器) |
+| 32036 | chunks/1052-*.js | 家族-采样器表：DF(家族->Recommended/Other 采样器)、sC(采样器名) |
+| 53856 | pages/_app-*.js | 枚举：Jg(模型->家族)、l1(采样器)、oM(模型)、lh(家族)、PE(能力含 opusUsageLimit/noiseSchedule)、Tz(噪点表模型允许)、Ux(噪点表采样器允许)、p(噪点表枚举)、VI(禁用 sm 的采样器) |
 | 62654 | pages/_app-*.js | `ax`：订阅有效性判断 |
 | 46542 | pages/_app-*.js | 常量：`dZ=140`(单图上限)、`kJ=900`、`Hi=75`、`gb="nai-diffusion-5-curated"` |
 | 41179 | pages/_app-*.js | `t1`：免费小图参数判断（!characterRef && <=1MP && <=28 步） |
@@ -137,6 +138,15 @@ node --version
   stableDiffusionXL / stableDiffusionXLFurry / v4 / v5），未知模型默认 stableDiffusion；
   `custom` 与 `nai-diffusion-5-*` 归 v5
 - **PE(model).opusUsageLimit**：v5 与 custom 为 true，用于免费小图的负 usage 禁用条件
+- **PE(model).noiseSchedule**：模型是否支持噪点表参数（SDXL/v4/v4.5/custom 为 true，
+  旧模型与 v5 为 false）
+- **Tz(values, model)**（g）：模型允许的噪点表值。v5 四模型返回 `[]`；
+  v4/v4.5 去掉 `native`；其余返回全部
+- **Ux(sampler)**（A）：采样器允许的噪点表值。
+  k_euler/k_euler_ancestral/k_dpmpp_2s_ancestral/k_dpmpp_2m/k_dpmpp_2m_sde/k_dpmpp_sde
+  为全部 4 个；k_dpm_2 为 exponential/polyexponential；其余为 `[]`
+- **DF(family)**（模块 32036）：家族 -> `{label: Recommended/Other, options:[{name, value}]}`，
+  generate 校验用的 `family_samplers` 即扁平化去重后的 value 列表
 
 ---
 
@@ -209,9 +219,17 @@ webpack chunk 是 `(self.webpackChunk_N_E=...).push([[chunkIds],{模块表}])` �
 | `vibe` | {per_encoding:2, free_count:4, extra_per:2} |
 | `char_ref_per_sample` | 5 |
 | `model_family` | 29 个模型 -> 家族（由 oracle 对每个模型执行 Jg 生成） |
+| `family_samplers` | 6 个家族 -> 扁平化去重后的采样器列表（模块 32036 DF） |
+| `noise_schedule` | {values, model_allowed, model_supports, sampler_allowed}（模块 53856 p/g/PE/A） |
 | `vi_set` | 禁用 sm/sm_dyn 的采样器 |
 | `classic_samplers` | 经典公式适用的采样器 |
 | `enum_all` | 53856 的全部枚举键值（模型/采样器/家族/噪声调度等） |
+
+`noise_schedule` 子字段：
+- `values`：`["native","karras","exponential","polyexponential"]`（p 枚举）
+- `model_allowed`：`Tz(values, model)` 对每个已知模型的结果（v5 为空、v4/v4.5 去 native、其余为全部）
+- `model_supports`：`PE(model).noiseSchedule` 是否支持该参数
+- `sampler_allowed`：`Ux(sampler)` 对每个采样器枚举值的允许列表
 
 > 已移除：旧版 `es_set`（Dk 已对所有模型统一 steps<=50）。
 

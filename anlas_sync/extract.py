@@ -6,7 +6,8 @@
 
 依赖:
     - cache/_app.js       (download.py 下载)
-    - cache/chunk-1052.js (GI/tY/H_ 定价模块 61225、Dk/尺寸模块 57863)
+    - cache/chunk-1052.js (GI/tY/H_ 定价模块 61225、Dk/尺寸模块 57863、
+                           家族-采样器表 模块 32036)
     - cache/chunk-7416.js (SW.getPrice vibe 编码价格, 模块 25690)
     - cache/chunk-1741.js (image 页角色引用附加费)
     - node + oracle.js    (生成模型家族映射 MODEL_FAMILY)
@@ -92,6 +93,147 @@ def extract_pe_opus_limit_models(mod53856: str, enum: dict[str, str]) -> list[st
     return sorted(x for x in out if x in model_values)
 
 
+
+
+def extract_enum(mod: str, var: str) -> dict[str, str]:
+    """提取形如 `,a=function(e){return e.key="value",...,e}({})` 的 JS 枚举。"""
+    m = re.search(r'(?:var|,)\s*%s=function\(e\)\{return (.*?),e\}\(\{\}\)' % re.escape(var), mod)
+    if not m:
+        return {}
+    return dict(re.findall(r'e\.([A-Za-z0-9_$]+)="([^"]*)"', m.group(1)))
+
+
+def extract_family_samplers(
+    mod32036: str,
+    sampler_enum: dict[str, str],
+    family_enum: dict[str, str],
+) -> dict[str, list[str]]:
+    """从模块 32036 提取家族-采样器表（DF）。
+
+    表结构为 `let n=e=>{switch(e){case r.lh.<家族>:return <变量>;...}},o=[...],l=[...],s=[...],d=[...],u=[...];`，
+    每个变量是一组 `{label, options:[{name, value:r.l1.<采样器>}]}`。
+    返回按家族键（stableDiffusion / stableDiffusionGroup2 / stableDiffusionXL /
+    stableDiffusionXLFurry / v4 / v5）扁平化去重后的采样器值列表。
+    """
+    start = mod32036.find("let n=e=>{")
+    end = mod32036.find("function h(e)", start)
+    if start < 0 or end < 0:
+        raise SystemExit("错误: 未找到模块 32036 家族-采样器表")
+    body = mod32036[start:end]
+
+    sw = re.search(r"switch\(e\)\{(.*?)\}\}", body, re.S)
+    if not sw:
+        raise SystemExit("错误: 未找到模块 32036 家族映射 switch")
+    mapping: dict[str, str] = {}
+    for m in re.finditer(r"(?:case r\.lh\.([A-Za-z0-9_$]+):)+return\s*([a-z]);?", sw.group(1)):
+        labels = re.findall(r"case r\.lh\.([A-Za-z0-9_$]+):", m.group(0))
+        for label in labels:
+            mapping[label] = m.group(2)
+
+    var_positions = [(m.group(1), m.end() - 1)
+                     for m in re.finditer(r"(?:^|[,\s])([olsdu])=(\[)", body)]
+    tables: dict[str, list[str]] = {}
+    for idx, (var, pos) in enumerate(var_positions):
+        endpos = var_positions[idx + 1][1] if idx + 1 < len(var_positions) else body.find(";function", pos)
+        if endpos < 0:
+            endpos = len(body)
+        values = [sampler_enum[key] for key in re.findall(r"value:r\.l1\.([A-Za-z0-9_$]+)", body[pos:endpos])]
+        tables[var] = values
+
+    out: dict[str, list[str]] = {}
+    for key, var in mapping.items():
+        family = family_enum.get(key)
+        if not family:
+            continue
+        seen: list[str] = []
+        for value in tables.get(var, []):
+            if value not in seen:
+                seen.append(value)
+        out[family] = seen
+    return out
+
+
+def extract_noise_schedule(
+    mod53856: str,
+    model_names: list[str],
+    sampler_enum: dict[str, str],
+) -> dict:
+    """从模块 53856 提取噪点表数据（p 枚举 / g 模型允许 / A 采样器允许 / PE 能力）。
+
+    - values: 噪点表合法值（native/karras/exponential/polyexponential）。
+    - model_allowed: 前端 g(values, model) 对每个已知模型的结果
+      （v5 为空、v4/v4.5 去掉 native、其余为全部）。
+    - model_supports: 前端 PE(model).noiseSchedule 是否支持该参数。
+    - sampler_allowed: 前端 A(sampler) 对每个采样器枚举值的允许列表。
+    """
+    p_start = mod53856.find("var p=function(e){")
+    if p_start < 0:
+        raise SystemExit("错误: 未找到噪点表枚举 p")
+    p_m = re.search(r"var p=function\(e\)\{return (.*?),e\}\(\{\}\)", mod53856[p_start:p_start + 500])
+    if not p_m:
+        raise SystemExit("错误: 未找到噪点表枚举 p 内容")
+    values = [v for _, v in re.findall(r'e\.([A-Za-z0-9_$]+)="([^"]*)"', p_m.group(1))]
+
+    g_start = mod53856.find("function g(e,t){switch(t){", p_start)
+    if g_start < 0:
+        raise SystemExit("错误: 未找到噪点表模型允许函数 g")
+    g_m = re.search(r"function g\(e,t\)\{switch\(t\)\{(.*?)\}\}", mod53856[g_start:], re.S)
+    if not g_m:
+        raise SystemExit("错误: 未找到噪点表模型允许函数 g 内容")
+    g_groups: list[tuple[list[str], str]] = []
+    for m in re.finditer(r'(?:case"([^"]+)":)+return([^;]+);', g_m.group(1)):
+        g_groups.append((re.findall(r'case"([^"]+)"', m.group(0)), m.group(2).strip()))
+
+    def model_allowed_for(model: str) -> list[str]:
+        for labels, ret in g_groups:
+            if model in labels:
+                if ret == "[]":
+                    return []
+                if "filter" in ret:
+                    return [v for v in values if v != "native"]
+                return list(values)
+        return list(values)
+
+    model_allowed = {model: model_allowed_for(model) for model in model_names}
+
+    a_start = mod53856.find("function A(e){switch(e){", g_start)
+    if a_start < 0:
+        raise SystemExit("错误: 未找到噪点表采样器允许函数 A")
+    a_m = re.search(r"function A\(e\)\{switch\(e\)\{(.*?)\}\}", mod53856[a_start:], re.S)
+    if not a_m:
+        raise SystemExit("错误: 未找到噪点表采样器允许函数 A 内容")
+    a_groups: list[tuple[list[str], list[str]]] = []
+    for m in re.finditer(r'(?:case"([^"]+)":)+return(\[[^\]]*\]);?', a_m.group(1)):
+        a_groups.append((re.findall(r'case"([^"]+)"', m.group(0)), re.findall(r'"([^"]+)"', m.group(2))))
+
+    sampler_allowed = {}
+    for sampler in sampler_enum.values():
+        allowed: list[str] = []
+        for labels, vals in a_groups:
+            if sampler in labels:
+                allowed = vals
+                break
+        sampler_allowed[sampler] = allowed
+
+    pe_idx = mod53856.find("function h(e){")
+    if pe_idx < 0:
+        raise SystemExit("错误: 未找到 PE 函数")
+    supports: dict[str, bool] = {}
+    group_re = re.compile(r'(?:case"([^"]+)":)+return\{[^{}]*noiseSchedule:(!0|!1)')
+    for m in group_re.finditer(mod53856[pe_idx:]):
+        supported = m.group(2) == "!0"
+        for label in re.findall(r'case"([^"]+)"', m.group(0)):
+            supports[label] = supported
+    model_supports = {model: supports.get(model, False) for model in model_names}
+
+    return {
+        "values": values,
+        "model_allowed": model_allowed,
+        "model_supports": model_supports,
+        "sampler_allowed": sampler_allowed,
+    }
+
+
 # ---- 主流程 -----------------------------------------------------------------
 
 def main() -> int:
@@ -113,6 +255,7 @@ def main() -> int:
         ("_app.js", 41179),      # 免费小图 t1 等
         ("chunk-1052.js", 61225),  # 定价 GI/tY/H_/Lq
         ("chunk-1052.js", 57863),  # Dk/尺寸/放大表/最大像素
+        ("chunk-1052.js", 32036),  # 家族-采样器表 DF/sC
         ("chunk-7416.js", 25690),  # SW.getPrice
     ]
     for fname, mid in archive:
@@ -123,6 +266,7 @@ def main() -> int:
 
     mod61225, _ = extract_module(chunk1052, 61225)
     mod57863, _ = extract_module(chunk1052, 57863)
+    mod32036, _ = extract_module(chunk1052, 32036)
     mod53856, _ = extract_module(app_src, 53856)
     mod62654, _ = extract_module(app_src, 62654)
     mod46542, _ = extract_module(app_src, 46542)
@@ -328,7 +472,20 @@ def main() -> int:
     outp.unlink(missing_ok=True)
     print(f"[16] 模型家族映射: {data['model_family']}")
 
-    # 17) 写出 pricing_data.json
+    # 17) 家族-采样器表 + 噪点表（模块 32036 / 模块 53856）
+    sampler_enum = extract_enum(mod53856, "d")   # l1 采样器枚举
+    family_enum = extract_enum(mod53856, "a")    # lh 家族枚举
+    if not sampler_enum or not family_enum:
+        print("错误: 未找到采样器/家族枚举", file=sys.stderr)
+        return 1
+    data["family_samplers"] = extract_family_samplers(mod32036, sampler_enum, family_enum)
+    print(f"[17] 家族-采样器表: {data['family_samplers']}")
+    data["noise_schedule"] = extract_noise_schedule(mod53856, model_names, sampler_enum)
+    print(f"[17] 噪点表: values={data['noise_schedule']['values']} "
+          f"model_supports={sum(data['noise_schedule']['model_supports'].values())} 个模型 "
+          f"sampler_allowed={sum(bool(v) for v in data['noise_schedule']['sampler_allowed'].values())} 个采样器")
+
+    # 18) 写出 pricing_data.json
     out = GEN / "pricing_data.json"
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n完成: {out} ({out.stat().st_size} 字节)")

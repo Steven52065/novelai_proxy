@@ -198,6 +198,94 @@ class TestDataIntegrity:
         for model in DATA["model_family"]:
             assert ap.model_family(model) == DATA["model_family"][model]
 
+    def test_family_samplers_fields(self):
+        assert set(DATA["family_samplers"]) == {
+            "stableDiffusion",
+            "stableDiffusionGroup2",
+            "stableDiffusionXL",
+            "stableDiffusionXLFurry",
+            "v4",
+            "v5",
+        }
+        # 每个家族都去重且非空
+        for family, samplers in DATA["family_samplers"].items():
+            assert samplers
+            assert len(samplers) == len(set(samplers))
+
+    def test_family_samplers_samples(self):
+        sdxl = DATA["family_samplers"]["stableDiffusionXL"]
+        assert "k_euler" in sdxl
+        assert "k_euler_ancestral" in sdxl
+        assert "ddim" not in sdxl
+        assert "plms" not in sdxl
+        # v4/v5 共用 u 表
+        assert DATA["family_samplers"]["v4"] == DATA["family_samplers"]["v5"]
+
+    def test_noise_schedule_fields(self):
+        ns = DATA["noise_schedule"]
+        assert ns["values"] == ["native", "karras", "exponential", "polyexponential"]
+        assert set(ns["model_allowed"]) == set(DATA["model_family"])
+        assert set(ns["model_supports"]) == set(DATA["model_family"])
+        assert set(ns["sampler_allowed"]) == {
+            "plms", "ddim", "k_euler", "k_euler_ancestral", "k_dpm_2", "k_dpm_2_ancestral",
+            "k_lms", "k_dpmpp_2s_ancestral", "k_dpmpp_sde", "k_dpmpp_2m", "k_dpm_adaptive",
+            "k_dpm_fast", "k_dpmpp_2m_sde", "k_dpmpp_3m_sde", "ddim_v3", "nai_smea", "nai_smea_dyn",
+        }
+
+    def test_noise_schedule_model_allowed_samples(self):
+        ns = DATA["noise_schedule"]
+        # v5 为空
+        assert ns["model_allowed"]["nai-diffusion-5-full"] == []
+        assert ns["model_allowed"]["nai-diffusion-5-curated-inpainting"] == []
+        # v4/v4.5 去掉 native
+        assert ns["model_allowed"]["nai-diffusion-4-5-full"] == ["karras", "exponential", "polyexponential"]
+        assert ns["model_allowed"]["nai-diffusion-4-full"] == ["karras", "exponential", "polyexponential"]
+        # 其余为全部
+        assert ns["model_allowed"]["nai-diffusion-3"] == ["native", "karras", "exponential", "polyexponential"]
+
+    def test_noise_schedule_sampler_allowed_samples(self):
+        ns = DATA["noise_schedule"]
+        assert ns["sampler_allowed"]["k_euler_ancestral"] == ["native", "karras", "exponential", "polyexponential"]
+        assert ns["sampler_allowed"]["k_dpm_2"] == ["exponential", "polyexponential"]
+        assert ns["sampler_allowed"]["ddim"] == []
+
+    def test_noise_schedule_model_supports_samples(self):
+        ns = DATA["noise_schedule"]
+        # 支持噪点表的模型
+        assert ns["model_supports"]["nai-diffusion-3"] is True
+        assert ns["model_supports"]["nai-diffusion-4-5-full"] is True
+        assert ns["model_supports"]["custom"] is True
+        # 旧模型 / v5 不支持
+        assert ns["model_supports"]["nai-diffusion"] is False
+        assert ns["model_supports"]["nai-diffusion-2"] is False
+        assert ns["model_supports"]["nai-diffusion-5-full"] is False
+
+
+class TestParameterDataAccessors:
+    def test_samplers_for_model(self):
+        assert "k_euler_ancestral" in ap.samplers_for_model("nai-diffusion-3")
+        assert "ddim" not in ap.samplers_for_model("nai-diffusion-3")
+        # model_family 对未知模型回退 stableDiffusion，因此采样器列表同 SD 家族
+        assert ap.samplers_for_model("some-future-model") == ap.samplers_for_model("nai-diffusion")
+
+    def test_noise_schedule_values(self):
+        assert ap.noise_schedule_values() == ("native", "karras", "exponential", "polyexponential")
+
+    def test_noise_schedule_for_model(self):
+        assert ap.noise_schedule_for_model("nai-diffusion-5-full") == ()
+        assert "native" not in ap.noise_schedule_for_model("nai-diffusion-4-5-full")
+        assert ap.noise_schedule_for_model("nai-diffusion-3") == (
+            "native", "karras", "exponential", "polyexponential",
+        )
+
+    def test_noise_schedule_for_sampler(self):
+        assert ap.noise_schedule_for_sampler("k_dpm_2") == ("exponential", "polyexponential")
+        assert ap.noise_schedule_for_sampler("ddim") == ()
+
+    def test_model_supports_noise_schedule(self):
+        assert ap.model_supports_noise_schedule("nai-diffusion-3") is True
+        assert ap.model_supports_noise_schedule("nai-diffusion") is False
+
 
 # ---------------------------------------------------------------- 对拍集成测试
 

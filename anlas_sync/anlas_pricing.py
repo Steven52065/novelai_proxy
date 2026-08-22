@@ -51,6 +51,34 @@ def is_active_subscription(sub: dict) -> bool:
     )
 
 
+# ---------------------------------------------------------------- 参数校验数据
+
+def samplers_for_model(model: str) -> tuple[str, ...]:
+    """该模型家族可用的采样器列表（模块 32036 DF，已去重；不含遗留例外）。"""
+    return tuple(DATA.get("family_samplers", {}).get(model_family(model), ()))
+
+
+def noise_schedule_values() -> tuple[str, ...]:
+    """噪点表合法值（模块 53856 p 枚举）。"""
+    return tuple(DATA.get("noise_schedule", {}).get("values", ()))
+
+
+def noise_schedule_for_model(model: str) -> tuple[str, ...]:
+    """模型允许的噪点表值（模块 53856 g(values, model)）。"""
+    ns = DATA.get("noise_schedule", {})
+    return tuple(ns.get("model_allowed", {}).get(model, ns.get("values", ())))
+
+
+def noise_schedule_for_sampler(sampler: str) -> tuple[str, ...]:
+    """采样器允许的噪点表值（模块 53856 A(sampler)）。"""
+    return tuple(DATA.get("noise_schedule", {}).get("sampler_allowed", {}).get(sampler, ()))
+
+
+def model_supports_noise_schedule(model: str) -> bool:
+    """模型是否支持 noise_schedule 参数（模块 53856 PE(model).noiseSchedule）。"""
+    return bool(DATA.get("noise_schedule", {}).get("model_supports", {}).get(model, False))
+
+
 def validate_params(params: dict, model: str) -> bool:
     """参数校验（对应前端 module 57863 Dk）。
 

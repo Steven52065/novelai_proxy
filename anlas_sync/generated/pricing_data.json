@@ -7151,5 +7151,300 @@
     "safe-diffusion-inpainting": "stableDiffusion",
     "stable-diffusion": "stableDiffusion",
     "waifu-diffusion": "stableDiffusion"
+  },
+  "family_samplers": {
+    "stableDiffusion": [
+      "k_dpmpp_2m",
+      "k_euler_ancestral",
+      "k_euler",
+      "k_dpm_2",
+      "k_dpmpp_2s_ancestral",
+      "k_dpmpp_sde",
+      "k_dpm_fast",
+      "ddim"
+    ],
+    "stableDiffusionGroup2": [
+      "k_euler_ancestral",
+      "k_dpmpp_2s_ancestral",
+      "ddim",
+      "k_dpmpp_2m",
+      "k_dpm_2",
+      "k_dpmpp_sde",
+      "k_dpm_fast",
+      "k_euler"
+    ],
+    "stableDiffusionXL": [
+      "k_euler",
+      "k_euler_ancestral",
+      "k_dpmpp_2s_ancestral",
+      "k_dpmpp_2m_sde",
+      "k_dpmpp_2m",
+      "k_dpmpp_sde",
+      "ddim_v3"
+    ],
+    "stableDiffusionXLFurry": [
+      "k_euler_ancestral",
+      "k_euler",
+      "k_dpmpp_2s_ancestral",
+      "k_dpmpp_2m_sde",
+      "k_dpmpp_2m",
+      "k_dpmpp_sde",
+      "ddim_v3"
+    ],
+    "v4": [
+      "k_euler_ancestral",
+      "k_euler",
+      "k_dpmpp_2s_ancestral",
+      "k_dpmpp_2m_sde",
+      "k_dpmpp_2m",
+      "k_dpmpp_sde"
+    ],
+    "v5": [
+      "k_euler_ancestral",
+      "k_euler",
+      "k_dpmpp_2s_ancestral",
+      "k_dpmpp_2m_sde",
+      "k_dpmpp_2m",
+      "k_dpmpp_sde"
+    ]
+  },
+  "noise_schedule": {
+    "values": [
+      "native",
+      "karras",
+      "exponential",
+      "polyexponential"
+    ],
+    "model_allowed": {
+      "curated-diffusion-test": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "custom": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "furry-diffusion-inpainting": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-2": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-3": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-3-inpainting": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-5-curated": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-5-curated-inpainting": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-5-full": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-5-full-inpainting": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-curated-inpainting": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-curated-preview": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-full": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-4-full-inpainting": [
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-5-curated": [],
+      "nai-diffusion-5-curated-inpainting": [],
+      "nai-diffusion-5-full": [],
+      "nai-diffusion-5-full-inpainting": [],
+      "nai-diffusion-furry": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-furry-3": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-furry-3-inpainting": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-furry2": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-inpainting": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "nai-diffusion-xl": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "safe-diffusion": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "safe-diffusion-inpainting": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "stable-diffusion": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "waifu-diffusion": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ]
+    },
+    "model_supports": {
+      "curated-diffusion-test": false,
+      "custom": true,
+      "furry-diffusion-inpainting": false,
+      "nai-diffusion": false,
+      "nai-diffusion-2": false,
+      "nai-diffusion-3": true,
+      "nai-diffusion-3-inpainting": true,
+      "nai-diffusion-4-5-curated": true,
+      "nai-diffusion-4-5-curated-inpainting": true,
+      "nai-diffusion-4-5-full": true,
+      "nai-diffusion-4-5-full-inpainting": true,
+      "nai-diffusion-4-curated-inpainting": true,
+      "nai-diffusion-4-curated-preview": true,
+      "nai-diffusion-4-full": true,
+      "nai-diffusion-4-full-inpainting": true,
+      "nai-diffusion-5-curated": false,
+      "nai-diffusion-5-curated-inpainting": false,
+      "nai-diffusion-5-full": false,
+      "nai-diffusion-5-full-inpainting": false,
+      "nai-diffusion-furry": false,
+      "nai-diffusion-furry-3": true,
+      "nai-diffusion-furry-3-inpainting": true,
+      "nai-diffusion-furry2": false,
+      "nai-diffusion-inpainting": false,
+      "nai-diffusion-xl": true,
+      "safe-diffusion": false,
+      "safe-diffusion-inpainting": false,
+      "stable-diffusion": false,
+      "waifu-diffusion": false
+    },
+    "sampler_allowed": {
+      "plms": [],
+      "ddim": [],
+      "k_euler": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "k_euler_ancestral": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "k_dpm_2": [
+        "exponential",
+        "polyexponential"
+      ],
+      "k_dpm_2_ancestral": [],
+      "k_lms": [],
+      "k_dpmpp_2s_ancestral": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "k_dpmpp_sde": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "k_dpmpp_2m": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "k_dpm_adaptive": [],
+      "k_dpm_fast": [],
+      "k_dpmpp_2m_sde": [
+        "native",
+        "karras",
+        "exponential",
+        "polyexponential"
+      ],
+      "k_dpmpp_3m_sde": [],
+      "ddim_v3": [],
+      "nai_smea": [],
+      "nai_smea_dyn": []
+    }
   }
 }

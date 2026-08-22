@@ -4,7 +4,8 @@
 用法:
     .\\.venv\\Scripts\\python.exe -m anlas_sync.compare [--cases N] [--seed S]
 
-对拍覆盖: GI(生图价格), tY(放大), H_(vibe附加), Dk(参数校验), ax(订阅判断)
+对拍覆盖: GI(生图价格), tY(放大), H_(vibe附加), Dk(参数校验), ax(订阅判断),
+Tz(噪点表模型允许), Ux(噪点表采样器允许), PEn(PE.noiseSchedule), DF(家族-采样器表)
 任何不一致会打印差异并以非零退出码结束。
 """
 from __future__ import annotations
@@ -80,6 +81,16 @@ def make_cases(rng: random.Random, count: int) -> list[dict]:
     # H_ 用例
     for i in range(25):
         cases.append({"id": 100000 + i, "fn": "H_", "args": [i]})
+
+    # 噪点表/家族-采样器用例
+    noise_values = list(DATA["noise_schedule"]["values"])
+    for i, model in enumerate(MODELS):
+        cases.append({"id": 200000 + i * 2, "fn": "Tz", "args": [noise_values, model]})
+        cases.append({"id": 200000 + i * 2 + 1, "fn": "PEn", "args": [model]})
+    for i, sampler in enumerate(SAMPLERS):
+        cases.append({"id": 300000 + i, "fn": "Ux", "args": [sampler]})
+    for i, family in enumerate(sorted(DATA["family_samplers"])):
+        cases.append({"id": 400000 + i, "fn": "DF", "args": [family]})
     return cases
 
 
@@ -99,6 +110,14 @@ def py_run(cases: list[dict]) -> dict[int, object]:
                 out[c["id"]] = ap.is_active_subscription(args[0])
             elif fn == "H_":
                 out[c["id"]] = ap.vibe_extra_price(args[0])
+            elif fn == "Tz":
+                out[c["id"]] = list(ap.noise_schedule_for_model(args[1]))
+            elif fn == "PEn":
+                out[c["id"]] = ap.model_supports_noise_schedule(args[0])
+            elif fn == "Ux":
+                out[c["id"]] = list(ap.noise_schedule_for_sampler(args[0]))
+            elif fn == "DF":
+                out[c["id"]] = list(DATA["family_samplers"].get(args[0], []))
             else:
                 out[c["id"]] = None
         except Exception as e:  # noqa: BLE001

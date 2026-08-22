@@ -18,7 +18,8 @@
  * output.json 格式:
  *   {"results": {"0": 5, "1": 1}}
  *
- * 支持函数: GI, tY, H_, ax, Jg (module 71810.ax / 18401.Jg), Dk
+ * 支持函数: GI, tY, H_, ax, Jg, Dk, Tz(噪点表模型允许), Ux(噪点表采样器允许),
+ *          PEn(PE.noiseSchedule), DF(家族-采样器表)
  */
 "use strict";
 const fs = require("fs");
@@ -129,6 +130,17 @@ const pricing = global.__wr(61225);
 const model53856 = global.__wr(53856);
 const subModule = global.__wr(62654);
 const validation = global.__wr(57863);
+const familySamplers = global.__wr(32036);
+
+function flattenSamplerTable(table) {
+  const seen = [];
+  for (const group of table || []) {
+    for (const opt of (group && group.options) || []) {
+      if (!seen.includes(opt.value)) seen.push(opt.value);
+    }
+  }
+  return seen;
+}
 
 const fns = {
   GI: (args) => pricing.GI(...args),
@@ -137,6 +149,10 @@ const fns = {
   Dk: (args) => validation.Dk(...args),
   ax: (args) => subModule.ax(...args),
   Jg: (args) => model53856.Jg(...args),
+  Tz: (args) => model53856.Tz(...args),
+  Ux: (args) => model53856.Ux(...args),
+  PEn: (args) => model53856.PE(args[0]).noiseSchedule,
+  DF: (args) => flattenSamplerTable(familySamplers.DF(args[0])),
 };
 
 function main() {
