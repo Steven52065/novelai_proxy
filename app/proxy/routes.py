@@ -72,12 +72,10 @@ async def generate_image(
     if parse_error_response is not None:
         return parse_error_response
 
-    try:
-        request_payload = _normalize_generate_image_payload(payload)
-    except HTTPException:
-        raise
+    # 非 dict 载荷直接抛 HTTPException(400)，交给全局处理器。
+    request_payload = _normalize_generate_image_payload(payload)
 
-    # 仅文生图 generate 硬校验 sampler / noise_schedule（数据来自 anlas_sync 同步）；
+    # 仅文生图 generate 校验 sampler / noise_schedule 的取值合法性；
     # img2img / infill 以及 upscale / augment / encode-vibe 不启用本校验。
     validation_errors = validate_generate_parameters(
         model=request_payload.get("model"),

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+from anlas_sync import anlas_pricing
+from app.novelai_enums import Sampler
 from app.policies.generate_validation import validate_generate_parameters
 
 
@@ -37,22 +41,30 @@ def test_unknown_sampler_rejected_with_chinese_message():
     message = errors[0]
     assert "sampler" in message
     assert "future_sampler" in message
-    assert "nai-diffusion-3" in message
     assert "k_euler" in message  # 允许列表里有采样器
 
 
-def test_exception_samplers_pass_for_all_families():
-    for sampler in ("plms", "k_lms", "k_dpm_2_ancestral", "k_dpm_adaptive", "nai_smea", "nai_smea_dyn"):
-        for model in ("nai-diffusion", "nai-diffusion-2", "nai-diffusion-3", "nai-diffusion-4-5-full", "nai-diffusion-5-full"):
-            assert validate_generate_parameters(model, "generate", _params(sampler=sampler)) == [], (model, sampler)
+@pytest.mark.parametrize("bad_sampler", [["k_euler"], {"a": 1}, 123, 4.5])
+def test_non_string_sampler_rejected_instead_of_crashing(bad_sampler):
+    """回归：非字符串 sampler 以前在集合成员判断里抛 TypeError，导致 500。"""
+    errors = validate_generate_parameters("nai-diffusion-3", "generate", _params(sampler=bad_sampler))
 
-
-def test_family_sampler_ok_but_other_family_sampler_rejected():
-    # k_dpm_2 在 stableDiffusion 家族，但不在 stableDiffusionXL 家族
-    assert validate_generate_parameters("nai-diffusion", "generate", _params(sampler="k_dpm_2")) == []
-    errors = validate_generate_parameters("nai-diffusion-3", "generate", _params(sampler="k_dpm_2"))
     assert len(errors) == 1
-    assert "k_dpm_2" in errors[0]
+    assert "sampler" in errors[0]
+
+
+def test_every_enum_sampler_passes_for_every_known_model():
+    """采样器只做枚举成员判断，不按模型家族收窄。
+
+    前端模块 32036 的家族采样器表是下拉菜单数据，不是校验规则：实测上游对
+    v3+k_dpm_2、v3+k_dpmpp_3m_sde 等菜单外组合都会正常出图。
+    """
+    for model in anlas_pricing.DATA["model_family"]:
+        for sampler in (s.value for s in Sampler):
+            assert validate_generate_parameters(model, "generate", _params(sampler=sampler)) == [], (
+                model,
+                sampler,
+            )
 
 
 def test_invalid_noise_schedule_value_rejected():
@@ -64,52 +76,44 @@ def test_invalid_noise_schedule_value_rejected():
     assert "native" in errors[0]
 
 
-def test_noise_schedule_unsupported_model_rejected():
-    errors = validate_generate_parameters("nai-diffusion", "generate", _params(noise_schedule="karras"))
-
-    assert len(errors) == 1
-    assert "noise_schedule" in errors[0]
-    assert "nai-diffusion" in errors[0]
-
-
-def test_noise_schedule_intersection_not_contained_rejected():
-    # ddim_v3 在 SDXL 家族采样器列表里（sampler 校验通过），但 A(ddim_v3) 允许列表为空，
-    # model_allowed ∩ sampler_allowed 为空 → 交集分支报错。
-    errors = validate_generate_parameters(
-        "nai-diffusion-3",
-        "generate",
-        _params(sampler="ddim_v3", noise_schedule="karras"),
-    )
-
-    assert len(errors) == 1
-    assert "noise_schedule" in errors[0]
-    assert "karras" in errors[0]
-    assert "ddim_v3" in errors[0]
-    assert "允许的值：无" in errors[0]
-
-
-def test_noise_schedule_intersection_ok_when_sampler_allows():
+@pytest.mark.parametrize(
+    ("model", "sampler", "noise_schedule"),
+    [
+        # 以下组合均已对真实上游验证：返回 200 与正常图片 zip。
+        ("nai-diffusion-5-full", "k_euler", "karras"),          # 模块 53856 PE 说 v5 不支持噪点表
+        ("nai-diffusion-5-full", "k_euler", "native"),
+        ("nai-diffusion-4-5-full", "k_euler", "native"),        # Tz 对 v4 剔除了 native
+        ("nai-diffusion-3", "ddim_v3", "native"),               # Ux(ddim_v3) 为空
+        ("nai-diffusion-3", "plms", "karras"),
+    ],
+)
+def test_model_and_sampler_combinations_are_not_validated(model, sampler, noise_schedule):
+    """噪点表只校验取值合法性，不校验与模型/采样器是否匹配。"""
     assert validate_generate_parameters(
-        "nai-diffusion-3",
+        model,
         "generate",
-        _params(sampler="k_euler_ancestral", noise_schedule="karras"),
+        _params(sampler=sampler, noise_schedule=noise_schedule),
     ) == []
 
 
-def test_v5_model_rejects_any_noise_schedule():
-    # v5 模型前端 g 返回空列表，任何噪点表值都不允许
-    errors = validate_generate_parameters("nai-diffusion-5-full", "generate", _params(noise_schedule="karras"))
-    assert len(errors) == 1
-    assert "noise_schedule" in errors[0]
-    assert "nai-diffusion-5-full" in errors[0]
-
-
-def test_noise_schedule_without_sampler_uses_model_allowed():
+def test_noise_schedule_without_sampler_passes():
     assert validate_generate_parameters(
         "nai-diffusion-3",
         "generate",
         _params(sampler=None, noise_schedule="native"),
     ) == []
+
+
+def test_sampler_and_noise_schedule_errors_reported_together():
+    errors = validate_generate_parameters(
+        "nai-diffusion-3",
+        "generate",
+        _params(sampler="future_sampler", noise_schedule="future_schedule"),
+    )
+
+    assert len(errors) == 2
+    assert "sampler" in errors[0]
+    assert "noise_schedule" in errors[1]
 
 
 def test_action_not_generate_skips_validation():
@@ -131,3 +135,8 @@ def test_unknown_model_skips_validation():
         "generate",
         _params(sampler="future_sampler", noise_schedule="future_schedule"),
     ) == []
+
+
+def test_non_dict_parameters_skipped():
+    assert validate_generate_parameters("nai-diffusion-3", "generate", None) == []
+    assert validate_generate_parameters("nai-diffusion-3", "generate", "not-a-dict") == []

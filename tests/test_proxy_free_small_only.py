@@ -128,7 +128,6 @@ def test_generate_validation_rejects_unknown_sampler_before_free_small_only(tmp_
         body = resp.json()
         assert "sampler" in body["message"]
         assert "future_sampler" in body["message"]
-        assert "nai-diffusion-3" in body["message"]
 
 def test_free_small_only_rejects_img2img_unknown_model_and_unknown_parameters(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
