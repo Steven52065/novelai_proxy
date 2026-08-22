@@ -493,6 +493,64 @@ def test_generate_rejects_invalid_noise_schedule_with_chinese_400(tmp_path: Path
         assert app.state.upstream.last_generate_payload is None
 
 
+def test_generate_rejects_dimension_not_multiple_of_64(tmp_path: Path, monkeypatch):
+    """上游对非 64 倍数的宽高直接拒绝生成，代理提前用中文 400 拦下。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-dimension", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        # 786x786 取自真实被上游拒绝的请求。
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"width": 786, "height": 786}}
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 400
+        message = resp.json()["message"]
+        assert "width" in message
+        assert "height" in message
+        assert "64 的整数倍" in message
+        assert "786" in message
+        assert app.state.upstream.last_generate_payload is None
+
+
+def test_generate_dimension_check_not_applied_to_img2img(tmp_path: Path, monkeypatch):
+    """分辨率校验与 sampler 校验同一层，img2img / infill 同样不启用。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-dimension-img2img", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        payload = PAYLOAD | {
+            "action": "img2img",
+            "parameters": PAYLOAD["parameters"] | {
+                "width": 786,
+                "height": 786,
+                "image": "base64-image",
+                "strength": 0.5,
+            },
+        }
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 201
+        assert "64 的整数倍" not in resp.text
+
+
 def test_generate_passes_through_menu_incompatible_combinations(tmp_path: Path, monkeypatch):
     """前端下拉菜单不提供、但上游实测接受的组合必须放行。
 
