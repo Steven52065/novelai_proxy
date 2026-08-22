@@ -445,8 +445,6 @@ class ProxyRequestService:
     ) -> FreeSmallDailyReservation | None:
         if self.free_small_daily_limit_manager is None:
             return None
-        if not task.free_small_only_allowed:
-            return None
         count = int(task.free_small_daily_count or 0)
         if count <= 0:
             return None

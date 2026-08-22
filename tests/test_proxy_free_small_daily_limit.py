@@ -170,6 +170,65 @@ def test_paid_or_uncertain_generation_does_not_consume_free_small_daily_limit(tm
         assert daily["available"] == 1
 
 
+def test_zero_cost_generation_consumes_daily_limit_even_when_parameters_are_unrecognized(
+    tmp_path: Path, monkeypatch
+):
+    """计费为 0 就必须占日限额，不能因为参数没通过保守白名单就漏计。
+
+    mask 和任意未知参数都会让 cost_is_certainly_free 变成 False，但价格仍是 0，
+    过去这类请求既不扣 anlas 也不占日限额，等于无限量免费出图。
+    """
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    for label, extra_parameters in (
+        ("mask", {"mask": "x", "inpaintImg2ImgStrength": 0.01}),
+        ("unknown-parameter", {"zzz_unknown": 1}),
+    ):
+        with TestClient(app) as client:
+            app.state.upstream = FakeUpstream()
+            user = _create_user(client, free_small_daily_limit_enabled=True, free_small_daily_limit=1)
+            headers = {"Authorization": f"Bearer {user['api_key']}"}
+            payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | extra_parameters}
+
+            first = client.post("/ai/generate-image", headers=headers, json=payload)
+            second = client.post("/ai/generate-image", headers=headers, json=payload)
+
+            assert first.status_code == 201, label
+            assert second.status_code == 429, label
+            assert second.json()["limit_scope"] == "user"
+
+            daily = client.get("/user/subscription", headers=headers).json()["proxyFreeSmallDailyLimit"]
+            assert daily["used"] == 1, label
+            assert daily["reserved"] == 0, label
+            assert daily["available"] == 0, label
+
+
+def test_zero_cost_generation_daily_limit_is_not_bypassable_by_mixing_shapes(
+    tmp_path: Path, monkeypatch
+):
+    """干净请求用掉额度后，换成带 mask 或未知参数的同一请求也必须被拦。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        user = _create_user(client, free_small_daily_limit_enabled=True, free_small_daily_limit=1)
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+
+        assert client.post("/ai/generate-image", headers=headers, json=PAYLOAD).status_code == 201
+
+        masked = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"mask": "x", "inpaintImg2ImgStrength": 0.01}}
+        unknown = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"zzz_unknown": 1}}
+
+        assert client.post("/ai/generate-image", headers=headers, json=masked).status_code == 429
+        assert client.post("/ai/generate-image", headers=headers, json=unknown).status_code == 429
+
+        daily = client.get("/user/subscription", headers=headers).json()["proxyFreeSmallDailyLimit"]
+        assert daily["used"] == 1
+        assert daily["available"] == 0
+
+
 def _create_user(client: TestClient, **overrides):
     payload = {
         "name": "daily-user",

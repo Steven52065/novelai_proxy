@@ -100,7 +100,10 @@ async def generate_image(
         request_payload=request_payload,
         estimated_cost=estimated_cost,
         free_small_only_allowed=cost_is_certainly_free,
-        free_small_daily_count=cost_inputs.n_samples if cost_is_certainly_free else 0,
+        # 日限额按实际计费结果计数，不能复用 cost_is_certainly_free：后者是
+        # free_small_only 放行用的保守白名单，任何未知参数都会让它变 False，
+        # 而计费仍是 0。两者不一致时，请求既不扣 anlas 也不占日限额。
+        free_small_daily_count=1 if estimated_cost == 0 else 0,
         handler=lambda upstream: upstream.generate_image_payload_zip(request_payload),
         proxy_service=proxy_service,
     )
