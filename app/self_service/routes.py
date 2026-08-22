@@ -109,7 +109,7 @@ async def discord_callback(
     _require_discord_enabled(config)
     saved_state = verify_payload(request.cookies.get(OAUTH_STATE_COOKIE), config.session_secret)
     if not code or not state or saved_state is None or saved_state.get("state") != state:
-        raise HTTPException(status_code=400, detail={"message": "Invalid Discord OAuth state"})
+        raise HTTPException(status_code=400, detail={"message": "Discord OAuth 状态无效"})
 
     try:
         token_payload = await oauth.exchange_code(code=code, redirect_uri=config.redirect_uri)
@@ -146,7 +146,7 @@ async def discord_callback(
                 guild_id=config.required_guild_id,
             )
         except DiscordMemberNotFound:
-            _reject_discord_user(db, profile, "Discord user is not in the required guild")
+            _reject_discord_user(db, profile, "该 Discord 用户不在要求的服务器中")
         except Exception as exc:
             _raise_discord_oauth_failure("fetch_guild_member", exc)
 
@@ -156,7 +156,7 @@ async def discord_callback(
             _raise_discord_oauth_failure("parse_guild_member_response", exc)
 
         if role_ids.isdisjoint(config.required_role_ids):
-            _reject_discord_user(db, profile, "Discord user does not have the required role")
+            _reject_discord_user(db, profile, "该 Discord 用户没有要求的身份组")
 
     elif config.require_guild:
         try:
@@ -170,7 +170,7 @@ async def discord_callback(
             _raise_discord_oauth_failure("parse_guilds_response", exc)
 
         if config.required_guild_id not in guild_ids:
-            _reject_discord_user(db, profile, "Discord user is not in the required guild")
+            _reject_discord_user(db, profile, "该 Discord 用户不在要求的服务器中")
 
     login = login_or_register_discord_user(
         db,
@@ -217,9 +217,9 @@ async def account_page(
         (user_id,),
     )
     if user is None or user["deleted_at"] is not None:
-        raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
+        raise HTTPException(status_code=403, detail={"message": "账号不可用"})
     if not int(user["is_active"]):
-        raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
+        raise HTTPException(status_code=403, detail={"message": "账号已被禁用"})
     queue_status = _queue_status_from_snapshot(
         proxy_queue.snapshot(),
         max_queue_size=app_config.queue.max_queue_size,
@@ -259,7 +259,7 @@ async def account_rate_limit_rules(
     _require_discord_enabled(config)
     user_id = _current_self_service_user_id(request, config.session_secret)
     if user_id is None:
-        raise HTTPException(status_code=401, detail={"message": "Authentication required"})
+        raise HTTPException(status_code=401, detail={"message": "需要登录"})
     _ensure_self_service_account_active(db, user_id)
     return {"rules": _self_service_rate_limit_rules(db, user_id)}
 
@@ -275,7 +275,7 @@ async def account_queue_status(
     _require_discord_enabled(config)
     user_id = _current_self_service_user_id(request, config.session_secret)
     if user_id is None:
-        raise HTTPException(status_code=401, detail={"message": "Authentication required"})
+        raise HTTPException(status_code=401, detail={"message": "需要登录"})
     _ensure_self_service_account_active(db, user_id)
     return _queue_status_from_snapshot(
         proxy_queue.snapshot(),
@@ -392,7 +392,7 @@ def _queue_status_from_snapshot(snapshot: dict, *, max_queue_size: int) -> dict[
 
 def _require_discord_enabled(config: DiscordSelfServiceConfig) -> DiscordSelfServiceConfig:
     if not config.enabled:
-        raise HTTPException(status_code=404, detail={"message": "Discord self-service is disabled"})
+        raise HTTPException(status_code=404, detail={"message": "Discord 自助服务未启用"})
     return config
 
 
@@ -409,7 +409,7 @@ def _reject_discord_user(db: Database, profile: DiscordProfile, message: str) ->
 
 def _raise_discord_oauth_failure(phase: str, exc: Exception, *, extra: dict[str, Any] | None = None) -> NoReturn:
     _log_discord_oauth_failure(phase, exc, extra=extra)
-    raise HTTPException(status_code=502, detail={"message": "Discord OAuth request failed"}) from exc
+    raise HTTPException(status_code=502, detail={"message": "Discord OAuth 请求失败"}) from exc
 
 
 def _log_discord_oauth_failure(phase: str, exc: Exception, *, extra: dict[str, Any] | None = None) -> None:
@@ -514,9 +514,9 @@ def _ensure_self_service_account_active(db: Database, user_id: int) -> None:
         (user_id,),
     )
     if user is None or user["deleted_at"] is not None:
-        raise HTTPException(status_code=403, detail={"message": "Account is unavailable"})
+        raise HTTPException(status_code=403, detail={"message": "账号不可用"})
     if not int(user["is_active"]):
-        raise HTTPException(status_code=403, detail={"message": "Account is disabled"})
+        raise HTTPException(status_code=403, detail={"message": "账号已被禁用"})
 
 
 def _self_service_rate_limit_rules(db: Database, user_id: int) -> list[dict[str, object]]:

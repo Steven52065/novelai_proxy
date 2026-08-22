@@ -37,7 +37,7 @@ class FreeSmallDailyLimitExceeded(Exception):
         self.requested = requested
         self.retry_after = retry_after
         self.remaining = max(snapshot.limit - snapshot.used - snapshot.reserved, 0)
-        super().__init__(f"Free small daily limit exceeded: {snapshot.limit} per day")
+        super().__init__(f"免费小图每日限额已用尽：每日最多 {snapshot.limit} 次")
 
 
 class FreeSmallDailyLimitManager:

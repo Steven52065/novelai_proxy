@@ -23,7 +23,7 @@ def test_admin_cookie_mutations_require_valid_csrf_but_basic_remains_compatible(
 
         missing = client.post("/admin/api/users", json={"name": "missing-csrf"})
         assert missing.status_code == 403
-        assert "refresh" in missing.json()["message"]
+        assert "刷新" in missing.json()["message"]
         assert missing.headers["cache-control"] == "no-store, private"
         assert missing.headers["pragma"] == "no-cache"
 
@@ -86,7 +86,7 @@ def test_basic_admin_mutations_reject_cross_site_browser_requests(tmp_path: Path
             )
 
             assert response.status_code == 403
-            assert response.json()["message"] == "Cross-site Basic-authenticated admin request is not allowed"
+            assert response.json()["message"] == "不允许跨站使用 Basic 认证的管理请求"
             assert response.headers["cache-control"] == "no-store, private"
 
         count = client.app.state.db.query_one("SELECT COUNT(*) AS c FROM users")["c"]

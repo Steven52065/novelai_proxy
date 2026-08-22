@@ -648,7 +648,7 @@ def test_disabled_upstream_rerouted_retry_attempt_is_rejected_when_no_upstream_r
                     "request_id": "retry-no-upstream",
                     "attempt_number": 1,
                     "error_code": "no_available_upstream",
-                    "error_message": "No enabled upstream is available for this user",
+                    "error_message": "当前没有可用的已启用上游",
                     "log_level": "ERROR",
                 }
             ]
@@ -741,7 +741,7 @@ def test_disabled_upstream_rerouted_retry_attempt_is_rejected_when_dispatch_queu
                 "request_id": "retry-dispatch-full",
                 "attempt_number": 1,
                 "error_code": "queue_full",
-                "error_message": "Queue full, please retry later",
+                "error_message": "队列已满，请稍后重试",
                 "log_level": "ERROR",
             }
         ]

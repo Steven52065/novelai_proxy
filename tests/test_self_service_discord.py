@@ -102,7 +102,7 @@ def test_discord_self_service_disabled_signup_returns_clear_status(tmp_path: Pat
         resp = client.get("/signup")
 
         assert resp.status_code == 404
-        assert resp.json()["message"] == "Discord self-service is disabled"
+        assert resp.json()["message"] == "Discord 自助服务未启用"
 
 
 def test_discord_oauth_state_mismatch_rejects_without_creating_user(tmp_path: Path, monkeypatch):
@@ -116,7 +116,7 @@ def test_discord_oauth_state_mismatch_rejects_without_creating_user(tmp_path: Pa
         bad = client.get("/auth/discord/callback?code=ok&state=bad")
 
         assert bad.status_code == 400
-        assert bad.json()["message"] == "Invalid Discord OAuth state"
+        assert bad.json()["message"] == "Discord OAuth 状态无效"
         assert _count_rows(client.app.state.db, "users") == 0
 
 
@@ -169,7 +169,7 @@ def test_discord_user_outside_required_guild_is_rejected(tmp_path: Path, monkeyp
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Discord user is not in the required guild"
+        assert resp.json()["message"] == "该 Discord 用户不在要求的服务器中"
         assert _count_rows(client.app.state.db, "users") == 0
 
 
@@ -188,12 +188,12 @@ def test_discord_login_outside_required_guild_disables_existing_account(tmp_path
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Discord user is not in the required guild"
+        assert resp.json()["message"] == "该 Discord 用户不在要求的服务器中"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 0
         api_resp = client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"})
         assert api_resp.status_code == 403
-        assert api_resp.json()["message"] == "Account disabled"
+        assert api_resp.json()["message"] == "账号已被禁用"
         assert client.get("/account").status_code == 403
 
 
@@ -232,7 +232,7 @@ def test_invalid_discord_guilds_response_does_not_disable_existing_account(
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Discord OAuth request failed"
+        assert resp.json()["message"] == "Discord OAuth 请求失败"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 1
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
@@ -274,7 +274,7 @@ def test_invalid_discord_user_response_does_not_disable_existing_account(
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Discord OAuth request failed"
+        assert resp.json()["message"] == "Discord OAuth 请求失败"
         existing_user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert existing_user["is_active"] == 1
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
@@ -295,7 +295,7 @@ def test_discord_guilds_request_failure_does_not_disable_existing_account(tmp_pa
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Discord OAuth request failed"
+        assert resp.json()["message"] == "Discord OAuth 请求失败"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 1
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
@@ -706,7 +706,7 @@ def test_discord_linked_soft_deleted_user_is_rejected(tmp_path: Path, monkeypatc
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Account was deleted; contact administrator"
+        assert resp.json()["message"] == "账号已被删除，请联系管理员"
 
 
 def test_disabled_discord_user_cannot_use_self_service_account(tmp_path: Path, monkeypatch):
@@ -722,14 +722,14 @@ def test_disabled_discord_user_cannot_use_self_service_account(tmp_path: Path, m
 
         account = client.get("/account")
         assert account.status_code == 403
-        assert account.json()["message"] == "Account is disabled"
+        assert account.json()["message"] == "账号已被禁用"
 
         reset = client.post(
             "/account/reset-key",
             data=csrf_form(client, cookie_name="novelai_proxy_self_service_csrf"),
         )
         assert reset.status_code == 403
-        assert reset.json()["message"] == "Account is disabled"
+        assert reset.json()["message"] == "账号已被禁用"
         current_hash = client.app.state.db.query_one("SELECT api_key_hash FROM users WHERE id = ?", (user_id,))["api_key_hash"]
         assert current_hash == old_hash
 
@@ -737,7 +737,7 @@ def test_disabled_discord_user_cannot_use_self_service_account(tmp_path: Path, m
         client.app.state.discord_oauth_client = FakeDiscordClient()
         relogin = client.get(f"/auth/discord/callback?code=ok&state={state}")
         assert relogin.status_code == 403
-        assert relogin.json()["message"] == "Account is disabled"
+        assert relogin.json()["message"] == "账号已被禁用"
 
 
 def test_self_service_reset_key_invalidates_old_key_and_does_not_store_discord_tokens(tmp_path: Path, monkeypatch):
@@ -874,7 +874,7 @@ def test_discord_user_without_required_role_is_rejected(tmp_path: Path, monkeypa
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Discord user does not have the required role"
+        assert resp.json()["message"] == "该 Discord 用户没有要求的身份组"
         assert _count_rows(client.app.state.db, "users") == 0
 
 
@@ -893,7 +893,7 @@ def test_discord_non_member_is_rejected_as_guild_failure_when_role_verification_
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Discord user is not in the required guild"
+        assert resp.json()["message"] == "该 Discord 用户不在要求的服务器中"
         assert _count_rows(client.app.state.db, "users") == 0
 
 
@@ -912,12 +912,12 @@ def test_discord_login_without_required_role_disables_existing_account(tmp_path:
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Discord user does not have the required role"
+        assert resp.json()["message"] == "该 Discord 用户没有要求的身份组"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 0
         api_resp = client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"})
         assert api_resp.status_code == 403
-        assert api_resp.json()["message"] == "Account disabled"
+        assert api_resp.json()["message"] == "账号已被禁用"
         assert client.get("/account").status_code == 403
 
 
@@ -958,7 +958,7 @@ def test_invalid_discord_member_response_does_not_disable_existing_account(
 
         # 响应格式不可信属于“情况不明”，必须 502 且绝不停用账号
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Discord OAuth request failed"
+        assert resp.json()["message"] == "Discord OAuth 请求失败"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 1
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
@@ -979,7 +979,7 @@ def test_failed_discord_member_request_does_not_disable_existing_account(tmp_pat
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Discord OAuth request failed"
+        assert resp.json()["message"] == "Discord OAuth 请求失败"
         user = client.app.state.db.query_one("SELECT is_active FROM users WHERE id = ?", (user_id,))
         assert user["is_active"] == 1
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 200
@@ -1094,7 +1094,7 @@ def test_admin_disabled_account_is_not_reactivated_by_passing_verification(tmp_p
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Account is disabled"
+        assert resp.json()["message"] == "账号已被禁用"
         assert _verification_state(client, user_id) == (0, 0)
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 403
 
@@ -1128,7 +1128,7 @@ def test_admin_disable_after_verification_disable_is_not_undone_by_verification(
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Account is disabled"
+        assert resp.json()["message"] == "账号已被禁用"
         assert _verification_state(client, user_id) == (0, 0)
 
 
@@ -1221,7 +1221,7 @@ def test_admin_api_explicit_disable_is_treated_as_hard_ban(tmp_path: Path, monke
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Account is disabled"
+        assert resp.json()["message"] == "账号已被禁用"
         assert _verification_state(client, user_id) == (0, 0)
 
 
@@ -1253,7 +1253,7 @@ def test_admin_hard_disable_via_edit_form_blocks_auto_recovery(tmp_path: Path, m
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Account is disabled"
+        assert resp.json()["message"] == "账号已被禁用"
         assert _verification_state(client, user_id) == (0, 0)
         assert client.get("/user/subscription", headers={"Authorization": f"Bearer {api_key}"}).status_code == 403
 
@@ -1351,7 +1351,7 @@ def test_account_disabled_before_upgrade_is_not_reactivated(tmp_path: Path, monk
         resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
 
         assert resp.status_code == 403
-        assert resp.json()["message"] == "Account is disabled"
+        assert resp.json()["message"] == "账号已被禁用"
         assert _verification_state(client, user_id) == (0, 0)
 
 

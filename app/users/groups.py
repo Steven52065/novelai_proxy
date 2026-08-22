@@ -445,9 +445,9 @@ def sync_group_members(
     selected = set(fields)
     unknown = sorted(selected - SYNCABLE_MEMBER_FIELDS)
     if unknown:
-        raise InvalidDomainInput(f"Unknown sync field: {', '.join(unknown)}")
+        raise InvalidDomainInput(f"未知的同步字段：{', '.join(unknown)}")
     if not selected:
-        raise InvalidDomainInput("At least one sync field must be selected")
+        raise InvalidDomainInput("至少需要选择一个同步字段")
 
     members = _load_group_members_with_values(db, group_id)
     selected_fields = _ordered_member_fields(selected)
@@ -494,7 +494,7 @@ def update_group_with_propagation(
     propagate_scope: str = PROPAGATE_SCOPE_UNMODIFIED,
 ) -> dict[str, object]:
     if propagate_scope not in PROPAGATE_SCOPES:
-        raise InvalidDomainInput(f"Unknown propagate scope: {propagate_scope}")
+        raise InvalidDomainInput(f"未知的传播范围：{propagate_scope}")
     group = get_group(db, group_id)
     # 组模板与成员现值都必须在任何写入之前读取，否则跟随判定会拿到新值。
     group_rules = load_group_member_rate_limit_rules(db, group_id)

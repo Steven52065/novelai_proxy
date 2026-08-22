@@ -92,7 +92,7 @@ async def replay_log_by_id(log_id: int, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
     source = usage_logs.get_by_id(log_id)
     if source is None:
-        raise HTTPException(status_code=404, detail={"message": "Log not found"})
+        raise HTTPException(status_code=404, detail={"message": "日志不存在"})
     return await _replay_log_source(source, request)
 
 
@@ -102,7 +102,7 @@ async def log_payload_by_id(log_id: int, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
     source = usage_logs.get_by_id(log_id)
     if source is None:
-        raise HTTPException(status_code=404, detail={"message": "Log not found"})
+        raise HTTPException(status_code=404, detail={"message": "日志不存在"})
     try:
         payload_text = payload_archive.get_payload_text(log_id)
     except PayloadNotFoundError as exc:
@@ -180,7 +180,7 @@ async def replay_log_request(request_id: str, request: Request):
     usage_logs: UsageLogRepository = request.app.state.usage_logs
     source = usage_logs.get_by_request_id(request_id)
     if source is None:
-        raise HTTPException(status_code=404, detail={"message": "Log not found"})
+        raise HTTPException(status_code=404, detail={"message": "日志不存在"})
     return await _replay_log_source(source, request)
 
 
@@ -190,15 +190,15 @@ async def _replay_log_source(source, request: Request):
     try:
         request_payload = payload_archive.get_payload_dict(int(source["id"]))
     except PayloadNotFoundError as exc:
-        raise HTTPException(status_code=400, detail={"message": "This log has no replayable request payload"}) from exc
+        raise HTTPException(status_code=400, detail={"message": "该日志没有可重放的请求载荷"}) from exc
     except PayloadArchiveError as exc:
         raise HTTPException(status_code=502, detail={"message": str(exc)}) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"message": "This log has no replayable request payload"})
+        raise HTTPException(status_code=400, detail={"message": "该日志没有可重放的请求载荷"})
 
     endpoint = replay_endpoint_for(str(source["action"]), request_payload)
     if endpoint is None:
-        raise HTTPException(status_code=400, detail={"message": "This log action is not replayable"})
+        raise HTTPException(status_code=400, detail={"message": "该日志的操作类型不可重放"})
 
     replay_request_id = uuid.uuid4().hex
     action = f"replay:{source['action']}"
@@ -235,10 +235,10 @@ async def _replay_log_source(source, request: Request):
         usage_logs.mark_rejected(
             replay_request_id,
             error_code="queue_full",
-            error_message="Queue full, please retry later",
+            error_message="队列已满，请稍后重试",
             log_level="ERROR",
         )
-        raise HTTPException(status_code=503, detail={"message": "Queue full, please retry later"}) from None
+        raise HTTPException(status_code=503, detail={"message": "队列已满，请稍后重试"}) from None
     except NoAvailableUpstream as exc:
         usage_logs.mark_rejected(
             replay_request_id,
@@ -246,7 +246,7 @@ async def _replay_log_source(source, request: Request):
             error_message=str(exc),
             log_level="ERROR",
         )
-        raise HTTPException(status_code=503, detail={"message": "No enabled upstream is available for this replay"}) from exc
+        raise HTTPException(status_code=503, detail={"message": "当前没有可用的已启用上游用于重放"}) from exc
     except APIError as exc:
         raise HTTPException(status_code=api_error_status_code(exc), detail={"message": exc.message}) from exc
     except UpstreamExecutionTimeout as exc:
@@ -329,7 +329,7 @@ def _parse_log_filters(
     parsed_from, created_from_utc = _parse_datetime_local_filter(created_from, "created_from")
     parsed_to, created_to_utc = _parse_datetime_local_filter(created_to, "created_to")
     if created_from_utc is not None and created_to_utc is not None and created_from_utc > created_to_utc:
-        raise HTTPException(status_code=400, detail={"message": "created_from must be earlier than created_to"})
+        raise HTTPException(status_code=400, detail={"message": "created_from 必须早于 created_to"})
     return LogFilters(
         user_id=optional_query_int(user_id),
         created_from=parsed_from,
@@ -369,7 +369,7 @@ def _parse_status_filter(value: str | None) -> str | None:
     if status is None:
         return None
     if status not in USAGE_LOG_STATUSES:
-        raise HTTPException(status_code=400, detail={"message": "Invalid status filter"})
+        raise HTTPException(status_code=400, detail={"message": "无效的状态筛选"})
     return status
 
 
@@ -380,7 +380,7 @@ def _parse_datetime_local_filter(value: str | None, field_name: str) -> tuple[st
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"message": f"Invalid {field_name} filter"}) from exc
+        raise HTTPException(status_code=400, detail={"message": f"无效的 {field_name} 筛选"}) from exc
     if parsed.tzinfo is None:
         local_time = parsed.replace(tzinfo=DISPLAY_TIMEZONE)
     else:

@@ -38,7 +38,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         ):
             return JSONResponse(
                 status_code=403,
-                content={"message": "Cross-site Basic-authenticated admin request is not allowed"},
+                content={"message": "不允许跨站使用 Basic 认证的管理请求"},
             )
 
         legacy_scope = _legacy_session_scope(request, valid_basic_authorization)
@@ -61,7 +61,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             if token is None or not submitted or not hmac.compare_digest(submitted, token):
                 return JSONResponse(
                     status_code=403,
-                    content={"message": "CSRF token missing or invalid; refresh the page and try again"},
+                    content={"message": "CSRF 令牌缺失或无效，请刷新页面后重试"},
                 )
 
         if token is None:
@@ -113,7 +113,7 @@ def _clear_legacy_session(request: Request, scope: Literal["admin", "self_servic
     else:
         response = JSONResponse(
             status_code=401,
-            content={"message": "Session expired; log in again", "login_url": login_path},
+            content={"message": "会话已过期，请重新登录", "login_url": login_path},
         )
     delete_response_cookie(response, request, _session_cookie_name(scope))
     delete_response_cookie(response, request, _csrf_cookie_name(scope))

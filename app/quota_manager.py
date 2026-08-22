@@ -23,7 +23,7 @@ class InsufficientQuota(Exception):
     def __init__(self, need: int, have: int):
         self.need = need
         self.have = have
-        super().__init__(f"Insufficient anlas: need {need}, have {have}")
+        super().__init__(f"anlas 额度不足：需要 {need}，可用 {have}")
 
 
 class QuotaManager:
@@ -203,13 +203,13 @@ def normalize_reset_day(period: str, reset_day: int | None, now: datetime | None
     if period == "month":
         day = min(local_now.day, 28) if reset_day is None else int(reset_day)
         if not 1 <= day <= 28:
-            raise ValueError("reset_day must be between 1 and 28 when reset_period is month")
+            raise ValueError("reset_period 为 month 时 reset_day 必须在 1 到 28 之间")
         return day
     if period == "week":
         day = local_now.weekday() + 1 if reset_day is None else int(reset_day)
         if not 1 <= day <= 7:
-            raise ValueError("reset_day must be between 1 and 7 when reset_period is week")
+            raise ValueError("reset_period 为 week 时 reset_day 必须在 1 到 7 之间")
         return day
     if period in {"day", "never"}:
         return 0
-    raise ValueError(f"Unsupported reset_period: {period}")
+    raise ValueError(f"不支持的 reset_period：{period}")

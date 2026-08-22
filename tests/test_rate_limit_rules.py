@@ -93,10 +93,10 @@ def test_validate_accepts_every_distinct_period():
 @pytest.mark.parametrize(
     ("rules", "message"),
     [
-        ([{"period": "minute", "max_requests": 5}, {"period": "minute", "max_requests": 6}], "Duplicated"),
-        ([{"period": "year", "max_requests": 5}], "Unknown rate limit period"),
-        ([{"period": "minute", "max_requests": 0}], "max_requests must be >= 1"),
-        ([{"period": "minute", "max_requests": -1}], "max_requests must be >= 1"),
+        ([{"period": "minute", "max_requests": 5}, {"period": "minute", "max_requests": 6}], "重复"),
+        ([{"period": "year", "max_requests": 5}], "未知的限频周期"),
+        ([{"period": "minute", "max_requests": 0}], "max_requests 必须大于等于 1"),
+        ([{"period": "minute", "max_requests": -1}], "max_requests 必须大于等于 1"),
     ],
 )
 def test_validate_rejects_invalid_rules(rules, message):
@@ -106,12 +106,12 @@ def test_validate_rejects_invalid_rules(rules, message):
 
 def test_validate_rejects_more_rules_than_the_cap():
     rules = [RateLimitRule(period="minute", max_requests=index + 1) for index in range(MAX_RULES_PER_SCOPE + 1)]
-    with pytest.raises(ValueError, match=f"At most {MAX_RULES_PER_SCOPE}"):
+    with pytest.raises(ValueError, match=f"最多允许 {MAX_RULES_PER_SCOPE}"):
         RateLimitRuleSet(tuple(rules)).validate()
 
 
 def test_of_rejects_non_integer_max_requests():
-    with pytest.raises(ValueError, match="max_requests must be an integer"):
+    with pytest.raises(ValueError, match="max_requests 必须是整数"):
         RateLimitRuleSet.of([{"period": "minute", "max_requests": "abc"}])
 
 

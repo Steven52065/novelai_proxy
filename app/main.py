@@ -239,4 +239,4 @@ def _truncate_validation_error_values(value):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = json.loads(json_dumps(_truncate_validation_error_values(exc.errors())))
     logger.error("request validation failed path=%s errors=%s", request.url.path, json_dumps(errors))
-    return JSONResponse(status_code=400, content={"message": "Invalid request", "details": errors})
+    return JSONResponse(status_code=400, content={"message": "无效的请求", "details": errors})

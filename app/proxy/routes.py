@@ -95,7 +95,7 @@ async def generate_image(
         raise
     except Exception as exc:
         logger.error("generate-image payload validation failed errors=%s", str(exc))
-        return JSONResponse(status_code=400, content={"message": "Invalid request"})
+        return JSONResponse(status_code=400, content={"message": "无效的请求"})
 
     _apply_image_format_policy(
         request_payload,
@@ -114,12 +114,12 @@ async def generate_image(
         )
         return JSONResponse(
             status_code=400,
-            content={"message": f"Unsupported model: {exc.model}"},
+            content={"message": f"不支持的模型：{exc.model}"},
         )
     except Exception:
-        return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
+        return JSONResponse(status_code=400, content={"message": "anlas 计费计算失败"})
 
-    # free_small_only 拦截时给用户中文原因（仅 generate 端点）；非 generate 端点保持英文提示。
+    # free_small_only 拦截时给用户中文原因；generate 端点附逐条原因。
     free_small_only_reasons: tuple[str, ...] = ()
     if user.free_small_only and not cost_is_certainly_free:
         free_small_only_reasons = _generate_cost_estimator.free_small_only_violations(
@@ -166,7 +166,7 @@ async def upscale(
             )
         )
     except Exception:
-        return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
+        return JSONResponse(status_code=400, content={"message": "anlas 计费计算失败"})
 
     return await _submit_zip_task(
         request=request,
@@ -221,7 +221,7 @@ async def augment_image(
         if is_bg_removal:
             estimated_cost = estimated_cost * 3 + 5
     except Exception:
-        return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
+        return JSONResponse(status_code=400, content={"message": "anlas 计费计算失败"})
 
     return await _submit_zip_task(
         request=request,
@@ -256,7 +256,7 @@ async def encode_vibe(
         return parse_error_response
 
     if not isinstance(payload, dict):
-        return JSONResponse(status_code=400, content={"message": "Invalid request"})
+        return JSONResponse(status_code=400, content={"message": "无效的请求"})
 
     return await _submit_binary_task(
         request=request,
@@ -441,7 +441,7 @@ async def _read_json_payload(request: Request, endpoint: str) -> tuple[Any, JSON
         return await request.json(), None
     except (JSONDecodeError, UnicodeDecodeError) as exc:
         logger.error("%s JSON parsing failed errors=%s", endpoint, str(exc))
-        return None, JSONResponse(status_code=400, content={"message": "Invalid request"})
+        return None, JSONResponse(status_code=400, content={"message": "无效的请求"})
 
 
 def _load_novelai_settings(request: Request):
@@ -449,7 +449,7 @@ def _load_novelai_settings(request: Request):
         return request.app.state.upstream_runtime.get_settings()
     except Exception as exc:
         logger.exception("failed to load NovelAI settings")
-        raise HTTPException(status_code=500, detail={"message": "Failed to load NovelAI settings"}) from exc
+        raise HTTPException(status_code=500, detail={"message": "无法加载 NovelAI 设置"}) from exc
 
 
 def _task_result_to_response(request: Request, result: ProxyTaskResult) -> Response | JSONResponse:
@@ -483,7 +483,7 @@ def _reject_disallowed_endpoint(user: UserContext, endpoint: str) -> JSONRespons
         return None
     return JSONResponse(
         status_code=403,
-        content={"message": f"User is not allowed to access endpoint: {endpoint}"},
+        content={"message": f"用户无权访问接口：{endpoint}"},
     )
 
 
@@ -497,7 +497,7 @@ def _apply_image_format_policy(payload: dict[str, Any], config: ImageFormatConfi
 
 def _normalize_generate_image_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail={"message": "Invalid request"})
+        raise HTTPException(status_code=400, detail={"message": "无效的请求"})
 
     normalized = dict(payload)
     parameters = normalized.get("parameters")

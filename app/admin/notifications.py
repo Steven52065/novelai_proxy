@@ -25,7 +25,7 @@ async def pending_notifications(request: Request):
 async def dismiss_notification(request: Request, notification_id: int):
     repo = request.app.state.admin_notifications
     if not repo.dismiss(notification_id):
-        raise HTTPException(status_code=404, detail={"message": "Notification not found"})
+        raise HTTPException(status_code=404, detail={"message": "通知不存在"})
     return {"ok": True}
 
 

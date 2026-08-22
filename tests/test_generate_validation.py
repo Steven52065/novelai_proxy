@@ -126,7 +126,7 @@ def test_dimension_below_64_does_not_suggest_zero():
 
 @pytest.mark.parametrize("value", [None, True, ["786"], "abc", {}])
 def test_non_numeric_dimension_left_to_costing_layer(value):
-    """取不出整数的宽高交给计费层的 400 Invalid request，这里不重复报错。"""
+    """取不出整数的宽高交给计费层的 400 无效的请求，这里不重复报错。"""
     assert validate_generate_parameters("nai-diffusion-3", "generate", _params(width=value)) == []
 
 

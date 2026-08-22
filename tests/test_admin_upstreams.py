@@ -188,7 +188,7 @@ def test_admin_upstream_disable_removes_it_from_new_routing(tmp_path: Path, monk
         )
 
         assert generated.status_code == 503
-        assert generated.json()["message"] == "No enabled upstream is available for this user"
+        assert generated.json()["message"] == "当前没有可用的已启用上游"
 
 
 def test_admin_upstream_delete_conflicts_when_referenced(tmp_path: Path, monkeypatch):
@@ -232,13 +232,13 @@ def test_admin_upstream_domain_errors_return_json(tmp_path: Path, monkeypatch):
         )
 
         assert duplicate.status_code == 409
-        assert duplicate.json()["message"] == "upstream id already exists: default"
+        assert duplicate.json()["message"] == "上游 id 已存在：default"
         assert missing_update.status_code == 404
-        assert missing_update.json()["message"] == "Upstream not found"
+        assert missing_update.json()["message"] == "上游不存在"
         assert missing_delete.status_code == 404
-        assert missing_delete.json()["message"] == "Upstream not found"
+        assert missing_delete.json()["message"] == "上游不存在"
         assert invalid.status_code == 400
-        assert invalid.json()["message"] == "api_key must not be empty"
+        assert invalid.json()["message"] == "api_key 不能为空"
 
 
 def test_novelai_settings_drive_proxy_costing(tmp_path: Path, monkeypatch):

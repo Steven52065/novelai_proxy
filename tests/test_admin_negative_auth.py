@@ -23,7 +23,7 @@ def test_admin_api_rejects_missing_and_wrong_basic_auth(tmp_path: Path, monkeypa
 
         assert missing.status_code == 401
         assert wrong.status_code == 401
-        assert wrong.json()["message"] == "Invalid admin credentials"
+        assert wrong.json()["message"] == "管理员凭据无效"
 
 
 def test_proxy_api_key_cannot_access_admin_api(tmp_path: Path, monkeypatch):

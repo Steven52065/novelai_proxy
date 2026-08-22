@@ -25,7 +25,7 @@ SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> None:
     if not _admin_credentials_are_valid(request, credentials.username, credentials.password):
-        raise HTTPException(status_code=401, detail={"message": "Invalid admin credentials"})
+        raise HTTPException(status_code=401, detail={"message": "管理员凭据无效"})
 
 
 def require_admin_or_session(
@@ -35,7 +35,7 @@ def require_admin_or_session(
     if has_admin_session(request):
         return
     if credentials is None:
-        raise HTTPException(status_code=401, detail={"message": "Invalid admin credentials"})
+        raise HTTPException(status_code=401, detail={"message": "管理员凭据无效"})
     require_admin(request, credentials)
 
 

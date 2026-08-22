@@ -43,7 +43,7 @@ async def get_current_user(
 ) -> UserContext:
     api_key = _extract_bearer(authorization)
     if not api_key:
-        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API Key"})
+        raise HTTPException(status_code=401, detail={"message": "API Key 无效或缺失"})
 
     api_key_hash = hash_api_key(api_key)
     row = db.query_one(
@@ -56,11 +56,11 @@ async def get_current_user(
         (api_key_hash,),
     )
     if row is None or not secrets.compare_digest(row["api_key_hash"], api_key_hash):
-        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API Key"})
+        raise HTTPException(status_code=401, detail={"message": "API Key 无效或缺失"})
     if row["deleted_at"] is not None:
-        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API Key"})
+        raise HTTPException(status_code=401, detail={"message": "API Key 无效或缺失"})
     if not bool(row["is_active"]):
-        raise HTTPException(status_code=403, detail={"message": "Account disabled"})
+        raise HTTPException(status_code=403, detail={"message": "账号已被禁用"})
     return UserContext(
         id=int(row["id"]),
         name=str(row["name"]),

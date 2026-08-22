@@ -265,7 +265,7 @@ class ProxyQueue:
         item.accounting.settle_failure(
             queued_ms=queued_ms,
             error_code="client_cancelled",
-            error_message="Client cancelled before upstream execution",
+            error_message="客户端在上游执行前取消了请求",
             attempt_number=item.attempt_number,
         )
         if not item.future.done():
@@ -291,12 +291,12 @@ class ProxyQueue:
             return False
         item.accounting.settle_rejected(
             error_code="user_unavailable",
-            error_message="User is no longer active",
+            error_message="用户已不可用",
             log_level="INFO",
             attempt_number=item.attempt_number,
         )
         if not item.future.done():
-            item.future.set_exception(UserUnavailable("User is no longer active"))
+            item.future.set_exception(UserUnavailable("用户已不可用"))
         logger.info(
             "proxy request skipped because user is unavailable request_id=%s user_id=%s attempt_number=%s",
             item.request_id,
@@ -613,7 +613,7 @@ def _format_upstream_500_error_message(exc: APIError) -> str:
             if key not in _UPSTREAM_500_KNOWN_FIELDS and value is not None
         }
     if not message:
-        message = "Internal Server Error"
+        message = "内部服务器错误"
     parts = [message]
     if details is not None:
         parts.append(f"details={details!r}")

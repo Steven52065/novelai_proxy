@@ -83,15 +83,15 @@ class RateLimitRuleSet:
 
     def validate(self) -> None:
         if len(self.rules) > MAX_RULES_PER_SCOPE:
-            raise ValueError(f"At most {MAX_RULES_PER_SCOPE} rate limit rules are allowed")
+            raise ValueError(f"最多允许 {MAX_RULES_PER_SCOPE} 条限频规则")
         seen: set[str] = set()
         for rule in self.rules:
             if rule.period not in PERIOD_SECONDS:
-                raise ValueError(f"Unknown rate limit period: {rule.period}")
+                raise ValueError(f"未知的限频周期：{rule.period}")
             if rule.max_requests < 1:
-                raise ValueError("max_requests must be >= 1")
+                raise ValueError("max_requests 必须大于等于 1")
             if rule.period in seen:
-                raise ValueError(f"Duplicated rate limit period: {rule.period}")
+                raise ValueError(f"限频周期重复：{rule.period}")
             seen.add(rule.period)
 
     def display(self) -> str:
@@ -117,7 +117,7 @@ def _rule_from_mapping(value: Mapping[str, object] | object) -> RateLimitRule:
     try:
         max_requests = int(getter("max_requests", 0))
     except (TypeError, ValueError) as exc:
-        raise ValueError("max_requests must be an integer") from exc
+        raise ValueError("max_requests 必须是整数") from exc
     return RateLimitRule(
         period=str(getter("period", "")),
         max_requests=max_requests,

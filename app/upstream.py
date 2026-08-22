@@ -103,7 +103,7 @@ class UpstreamClient:
                 _raise_response_error(response, payload)
             if not response.content:
                 raise DataSerializationError(
-                    "The upstream response is empty.",
+                    "上游返回内容为空。",
                     request=payload,
                     response={},
                     code=response.status_code,
@@ -124,14 +124,14 @@ class UpstreamClient:
                 body = response.json()
             except Exception as exc:
                 raise DataSerializationError(
-                    "The upstream response is not valid JSON.",
+                    "上游返回内容不是有效的 JSON。",
                     request=request,
                     response={},
                     code=response.status_code,
                 ) from exc
             if not isinstance(body, dict):
                 raise DataSerializationError(
-                    "The upstream response has an unexpected JSON shape.",
+                    "上游返回的 JSON 结构不符合预期。",
                     request=request,
                     response=body,
                     code=response.status_code,
@@ -156,7 +156,7 @@ def _validate_zip_response(content: bytes, *, request: dict[str, Any]) -> None:
                     has_nonempty_file = True
             if not has_nonempty_file:
                 raise DataSerializationError(
-                    "The ZIP response contains no files.",
+                    "ZIP 响应中不包含任何文件。",
                     request=request,
                     response={},
                     code="201",
@@ -165,7 +165,7 @@ def _validate_zip_response(content: bytes, *, request: dict[str, Any]) -> None:
         raise
     except Exception as exc:
         raise DataSerializationError(
-            "Invalid ZIP file received from the API.",
+            "从 API 接收到的 ZIP 文件无效。",
             request=request,
             response={},
             code="201",
@@ -189,14 +189,14 @@ def _response_error(response) -> dict[str, Any]:
     # 改为保留开头片段并标注截断长度。
     if len(text) > _MAX_ERROR_BODY_CHARS:
         text = f"{text[:_MAX_ERROR_BODY_CHARS]}...[truncated, {len(text)} chars total]"
-    return {"statusCode": response.status_code, "message": text or "Upstream request failed"}
+    return {"statusCode": response.status_code, "message": text or "上游请求失败"}
 
 
 def _raise_response_error(response, request: dict[str, Any]) -> None:
     error = _response_error(response)
     exc_type = AuthError if response.status_code in {400, 401, 402} else APIError
     raise exc_type(
-        error.get("message", "Upstream request failed"),
+        error.get("message", "上游请求失败"),
         request=request,
         response=error,
         code=response.status_code,

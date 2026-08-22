@@ -81,7 +81,7 @@ def test_group_rate_limit_returns_429_with_group_scope(tmp_path: Path, monkeypat
         assert second.status_code == 429
         assert second.headers["retry-after"] == "60"
         assert second.json()["limit_scope"] == "group"
-        assert second.json()["message"] == "Group rate limit exceeded: 1 per minute"
+        assert second.json()["message"] == "用户组请求频率超限：每分钟最多 1 次"
 
 def test_rate_limit_counts_retry_attempts_as_one_user_request(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])))

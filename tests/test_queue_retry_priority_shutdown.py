@@ -529,7 +529,7 @@ def test_cancelled_before_dispatch_marks_failed_log_and_releases_quota():
             {
                 "request_id": "cancel-before-dispatch",
                 "error_code": "client_cancelled",
-                "error_message": "Client cancelled before dispatch",
+                "error_message": "客户端在调度前取消了请求",
                 "attempt_number": 0,
             }
         ]

@@ -433,7 +433,7 @@ async def create_user_form(
 @web_router.post("/users/bulk-reset-anlas")
 async def bulk_reset_anlas_form(request: Request, user_ids: list[int] | None = Form(None)):
     if not user_ids:
-        raise HTTPException(status_code=400, detail={"message": "No users selected"})
+        raise HTTPException(status_code=400, detail={"message": "未选择任何用户"})
     await bulk_reset_anlas(BulkUserIdsRequest(user_ids=user_ids), request)
     return RedirectResponse("/admin/users", status_code=303)
 
@@ -441,7 +441,7 @@ async def bulk_reset_anlas_form(request: Request, user_ids: list[int] | None = F
 @web_router.post("/users/bulk-reset-free-small-daily")
 async def bulk_reset_free_small_daily_form(request: Request, user_ids: list[int] | None = Form(None)):
     if not user_ids:
-        raise HTTPException(status_code=400, detail={"message": "No users selected"})
+        raise HTTPException(status_code=400, detail={"message": "未选择任何用户"})
     await bulk_reset_free_small_daily(BulkUserIdsRequest(user_ids=user_ids), request)
     return RedirectResponse("/admin/users", status_code=303)
 
@@ -466,7 +466,7 @@ async def user_edit_page(user_id: int, request: Request):
         (user_id,),
     )
     if user is None:
-        raise HTTPException(status_code=404, detail={"message": "User not found"})
+        raise HTTPException(status_code=404, detail={"message": "用户不存在"})
     rules = db.query_all(
         "SELECT id, period, max_requests, is_active FROM rate_limit_rules WHERE user_id = ? ORDER BY id",
         (user_id,),
@@ -678,7 +678,7 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
     if payload.apply_group_defaults:
         default_group_id = payload.group_id if update_group_id else _get_user_group_id(db, user_id)
         if default_group_id is None:
-            raise HTTPException(status_code=400, detail={"message": "No user group selected"})
+            raise HTTPException(status_code=400, detail={"message": "未选择任何用户组"})
         defaults = group_defaults(get_enabled_group(db, int(default_group_id)))
         # 套用组默认值时，限频规则也整体拉回组模板。
         default_rate_limit_rules = load_group_member_rate_limit_rules(db, int(default_group_id))
@@ -773,7 +773,7 @@ def _validate_update_free_small_daily_limit(
         (user_id,),
     )
     if row is None:
-        raise HTTPException(status_code=404, detail={"message": "User not found"})
+        raise HTTPException(status_code=404, detail={"message": "用户不存在"})
     effective_enabled = bool(enabled) if enabled is not None else bool(row["free_small_daily_limit_enabled"])
     effective_limit = int(limit) if limit is not None else int(row["free_small_daily_limit"] or 0)
     validate_free_small_daily_limit(effective_enabled, effective_limit)
@@ -807,4 +807,4 @@ def _ensure_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
         (rule_id,),
     )
     if row is None:
-        raise HTTPException(status_code=404, detail={"message": "Rate limit rule not found"})
+        raise HTTPException(status_code=404, detail={"message": "限频规则不存在"})

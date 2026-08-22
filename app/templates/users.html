@@ -545,7 +545,7 @@
 
       const pageDocument = new DOMParser().parseFromString(await response.text(), "text/html");
       const rows = Array.from(pageDocument.querySelectorAll("[data-user-row]"));
-      if (!rows.length) throw new Error("No user rows returned");
+      if (!rows.length) throw new Error("未返回用户数据");
       rows.forEach((row) => usersTableBody.insertBefore(row, usersEmptyRow));
       nextUserPage += 1;
 

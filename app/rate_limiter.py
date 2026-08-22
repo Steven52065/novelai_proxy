@@ -6,7 +6,7 @@ import math
 from typing import Literal
 
 from .database import Database
-from .rate_limit_rules import PERIOD_SECONDS
+from .rate_limit_rules import PERIOD_CHOICES, PERIOD_SECONDS
 
 __all__ = ["PERIOD_SECONDS", "RateLimitResult", "RateLimiter"]
 
@@ -59,7 +59,7 @@ class RateLimiter:
                 violations.append(
                     RateLimitResult(
                         allowed=False,
-                        message=f"Rate limit exceeded: {max_requests} per {period}",
+                        message=f"请求频率超限：{PERIOD_CHOICES.get(period, period)}最多 {max_requests} 次",
                         retry_after=_retry_after_seconds(now, threshold_activity["latest_at"], seconds),
                         scope="user",
                     )
@@ -112,7 +112,7 @@ class RateLimiter:
                     violations.append(
                         RateLimitResult(
                             allowed=False,
-                            message=f"Group rate limit exceeded: {max_requests} per {period}",
+                            message=f"用户组请求频率超限：{PERIOD_CHOICES.get(period, period)}最多 {max_requests} 次",
                             retry_after=_retry_after_seconds(now, threshold_activity["latest_at"], seconds),
                             scope="group",
                         )

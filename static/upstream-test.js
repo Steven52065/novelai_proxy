@@ -76,7 +76,7 @@
       ["Zip 大小", `${data.zip_bytes ?? 0} bytes`],
       ["图片数量", String(data.image_count ?? 0)],
       ["预览文件", data.preview_image?.filename || "-"],
-      ["消息", data.message || "Upstream test succeeded"],
+      ["消息", data.message || "上游测试成功"],
     ]);
     if (data.preview_image?.data_url) {
       const preview = document.createElement("figure");
@@ -84,7 +84,7 @@
       const caption = document.createElement("figcaption");
       preview.className = "upstream-test-preview";
       image.src = data.preview_image.data_url;
-      image.alt = data.preview_image.filename || "Upstream test preview";
+      image.alt = data.preview_image.filename || "上游测试预览";
       caption.textContent = data.preview_image.filename || "preview image";
       preview.append(image, caption);
       details.appendChild(preview);
@@ -103,7 +103,7 @@
       ["上游渠道", data?.upstream_id || activeUpstreamId || "-"],
       ["错误码", data?.error_code || `HTTP ${fallbackStatus}`],
       ["错误类型", data?.error_type || "RequestError"],
-      ["错误消息", data?.message || "Upstream test failed"],
+      ["错误消息", data?.message || "上游测试失败"],
       ["耗时", `${data?.elapsed_ms ?? 0} ms`],
     ]);
     cancelButton.disabled = false;
@@ -143,7 +143,7 @@
       }
     } catch (error) {
       renderFailure(
-        {ok: false, error_code: "network_error", error_type: error.name || "NetworkError", message: error.message || "Network request failed"},
+        {ok: false, error_code: "network_error", error_type: error.name || "NetworkError", message: error.message || "网络请求失败"},
         0,
       );
     }

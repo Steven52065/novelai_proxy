@@ -25,7 +25,7 @@ class UpstreamExecutionTimeout(Exception):
     def __init__(self, timeout_seconds: float, *, handler_task: asyncio.Task | None = None):
         self.timeout_seconds = timeout_seconds
         self.handler_task = handler_task
-        super().__init__(f"Upstream execution exceeded {timeout_seconds:g} seconds")
+        super().__init__(f"上游执行超过 {timeout_seconds:g} 秒")
 
 
 class Retry429Error(Exception):

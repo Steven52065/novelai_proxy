@@ -37,7 +37,7 @@ def normalize_image_format_policy(value: object) -> ImageFormatPolicy:
     policy = str(value or DEFAULT_IMAGE_FORMAT_POLICY).strip()
     if policy in IMAGE_FORMAT_POLICY_VALUES:
         return policy  # type: ignore[return-value]
-    raise ValueError(f"Unknown image_format_policy: {policy}")
+    raise ValueError(f"未知的 image_format_policy：{policy}")
 
 
 def image_format_policy_label(value: object) -> str:
@@ -57,4 +57,4 @@ def effective_image_format_config(
         return ImageFormatConfig(mode="force", format="png")
     if normalized == IMAGE_FORMAT_POLICY_FORCE_WEBP:
         return ImageFormatConfig(mode="force", format="webp")
-    raise ValueError(f"Unknown image_format_policy: {normalized}")
+    raise ValueError(f"未知的 image_format_policy：{normalized}")

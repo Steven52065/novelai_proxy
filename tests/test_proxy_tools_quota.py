@@ -85,7 +85,7 @@ def test_insufficient_quota_returns_402_for_paid_request(tmp_path: Path, monkeyp
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=paid_payload)
 
         assert resp.status_code == 402
-        assert resp.json()["message"].startswith("Insufficient anlas")
+        assert resp.json()["message"].startswith("anlas 额度不足")
 
 def test_upscale_and_augment_are_queued_and_logged(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -212,7 +212,7 @@ def test_invalid_tool_zip_returns_gateway_error_and_releases_quota(tmp_path: Pat
         )
 
         assert response.status_code == 502
-        assert response.json() == {"message": "Upstream request failed"}
+        assert response.json() == {"message": "上游请求失败"}
         quota = client.get("/user/subscription", headers=headers).json()["proxyQuota"]
         assert quota["used"] == 0
         assert quota["reserved"] == 0
@@ -265,7 +265,7 @@ def test_upscale_and_augment_models_preserve_request_validation(tmp_path: Path, 
         assert bad_upscale.status_code == 400
         assert missing_dimensions.status_code == 400
         assert bad_emotion.status_code == 400
-        assert bad_upscale.json()["message"] == "Invalid request"
+        assert bad_upscale.json()["message"] == "无效的请求"
         assert isinstance(bad_upscale.json()["details"], list)
 
 

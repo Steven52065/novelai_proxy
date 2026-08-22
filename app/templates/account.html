@@ -289,7 +289,7 @@
           headers: {"Accept": "application/json"},
           cache: "no-store",
         });
-        if (!response.ok) throw new Error(`Queue status request failed: ${response.status}`);
+        if (!response.ok) throw new Error(`队列状态请求失败：${response.status}`);
         const data = await response.json();
         if (
           !Number.isInteger(data.running_count) ||
@@ -297,7 +297,7 @@
           !Number.isInteger(data.queued_count) ||
           !Number.isInteger(data.queued_total)
         ) {
-          throw new Error("Invalid queue status response");
+          throw new Error("无效的队列状态响应");
         }
         accountQueueRunningCount.textContent = `${data.running_count}/${data.running_total}`;
         accountQueueQueuedCount.textContent = `${data.queued_count}/${data.queued_total}`;

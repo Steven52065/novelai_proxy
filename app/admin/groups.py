@@ -441,7 +441,7 @@ def _build_group_update_request_or_400(**fields: object) -> UpdateUserGroupReque
     except ValidationError as exc:
         raise HTTPException(
             status_code=400,
-            detail={"message": "Invalid request", "details": json.loads(exc.json())},
+            detail={"message": "无效的请求", "details": json.loads(exc.json())},
         ) from exc
 
 
@@ -462,7 +462,7 @@ def _parse_member_rate_limit_rules_form(
     rule_max_requests = max_requests or []
     rule_actives = actives or []
     if not (len(rule_periods) == len(rule_max_requests) == len(rule_actives)):
-        raise HTTPException(status_code=400, detail={"message": "Rate limit rule fields are misaligned"})
+        raise HTTPException(status_code=400, detail={"message": "限频规则字段数量不一致"})
     return [
         {"period": period, "max_requests": limit, "is_active": active == "on"}
         for period, limit, active in zip(rule_periods, rule_max_requests, rule_actives)
@@ -574,4 +574,4 @@ def _ensure_group_rate_limit_rule_exists(db: Database, rule_id: int) -> None:
         (rule_id,),
     )
     if row is None:
-        raise HTTPException(status_code=404, detail={"message": "Group rate limit rule not found"})
+        raise HTTPException(status_code=404, detail={"message": "用户组限频规则不存在"})

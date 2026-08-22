@@ -76,7 +76,7 @@ def test_admin_rejects_invalid_image_format_policy(tmp_path: Path, monkeypatch):
             json={"name": "bad-format-user", "image_format_policy": "gif"},
         )
         assert create_resp.status_code == 400
-        assert create_resp.json()["message"] == "Invalid request"
+        assert create_resp.json()["message"] == "无效的请求"
 
         ok_resp = client.post(
             "/admin/api/users",
@@ -90,7 +90,7 @@ def test_admin_rejects_invalid_image_format_policy(tmp_path: Path, monkeypatch):
             json={"image_format_policy": "gif"},
         )
         assert update_resp.status_code == 400
-        assert update_resp.json()["message"] == "Invalid request"
+        assert update_resp.json()["message"] == "无效的请求"
 
         bad_group = client.post(
             "/admin/api/user-groups",
@@ -98,7 +98,7 @@ def test_admin_rejects_invalid_image_format_policy(tmp_path: Path, monkeypatch):
             json={"name": "bad-format-group", "default_image_format_policy": "gif"},
         )
         assert bad_group.status_code == 400
-        assert bad_group.json()["message"] == "Invalid request"
+        assert bad_group.json()["message"] == "无效的请求"
 
         group_id = _create_group(client, name="format-group", default_image_format_policy="force_png")
         bad_group_update = client.patch(
@@ -107,7 +107,7 @@ def test_admin_rejects_invalid_image_format_policy(tmp_path: Path, monkeypatch):
             json={"default_image_format_policy": "gif"},
         )
         assert bad_group_update.status_code == 400
-        assert bad_group_update.json()["message"] == "Invalid request"
+        assert bad_group_update.json()["message"] == "无效的请求"
 
 
 def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monkeypatch):
@@ -129,7 +129,7 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
             follow_redirects=False,
         )
         assert bad_user_create.status_code == 400
-        assert bad_user_create.json()["message"] == "Unknown image_format_policy: gif"
+        assert bad_user_create.json()["message"] == "未知的 image_format_policy：gif"
 
         user_id = client.post(
             "/admin/api/users",
@@ -151,7 +151,7 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
             follow_redirects=False,
         )
         assert bad_user_update.status_code == 400
-        assert bad_user_update.json()["message"] == "Unknown image_format_policy: gif"
+        assert bad_user_update.json()["message"] == "未知的 image_format_policy：gif"
 
         bad_group_id = client.post(
             "/admin/users",
@@ -163,7 +163,7 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
             follow_redirects=False,
         )
         assert bad_group_id.status_code == 400
-        assert bad_group_id.json()["message"] == "Invalid form value"
+        assert bad_group_id.json()["message"] == "无效的表单值"
 
         bad_group_create = client.post(
             "/admin/user-groups",
@@ -175,7 +175,7 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
             follow_redirects=False,
         )
         assert bad_group_create.status_code == 400
-        assert bad_group_create.json()["message"] == "Unknown image_format_policy: gif"
+        assert bad_group_create.json()["message"] == "未知的 image_format_policy：gif"
 
         group_id = _create_group(client, name="web-format-group")
         bad_group_update = client.post(
@@ -195,11 +195,11 @@ def test_admin_web_forms_reject_invalid_image_format_policy(tmp_path: Path, monk
             follow_redirects=False,
         )
         assert bad_group_update.status_code == 400
-        assert bad_group_update.json()["message"] == "Unknown image_format_policy: gif"
+        assert bad_group_update.json()["message"] == "未知的 image_format_policy：gif"
 
         bad_propagated = client.get(f"/admin/user-groups/{group_id}?propagated=abc")
         assert bad_propagated.status_code == 400
-        assert bad_propagated.json()["message"] == "Invalid query parameter"
+        assert bad_propagated.json()["message"] == "无效的查询参数"
 
 
 def test_admin_rejects_enabled_free_small_daily_limit_without_positive_limit(tmp_path: Path, monkeypatch):
@@ -213,7 +213,7 @@ def test_admin_rejects_enabled_free_small_daily_limit_without_positive_limit(tmp
             json={"name": "bad-daily-user", "free_small_daily_limit_enabled": True, "free_small_daily_limit": 0},
         )
         assert create_resp.status_code == 400
-        assert create_resp.json()["message"] == "free_small_daily_limit must be >= 1 when enabled"
+        assert create_resp.json()["message"] == "启用后 free_small_daily_limit 必须大于等于 1"
 
         group_resp = client.post(
             "/admin/api/user-groups",
@@ -221,7 +221,7 @@ def test_admin_rejects_enabled_free_small_daily_limit_without_positive_limit(tmp
             json={"name": "bad-daily-group", "free_small_daily_limit_enabled": True, "free_small_daily_limit": 0},
         )
         assert group_resp.status_code == 400
-        assert group_resp.json()["message"] == "free_small_daily_limit must be >= 1 when enabled"
+        assert group_resp.json()["message"] == "启用后 free_small_daily_limit 必须大于等于 1"
 
 def test_admin_returns_key_once_without_persisting_plaintext(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -428,7 +428,7 @@ def test_admin_rejects_unknown_allowed_upstream(tmp_path: Path, monkeypatch):
             json={"name": "bad-upstream", "tier": "normal", "anlas_total": 100, "allowed_upstreams": ["missing"]},
         )
         assert create_resp.status_code == 400
-        assert create_resp.json()["message"] == "Unknown upstream id: missing"
+        assert create_resp.json()["message"] == "未知的上游 id：missing"
 
         ok_resp = client.post(
             "/admin/api/users",
@@ -442,7 +442,7 @@ def test_admin_rejects_unknown_allowed_upstream(tmp_path: Path, monkeypatch):
             json={"allowed_upstreams": ["missing"]},
         )
         assert update_resp.status_code == 400
-        assert update_resp.json()["message"] == "Unknown upstream id: missing"
+        assert update_resp.json()["message"] == "未知的上游 id：missing"
 
 
 def test_admin_rejects_unknown_or_empty_allowed_endpoints(tmp_path: Path, monkeypatch):
@@ -456,7 +456,7 @@ def test_admin_rejects_unknown_or_empty_allowed_endpoints(tmp_path: Path, monkey
             json={"name": "bad-endpoint", "tier": "normal", "allowed_endpoints": ["missing"]},
         )
         assert create_resp.status_code == 400
-        assert create_resp.json()["message"] == "Unknown endpoint: missing"
+        assert create_resp.json()["message"] == "未知的接口：missing"
 
         ok_resp = client.post(
             "/admin/api/users",
@@ -471,7 +471,7 @@ def test_admin_rejects_unknown_or_empty_allowed_endpoints(tmp_path: Path, monkey
             json={"allowed_endpoints": []},
         )
         assert update_resp.status_code == 400
-        assert update_resp.json()["message"] == "At least one endpoint must be allowed"
+        assert update_resp.json()["message"] == "至少需要允许一个接口"
 
 
 def test_admin_user_group_api_and_create_user_copies_defaults(tmp_path: Path, monkeypatch):
@@ -803,7 +803,7 @@ def test_disabled_or_missing_user_group_cannot_create_user(tmp_path: Path, monke
             json={"name": "missing-group-user", "group_id": 999},
         )
         assert missing_resp.status_code == 404
-        assert missing_resp.json()["message"] == "User group not found"
+        assert missing_resp.json()["message"] == "用户组不存在"
 
         group_id = _create_group(client, name="disabled", is_active=False)
         disabled_resp = client.post(
@@ -812,7 +812,7 @@ def test_disabled_or_missing_user_group_cannot_create_user(tmp_path: Path, monke
             json={"name": "disabled-group-user", "group_id": group_id},
         )
         assert disabled_resp.status_code == 400
-        assert disabled_resp.json()["message"] == "User group is disabled"
+        assert disabled_resp.json()["message"] == "用户组已被禁用"
 
         client.patch(
             f"/admin/api/user-groups/{group_id}",
@@ -876,7 +876,7 @@ def test_reset_day_validation_matches_reset_period(tmp_path: Path, monkeypatch):
             json={"name": "bad-week-user", "reset_period": "week", "reset_day": 8},
         )
         assert bad_week_user.status_code == 400
-        assert "reset_day must be between 1 and 7" in str(bad_week_user.json())
+        assert "reset_day 必须在 1 到 7 之间" in str(bad_week_user.json())
 
         bad_month_user = client.post(
             "/admin/api/users",
@@ -884,7 +884,7 @@ def test_reset_day_validation_matches_reset_period(tmp_path: Path, monkeypatch):
             json={"name": "bad-month-user", "reset_period": "month", "reset_day": 0},
         )
         assert bad_month_user.status_code == 400
-        assert "reset_day must be between 1 and 28" in str(bad_month_user.json())
+        assert "reset_day 必须在 1 到 28 之间" in str(bad_month_user.json())
 
         day_user = client.post(
             "/admin/api/users",
@@ -905,7 +905,7 @@ def test_reset_day_validation_matches_reset_period(tmp_path: Path, monkeypatch):
             json={"reset_period": "week", "reset_day": 8},
         )
         assert bad_week_update.status_code == 400
-        assert "reset_day must be between 1 and 7" in str(bad_week_update.json())
+        assert "reset_day 必须在 1 到 7 之间" in str(bad_week_update.json())
 
         week_update = client.patch(
             f"/admin/api/users/{user_id}",
@@ -930,7 +930,7 @@ def test_reset_day_validation_matches_reset_period(tmp_path: Path, monkeypatch):
             },
         )
         assert bad_week_group.status_code == 400
-        assert "reset_day must be between 1 and 7" in str(bad_week_group.json())
+        assert "reset_day 必须在 1 到 7 之间" in str(bad_week_group.json())
 
         never_group_id = _create_group(
             client,
@@ -1298,7 +1298,7 @@ def test_group_member_rate_limit_rules_reject_invalid_payloads(tmp_path: Path, m
             },
         )
         assert duplicated.status_code == 400
-        assert "Duplicated" in duplicated.json()["message"]
+        assert "重复" in duplicated.json()["message"]
 
         bad_period = client.patch(
             f"/admin/api/user-groups/{group_id}",
@@ -1395,7 +1395,7 @@ def test_group_member_rate_limit_rules_web_form_roundtrip(tmp_path: Path, monkey
             follow_redirects=False,
         )
         assert misaligned.status_code == 400
-        assert misaligned.json()["message"] == "Rate limit rule fields are misaligned"
+        assert misaligned.json()["message"] == "限频规则字段数量不一致"
 
 
 def test_group_member_rate_limit_rules_untouched_without_apply_group_defaults(tmp_path: Path, monkeypatch):
@@ -1718,7 +1718,7 @@ def test_deleted_user_queued_request_is_rejected_before_upstream(tmp_path: Path,
             assert first.result(timeout=5).status_code == 201
             rejected = second.result(timeout=5)
             assert rejected.status_code == 403
-            assert rejected.json()["message"] == "User is no longer active"
+            assert rejected.json()["message"] == "用户已不可用"
 
         assert len(fake_upstream.generate_started_at) == 1
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]

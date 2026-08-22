@@ -73,14 +73,14 @@ UPSTREAM_TEST_EXCEPTION_RULES = (
         status_code=503,
         error_code="queue_full",
         error_type="QueueFull",
-        message="Queue full, please retry later",
+        message="队列已满，请稍后重试",
     ),
     UpstreamTestExceptionRule(
         exception_type=QueueClosed,
         status_code=503,
         error_code="server_shutting_down",
         error_type="QueueClosed",
-        message="Server is shutting down, please retry later",
+        message="服务器正在关闭，请稍后重试",
     ),
     UpstreamTestExceptionRule(
         exception_type=NoAvailableUpstream,
@@ -163,7 +163,7 @@ async def test_upstream(request: Request, upstream_id: str):
             started_at=started_at,
             error_code="unknown_upstream",
             error_type="UnknownUpstream",
-            message="Unknown upstream id",
+            message="未知的上游 id",
         )
 
     proxy_queue = request.app.state.proxy_queue
@@ -188,7 +188,7 @@ async def test_upstream(request: Request, upstream_id: str):
             started_at=started_at,
             error_code=exc.__class__.__name__,
             error_type=exc.__class__.__name__,
-            message=str(exc) or "Upstream test failed",
+            message=str(exc) or "上游测试失败",
         )
 
     image_count, preview_image = _zip_image_preview(payload)
@@ -199,7 +199,7 @@ async def test_upstream(request: Request, upstream_id: str):
             started_at=started_at,
             error_code="invalid_upstream_response",
             error_type="InvalidUpstreamResponse",
-            message="Upstream returned a zip without a valid image",
+            message="上游返回的 ZIP 中没有有效图片",
         )
 
     return {
@@ -209,7 +209,7 @@ async def test_upstream(request: Request, upstream_id: str):
         "zip_bytes": len(payload),
         "image_count": image_count,
         "preview_image": preview_image,
-        "message": "Upstream test succeeded",
+        "message": "上游测试成功",
     }
 
 
@@ -857,7 +857,7 @@ def _normalize_upstream_filter(request: Request | WebSocket, upstream_id: str | 
     if not normalized:
         return None
     if normalized not in set(upstream_choices(request)):
-        raise HTTPException(status_code=400, detail={"message": f"Unknown upstream id: {normalized}"})
+        raise HTTPException(status_code=400, detail={"message": f"未知的上游 id：{normalized}"})
     return normalized
 
 

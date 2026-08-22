@@ -22,13 +22,13 @@ def validate_generate_parameters(model: Any, action: Any, parameters: Any) -> li
     v4.5+native、v5+karras，按菜单表拦截会把这些全部误杀。
 
     仅对 action == "generate" 启用；img2img / infill 以及 upscale / augment /
-    encode-vibe 不适用。模型不在同步计费数据里时跳过，维持现有计费层英文拦截，
+    encode-vibe 不适用。模型不在同步计费数据里时跳过，维持现有计费层拦截并返回中文提示，
     避免重复报错。
     """
     # 仅文生图 generate 启用本校验；img2img / infill 不适用。
     if action != "generate":
         return []
-    # 未知模型维持现有计费层英文拦截（行为不变），这里不重复报错。
+    # 未知模型维持现有计费层拦截（返回中文提示），这里不重复报错。
     if not isinstance(model, str) or model not in anlas_pricing.DATA["model_family"]:
         return []
     if not isinstance(parameters, dict):

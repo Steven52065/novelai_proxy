@@ -64,7 +64,7 @@ class UpscaleRequest(BaseModel):
     @model_validator(mode="after")
     def validate_image(self) -> "UpscaleRequest":
         if isinstance(self.image, str) and self.image.startswith("data:image/"):
-            raise ValueError("Invalid image format, must be base64 encoded.")
+            raise ValueError("图片格式无效，必须为 base64 编码。")
         if isinstance(self.image, bytes):
             self.image = base64.b64encode(self.image).decode("utf-8")
 
@@ -74,7 +74,7 @@ class UpscaleRequest(BaseModel):
             # placeholders.  Explicit dimensions are sufficient in that case.
             if self.width is None or self.height is None:
                 raise ValueError(
-                    "Invalid image size and cant auto detect, must be set width and height."
+                    "无法自动识别图片尺寸，必须指定 width 和 height。"
                 )
         else:
             # 探测成功时以真实尺寸为准：/ai/upscale 的计费直接取这两个字段，
@@ -100,14 +100,14 @@ class AugmentImageRequest(BaseModel):
         if isinstance(self.image, bytes):
             self.image = base64.b64encode(self.image).decode("utf-8")
         if isinstance(self.image, str) and self.image.startswith("data:"):
-            raise ValueError("Invalid `image` format, must be base64 encoded directly.")
+            raise ValueError("`image` 格式无效，必须直接使用 base64 编码。")
         if isinstance(self.image, str) and self.image.startswith("+vv"):
-            raise ValueError("Invalid `image` format, must be encoded correctly.")
+            raise ValueError("`image` 格式无效，编码不正确。")
         if self.prompt and self.req_type == ReqType.EMOTION:
             valid_starts = [mood.value for mood in Moods]
             if not any(self.prompt.startswith(f"{start};;") for start in valid_starts):
                 raise ValueError(
-                    f"Invalid `prompt` format, must start with one of {valid_starts}."
+                    f"`prompt` 格式无效，必须以 {valid_starts} 中的一项开头。"
                 )
         # 与 UpscaleRequest 同理：augment 的计费也直接取 width/height，
         # 能从图片探测出真实尺寸时就不采信客户端声明。

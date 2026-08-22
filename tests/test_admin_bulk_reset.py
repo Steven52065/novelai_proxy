@@ -116,7 +116,7 @@ def test_bulk_reset_rejects_empty_selection_and_unknown_user(client, create_user
 
         missing_resp = client.post(path, auth=admin_auth, json={"user_ids": [user_id, 999]})
         assert missing_resp.status_code == 404
-        assert missing_resp.json()["message"] == "User not found"
+        assert missing_resp.json()["message"] == "用户不存在"
 
     # 校验失败时不应重置任何用户。
     assert _quota_row(client, user_id)["used"] == 12
@@ -194,4 +194,4 @@ def test_bulk_reset_web_forms_and_page_controls(client, create_user):
         follow_redirects=False,
     )
     assert no_selection.status_code == 400
-    assert no_selection.json()["message"] == "No users selected"
+    assert no_selection.json()["message"] == "未选择任何用户"

@@ -29,9 +29,9 @@ from ..routing_queue import RoutingProxyQueue
 from ..usage_logs import UsageLogCreate, UsageLogRepository
 
 
-MESSAGE_UPSTREAM_REQUEST_FAILED = "Upstream request failed"
-MESSAGE_UPSTREAM_REQUEST_TIMED_OUT = "Upstream request timed out"
-MESSAGE_PROXY_REQUEST_FAILED = "Proxy request failed"
+MESSAGE_UPSTREAM_REQUEST_FAILED = "上游请求失败"
+MESSAGE_UPSTREAM_REQUEST_TIMED_OUT = "上游请求超时"
+MESSAGE_PROXY_REQUEST_FAILED = "代理请求失败"
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ class ProxyTaskRequest:
     estimated_cost: int
     handler: Callable[[Any], Awaitable[bytes]]
     free_small_only_allowed: bool = False
-    # 仅 generate 端点会带中文失败原因；非 generate 端点保持空，走英文提示。
+    # 仅 generate 端点会带逐条失败原因；非 generate 端点保持空，只返回统一中文提示。
     free_small_only_reasons: tuple[str, ...] = ()
     free_small_daily_count: int = 0
     process_zip_response: bool = True
@@ -94,9 +94,9 @@ def _api_error_response_status(exc: BaseException) -> int:
 QUEUE_FULL_RULE = QueueExceptionRule(
     exception_type=QueueFull,
     status_code=503,
-    response_message="Queue full, please retry later",
+    response_message="队列已满，请稍后重试",
     settle_error_code="queue_full",
-    settle_error_message="Queue full, please retry later",
+    settle_error_message="队列已满，请稍后重试",
     settle_log_level="ERROR",
 )
 
@@ -104,9 +104,9 @@ ENQUEUE_EXCEPTION_RULES = (
     QueueExceptionRule(
         exception_type=QueueClosed,
         status_code=503,
-        response_message="Server is shutting down, please retry later",
+        response_message="服务器正在关闭，请稍后重试",
         settle_error_code="server_shutting_down",
-        settle_error_message="Server is shutting down, please retry later",
+        settle_error_message="服务器正在关闭，请稍后重试",
         settle_log_level="INFO",
     ),
     QUEUE_FULL_RULE,
@@ -117,7 +117,7 @@ QUEUE_RESULT_EXCEPTION_RULES = (
     QueueExceptionRule(
         exception_type=NoAvailableUpstream,
         status_code=503,
-        response_message="No enabled upstream is available for this user",
+        response_message="当前没有可用的已启用上游",
         settle_error_code="no_available_upstream",
         settle_error_message=_exception_text,
         settle_log_level="ERROR",
@@ -317,7 +317,7 @@ class ProxyRequestService:
                 task.estimated_cost,
             )
             if task.free_small_only_reasons:
-                # 仅生图中文：generate 端点带逐条原因；非 generate 端点 reasons 为空走英文。
+                # generate 端点带逐条原因；非 generate 端点 reasons 为空，只返回统一中文提示。
                 message = "用户仅限免费小图生成，该请求不符合免费条件"
                 return self._pre_queue_rejection(
                     request_id,
@@ -331,14 +331,14 @@ class ProxyRequestService:
                     error_message=message,
                     log_level="INFO",
                 )
-            # 非 generate 端点（upscale / augment / encode-vibe 等）保持英文提示。
+            # 非 generate 端点（upscale / augment / encode-vibe 等）返回统一中文提示。
             return self._pre_queue_rejection(
                 request_id,
                 task,
                 status_code=403,
-                content={"message": "User is limited to definitely free small image generations"},
+                content={"message": "用户仅限免费小图生成，该请求不符合免费条件"},
                 error_code="free_small_only_blocked",
-                error_message="User is limited to definitely free small image generations",
+                error_message="用户仅限免费小图生成，该请求不符合免费条件",
                 log_level="INFO",
             )
 
@@ -397,9 +397,9 @@ class ProxyRequestService:
                 request_id,
                 task,
                 status_code=400,
-                content={"message": "Request exceeds supported cost bounds"},
+                content={"message": "请求超出支持的计费范围"},
                 error_code="unsupported_cost",
-                error_message="Request exceeds supported cost bounds",
+                error_message="请求超出支持的计费范围",
                 log_level="ERROR",
             )
 

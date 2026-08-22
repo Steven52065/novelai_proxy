@@ -116,19 +116,19 @@ class PayloadArchiveService:
             (int(log_id),),
         )
         if row is None:
-            raise PayloadNotFoundError("Log not found")
+            raise PayloadNotFoundError("日志不存在")
         hot_payload = self._decode_hot_payload(row)
         if hot_payload is not None:
             return hot_payload
         if row["archive_id"] is None:
-            raise PayloadNotFoundError("This log has no request payload")
+            raise PayloadNotFoundError("该日志没有请求载荷")
         payloads = self._decode_archive_payloads(row)
         payload_key = str(row["payload_key"])
         payload = payloads.get(payload_key)
         if payload is None:
-            raise PayloadArchiveError(f"Archived payload key is missing: {payload_key}")
+            raise PayloadArchiveError(f"归档载荷的 key 缺失：{payload_key}")
         if not isinstance(payload, str):
-            raise PayloadArchiveError("Archived payload is not a string")
+            raise PayloadArchiveError("归档载荷不是字符串")
         return payload
 
     def get_payload_dict(self, log_id: int) -> dict[str, Any]:
@@ -136,9 +136,9 @@ class PayloadArchiveService:
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ValueError("This log has no replayable request payload") from exc
+            raise ValueError("该日志没有可重放的请求载荷") from exc
         if not isinstance(payload, dict):
-            raise ValueError("This log has no replayable request payload")
+            raise ValueError("该日志没有可重放的请求载荷")
         return payload
 
     def compact_archives(self, archive_ids: list[int] | set[int] | tuple[int, ...]) -> dict[str, Any]:
@@ -374,7 +374,7 @@ class PayloadArchiveService:
                 key = str(ref["payload_key"])
                 payload = payloads.get(key)
                 if not isinstance(payload, str):
-                    raise PayloadArchiveError(f"Archived payload key is missing during compact: {key}")
+                    raise PayloadArchiveError(f"压缩归档时载荷 key 缺失：{key}")
                 kept[key] = payload
 
             raw = json_dumps({"version": 1, "payloads": kept}).encode("utf-8")
@@ -404,42 +404,42 @@ class PayloadArchiveService:
             if has_text:
                 return str(request_payload)
             if has_blob:
-                raise PayloadArchiveError("Hot payload blob is marked as json")
+                raise PayloadArchiveError("热载荷 blob 被标记为 json")
             return None
         if encoding == "zlib":
             if has_text:
-                raise PayloadArchiveError("Hot payload has zlib encoding but text storage is populated")
+                raise PayloadArchiveError("热载荷为 zlib 编码但文本存储非空")
             if not has_blob:
                 return None
             try:
                 raw = zlib.decompress(bytes(blob))
             except zlib.error as exc:
-                raise PayloadArchiveError("Hot payload blob cannot be decompressed") from exc
+                raise PayloadArchiveError("热载荷 blob 无法解压") from exc
             try:
                 return raw.decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise PayloadArchiveError("Hot payload blob is not valid UTF-8") from exc
-        raise PayloadArchiveError(f"Unsupported hot payload encoding: {encoding}")
+                raise PayloadArchiveError("热载荷 blob 不是有效的 UTF-8") from exc
+        raise PayloadArchiveError(f"不支持的热载荷编码：{encoding}")
 
     def _decode_archive_payloads(self, archive: Row) -> dict[str, Any]:
         if archive["compression"] != "zlib":
-            raise PayloadArchiveError(f"Unsupported archived payload compression: {archive['compression']}")
+            raise PayloadArchiveError(f"不支持的归档载荷压缩方式：{archive['compression']}")
         try:
             raw = zlib.decompress(bytes(archive["payload_blob"]))
         except zlib.error as exc:
-            raise PayloadArchiveError("Archived payload blob cannot be decompressed") from exc
+            raise PayloadArchiveError("归档载荷 blob 无法解压") from exc
         checksum = hashlib.sha256(raw).hexdigest()
         if checksum != archive["payload_sha256"]:
-            raise PayloadArchiveError("Archived payload checksum mismatch")
+            raise PayloadArchiveError("归档载荷校验和不匹配")
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise PayloadArchiveError("Archived payload blob is not valid JSON") from exc
+            raise PayloadArchiveError("归档载荷 blob 不是有效的 JSON") from exc
         if not isinstance(decoded, dict) or decoded.get("version") != 1:
-            raise PayloadArchiveError("Unsupported archived payload format")
+            raise PayloadArchiveError("不支持的归档载荷格式")
         payloads = decoded.get("payloads")
         if not isinstance(payloads, dict):
-            raise PayloadArchiveError("Archived payloads map is missing")
+            raise PayloadArchiveError("归档载荷映射缺失")
         return payloads
 
     @staticmethod

@@ -451,7 +451,7 @@ class RoutingProxyQueue:
                     item.accounting.settle_failure(
                         queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
                         error_code="client_cancelled",
-                        error_message="Client cancelled before dispatch",
+                        error_message="客户端在调度前取消了请求",
                         attempt_number=item.attempt_number,
                     )
                     logger.info(
@@ -682,9 +682,9 @@ class RoutingProxyQueue:
                 self._settle_routing_rejection(
                     item,
                     error_code="no_available_upstream",
-                    error_message=f"Upstream is unavailable: {upstream_id}",
+                    error_message=f"上游不可用：{upstream_id}",
                 )
-                item.future.set_exception(NoAvailableUpstream(f"Upstream is unavailable: {upstream_id}"))
+                item.future.set_exception(NoAvailableUpstream(f"上游不可用：{upstream_id}"))
                 failed += 1
                 continue
 
@@ -693,7 +693,7 @@ class RoutingProxyQueue:
                 item.accounting.settle_failure(
                     queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
                     error_code="client_cancelled",
-                    error_message="Client cancelled before upstream reroute",
+                    error_message="客户端在上游重新路由前取消了请求",
                     attempt_number=item.attempt_number,
                 )
                 failed += 1
@@ -713,7 +713,7 @@ class RoutingProxyQueue:
                 self._settle_routing_rejection(
                     item,
                     error_code="queue_full",
-                    error_message="Queue full, please retry later",
+                    error_message="队列已满，请稍后重试",
                 )
                 if not original_future.done():
                     original_future.set_exception(QueueFull())
@@ -732,7 +732,7 @@ class RoutingProxyQueue:
     @staticmethod
     def _finish_disabled_probe(item: QueueItem, *, upstream_id: str) -> None:
         if not item.future.done():
-            item.future.set_exception(NoAvailableUpstream(f"Upstream is unavailable: {upstream_id}"))
+            item.future.set_exception(NoAvailableUpstream(f"上游不可用：{upstream_id}"))
 
     def _finish_unavailable_dispatch(
         self,
@@ -745,13 +745,13 @@ class RoutingProxyQueue:
             self._settle_routing_rejection(
                 item,
                 error_code="queue_full",
-                error_message="Queue full, please retry later",
+                error_message="队列已满，请稍后重试",
             )
         else:
             self._settle_routing_rejection(
                 item,
                 error_code="no_available_upstream",
-                error_message="No enabled upstream is available for this user",
+                error_message="当前没有可用的已启用上游",
             )
         if last_429_error is not None:
             if not item.future.done():
@@ -759,7 +759,7 @@ class RoutingProxyQueue:
             return
         if errors:
             raise QueueFull from errors[-1]
-        raise NoAvailableUpstream("No enabled upstream is available for this user")
+        raise NoAvailableUpstream("当前没有可用的已启用上游")
 
     @staticmethod
     def _settle_routing_rejection(
@@ -781,12 +781,12 @@ class RoutingProxyQueue:
     def _finish_user_unavailable(self, item: QueueItem) -> None:
         item.accounting.settle_rejected(
             error_code="user_unavailable",
-            error_message="User is no longer active",
+            error_message="用户已不可用",
             log_level="INFO",
             attempt_number=item.attempt_number,
         )
         if not item.future.done():
-            item.future.set_exception(UserUnavailable("User is no longer active"))
+            item.future.set_exception(UserUnavailable("用户已不可用"))
 
     def _candidate_upstreams(
         self,
@@ -810,7 +810,7 @@ class RoutingProxyQueue:
     def select_client(self, allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None) -> Any:
         candidates = self._candidate_upstreams(allowed_upstreams, advance_round_robin=False)
         if not candidates:
-            raise NoAvailableUpstream("No enabled upstream is available for this user")
+            raise NoAvailableUpstream("当前没有可用的已启用上游")
         return self._targets[candidates[0]].client_provider()
 
     def _record_adaptive_result(self, upstream_id: str, completed: asyncio.Future) -> None:

@@ -42,16 +42,16 @@ def mask_token(token: str) -> str:
 def validate_upstream_id(upstream_id: str) -> str:
     normalized = upstream_id.strip()
     if not normalized:
-        raise InvalidDomainInput("upstream id must not be empty")
+        raise InvalidDomainInput("上游 id 不能为空")
     if normalized in RESERVED_UPSTREAM_IDS:
-        raise InvalidDomainInput(f"upstream id is reserved: {normalized}")
+        raise InvalidDomainInput(f"上游 id 已被保留：{normalized}")
     return normalized
 
 
 def validate_api_key(api_key: str) -> str:
     normalized = api_key.strip()
     if not normalized:
-        raise InvalidDomainInput("api_key must not be empty")
+        raise InvalidDomainInput("api_key 不能为空")
     return normalized
 
 
@@ -105,7 +105,7 @@ class NovelAIUpstreamRepository:
                 (upstream_id, api_key, 1 if enabled else 0, timestamp),
             )
         except IntegrityError as exc:
-            raise UpstreamConflict(f"upstream id already exists: {upstream_id}") from exc
+            raise UpstreamConflict(f"上游 id 已存在：{upstream_id}") from exc
         created = self.get(upstream_id)
         assert created is not None
         return created
@@ -149,7 +149,7 @@ class NovelAIUpstreamRepository:
         conflicts = self.find_allowed_upstream_references(upstream_id)
         if conflicts:
             raise UpstreamConflict(
-                "Upstream is still referenced by users or groups",
+                "该上游仍被用户或用户组引用",
                 details={"references": conflicts},
             )
         self.db.execute("DELETE FROM novelai_upstreams WHERE id = ?", (upstream_id,))
@@ -216,12 +216,12 @@ class NovelAIUpstreamRepository:
         params: list[Any] = []
         if account_tier is not None:
             if account_tier < 0 or account_tier > 3:
-                raise InvalidDomainInput("account_tier must be between 0 and 3")
+                raise InvalidDomainInput("account_tier 必须在 0 到 3 之间")
             fields.append("account_tier = ?")
             params.append(int(account_tier))
         if upscale_anlas_cost is not None:
             if upscale_anlas_cost < 0:
-                raise InvalidDomainInput("upscale_anlas_cost must be >= 0")
+                raise InvalidDomainInput("upscale_anlas_cost 必须大于等于 0")
             fields.append("upscale_anlas_cost = ?")
             params.append(int(upscale_anlas_cost))
         if not fields:

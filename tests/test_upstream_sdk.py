@@ -207,7 +207,7 @@ def test_tool_zip_response_rejects_invalid_zip(monkeypatch, method: str):
         else AugmentImageRequest(req_type="sketch", width=64, height=32, image="aW1n", defry=0)
     )
 
-    with pytest.raises(DataSerializationError, match="Invalid ZIP"):
+    with pytest.raises(DataSerializationError, match="ZIP 文件无效"):
         asyncio.run(getattr(client, method)(request))
 
 
@@ -220,7 +220,7 @@ def test_tool_zip_response_rejects_empty_zip(monkeypatch, method: str):
         else AugmentImageRequest(req_type="sketch", width=64, height=32, image="aW1n", defry=0)
     )
 
-    with pytest.raises(DataSerializationError, match="contains no files"):
+    with pytest.raises(DataSerializationError, match="不包含任何文件"):
         asyncio.run(getattr(client, method)(request))
 
 

@@ -436,14 +436,14 @@ def test_admin_logs_api_filters_by_user_action_status_and_utc8_hour_range(tmp_pa
             auth=("admin", "admin123"),
         )
         assert invalid_created_from.status_code == 400
-        assert invalid_created_from.json()["message"] == "Invalid created_from filter"
+        assert invalid_created_from.json()["message"] == "无效的 created_from 筛选"
 
         reversed_range = client.get(
             "/admin/api/logs?created_from=2026-05-27T10:00&created_to=2026-05-27T09:00",
             auth=("admin", "admin123"),
         )
         assert reversed_range.status_code == 400
-        assert reversed_range.json()["message"] == "created_from must be earlier than created_to"
+        assert reversed_range.json()["message"] == "created_from 必须早于 created_to"
 
 
 def test_admin_logs_api_keeps_filters_when_paginating_with_before_id(tmp_path: Path, monkeypatch):

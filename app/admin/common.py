@@ -46,12 +46,12 @@ def validate_allowed_endpoints(allowed_endpoints: list[str] | None) -> None:
         return
     endpoints = AllowedEndpoints.of(allowed_endpoints)
     if not endpoints.items:
-        raise HTTPException(status_code=400, detail={"message": "At least one endpoint must be allowed"})
+        raise HTTPException(status_code=400, detail={"message": "至少需要允许一个接口"})
     unknown = endpoints.unknown()
     if unknown:
         raise HTTPException(
             status_code=400,
-            detail={"message": f"Unknown endpoint: {', '.join(unknown)}"},
+            detail={"message": f"未知的接口：{', '.join(unknown)}"},
         )
 
 
@@ -63,7 +63,7 @@ def validate_allowed_upstreams(allowed_upstreams: list[str] | None, request: Req
     if unknown:
         raise HTTPException(
             status_code=400,
-            detail={"message": f"Unknown upstream id: {', '.join(unknown)}"},
+            detail={"message": f"未知的上游 id：{', '.join(unknown)}"},
         )
 
 
@@ -71,7 +71,7 @@ def validate_free_small_daily_limit(enabled: bool, limit: int) -> None:
     if enabled and int(limit) < 1:
         raise HTTPException(
             status_code=400,
-            detail={"message": "free_small_daily_limit must be >= 1 when enabled"},
+            detail={"message": "启用后 free_small_daily_limit 必须大于等于 1"},
         )
 
 
@@ -170,11 +170,11 @@ def json_or_empty_list(value):
 
 
 def optional_query_int(value: str | None) -> int | None:
-    return _optional_int_or_400(value, message="Invalid query parameter")
+    return _optional_int_or_400(value, message="无效的查询参数")
 
 
 def optional_form_int(value: str | None) -> int | None:
-    return _optional_int_or_400(value, message="Invalid form value")
+    return _optional_int_or_400(value, message="无效的表单值")
 
 
 def _optional_int_or_400(value: str | None, *, message: str) -> int | None:

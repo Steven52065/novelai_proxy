@@ -176,7 +176,7 @@ def test_default_user_is_limited_to_generate_image_endpoint(tmp_path: Path, monk
 
         assert generate.status_code == 201
         assert upscale.status_code == 403
-        assert upscale.json()["message"] == "User is not allowed to access endpoint: upscale"
+        assert upscale.json()["message"] == "用户无权访问接口：upscale"
 
 def test_free_small_only_rejects_vibe_upscale_and_augment(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -292,7 +292,7 @@ def test_free_small_only_generate_reasons_cover_pixels_samples_unknown_and_forbi
             assert any(expected_reason in reason for reason in body["reasons"]), (overrides, body)
 
 
-def test_free_small_only_non_generate_endpoints_keep_english_message(tmp_path: Path, monkeypatch):
+def test_free_small_only_non_generate_endpoints_returns_chinese_message(tmp_path: Path, monkeypatch):
     """非 generate 端点（upscale 等）的 free_small_only 文案保持英文。"""
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
@@ -320,5 +320,5 @@ def test_free_small_only_non_generate_endpoints_keep_english_message(tmp_path: P
         )
 
         assert upscale.status_code == 403
-        assert upscale.json()["message"] == "User is limited to definitely free small image generations"
+        assert upscale.json()["message"] == "用户仅限免费小图生成，该请求不符合免费条件"
         assert "reasons" not in upscale.json()

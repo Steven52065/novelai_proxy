@@ -15,7 +15,7 @@ def test_generate_requires_valid_proxy_key(tmp_path: Path, monkeypatch):
     with TestClient(app) as client:
         resp = client.post("/ai/generate-image", json=PAYLOAD)
         assert resp.status_code == 401
-        assert resp.json()["message"] == "Invalid or missing API Key"
+        assert resp.json()["message"] == "API Key 无效或缺失"
 
 def test_validation_error_is_logged(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -59,7 +59,7 @@ def test_generate_malformed_json_returns_400(tmp_path: Path, monkeypatch):
         )
 
         assert resp.status_code == 400
-        assert resp.json() == {"message": "Invalid request"}
+        assert resp.json() == {"message": "无效的请求"}
 
     log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
     assert "generate-image JSON parsing failed errors=" in log_text
@@ -88,7 +88,7 @@ def test_encode_vibe_malformed_json_returns_400(tmp_path: Path, monkeypatch):
         )
 
         assert resp.status_code == 400
-        assert resp.json() == {"message": "Invalid request"}
+        assert resp.json() == {"message": "无效的请求"}
 
     log_text = (tmp_path / "logs" / "novelai_proxy.log").read_text(encoding="utf-8")
     assert "encode-vibe JSON parsing failed errors=" in log_text
@@ -212,7 +212,7 @@ def test_generate_rejects_models_missing_from_the_pricing_data(tmp_path: Path, m
         )
 
         assert resp.status_code == 400
-        assert resp.json() == {"message": "Unsupported model: future-official-model"}
+        assert resp.json() == {"message": "不支持的模型：future-official-model"}
         assert fake_upstream.last_generate_payload is None
 
         allowed = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
@@ -235,7 +235,7 @@ def test_generate_rejects_missing_cost_fields(tmp_path: Path, monkeypatch):
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
 
         assert resp.status_code == 400
-        assert resp.json() == {"message": "Invalid request"}
+        assert resp.json() == {"message": "无效的请求"}
 
 def test_generate_upstream_api_error_returns_generic_message(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -253,7 +253,7 @@ def test_generate_upstream_api_error_returns_generic_message(tmp_path: Path, mon
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
 
         assert resp.status_code == 418
-        assert resp.json() == {"message": "Upstream request failed"}
+        assert resp.json() == {"message": "上游请求失败"}
         assert "secret" not in resp.text
 
 def test_generate_internal_error_returns_generic_message(tmp_path: Path, monkeypatch):
@@ -272,7 +272,7 @@ def test_generate_internal_error_returns_generic_message(tmp_path: Path, monkeyp
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
 
         assert resp.status_code == 502
-        assert resp.json() == {"message": "Proxy request failed"}
+        assert resp.json() == {"message": "代理请求失败"}
         assert "secret" not in resp.text
 
 
@@ -296,7 +296,7 @@ def test_generate_settings_load_error_returns_500(tmp_path: Path, monkeypatch):
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=PAYLOAD)
 
         assert resp.status_code == 500
-        assert resp.json() == {"message": "Failed to load NovelAI settings"}
+        assert resp.json() == {"message": "无法加载 NovelAI 设置"}
         assert "secret" not in resp.text
 
 
@@ -321,7 +321,7 @@ def test_generate_upstream_execution_timeout_returns_504_and_releases_quota(tmp_
         resp = client.post("/ai/generate-image", headers=headers, json=paid_payload)
 
         assert resp.status_code == 504
-        assert resp.json() == {"message": "Upstream request timed out"}
+        assert resp.json() == {"message": "上游请求超时"}
         quota = client.get("/user/subscription", headers=headers).json()["proxyQuota"]
         assert quota["used"] == 0
         assert quota["reserved"] == 0
@@ -355,7 +355,7 @@ def test_suggest_tags_upstream_api_error_returns_generic_message(tmp_path: Path,
         )
 
         assert resp.status_code == 429
-        assert resp.json() == {"message": "Upstream request failed"}
+        assert resp.json() == {"message": "上游请求失败"}
         assert "secret" not in resp.text
 
 def test_suggest_tags_internal_error_returns_generic_message(tmp_path: Path, monkeypatch):
@@ -383,7 +383,7 @@ def test_suggest_tags_internal_error_returns_generic_message(tmp_path: Path, mon
         )
 
         assert resp.status_code == 502
-        assert resp.json() == {"message": "Proxy request failed"}
+        assert resp.json() == {"message": "代理请求失败"}
         assert "secret" not in resp.text
 
 def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: Path, monkeypatch):

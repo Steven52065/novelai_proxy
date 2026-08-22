@@ -95,7 +95,7 @@ def test_rate_limit_counts_window_start_as_inside_period(rate_limit_db, monkeypa
 
     assert result.allowed is False
     assert result.retry_after == 1
-    assert result.message == "Rate limit exceeded: 1 per minute"
+    assert result.message == "请求频率超限：每分钟最多 1 次"
 
 
 def test_rate_limit_ignores_requests_before_window_start(rate_limit_db, monkeypatch):
@@ -148,7 +148,7 @@ def test_rate_limit_ignores_inactive_rules_and_applies_multiple_windows(rate_lim
 
     assert result.allowed is False
     assert result.retry_after == 22 * 3600
-    assert result.message == "Rate limit exceeded: 1 per day"
+    assert result.message == "请求频率超限：每天最多 1 次"
 
 
 def test_group_rate_limit_counts_group_members_once_and_ignores_rejected(rate_limit_db, monkeypatch):
@@ -174,7 +174,7 @@ def test_group_rate_limit_counts_group_members_once_and_ignores_rejected(rate_li
     assert result.allowed is False
     assert result.scope == "group"
     assert result.retry_after == 50
-    assert result.message == "Group rate limit exceeded: 2 per minute"
+    assert result.message == "用户组请求频率超限：每分钟最多 2 次"
 
 
 def test_group_rate_limit_does_not_apply_without_active_group(rate_limit_db, monkeypatch):
@@ -280,7 +280,7 @@ def test_rate_limit_returns_longest_wait_across_user_rules(rate_limit_db, monkey
 
     assert result.allowed is False
     assert result.scope == "user"
-    assert result.message == "Rate limit exceeded: 1 per day"
+    assert result.message == "请求频率超限：每天最多 1 次"
     assert result.retry_after == 86400 - 30
 
 
@@ -302,7 +302,7 @@ def test_rate_limit_returns_longest_wait_across_user_and_group_rules(rate_limit_
 
     assert result.allowed is False
     assert result.scope == "group"
-    assert result.message == "Group rate limit exceeded: 1 per hour"
+    assert result.message == "用户组请求频率超限：每小时最多 1 次"
     assert result.retry_after == 3600 - 30
 
 
