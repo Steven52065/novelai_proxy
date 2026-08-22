@@ -293,7 +293,7 @@ def test_free_small_only_generate_reasons_cover_pixels_samples_unknown_and_forbi
 
 
 def test_free_small_only_non_generate_endpoints_returns_chinese_message(tmp_path: Path, monkeypatch):
-    """非 generate 端点（upscale 等）的 free_small_only 文案保持英文。"""
+    """非 generate 端点（upscale 等）的 free_small_only 文案也已改为中文，但只返回统一提示、不带 reasons。"""
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 

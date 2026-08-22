@@ -76,7 +76,7 @@ def validate_generate_parameters(model: Any, action: Any, parameters: Any) -> li
 def _dimension(value: Any) -> int | None:
     """按计费层 _required_int 的方式取整数；取不出就返回 None，交给计费层统一报错。
 
-    非数字、bool、缺失都返回 None——这些情况计费层会给出 400 Invalid request，
+    非数字、bool、缺失都返回 None——这些情况计费层会给出 400 无效的请求，
     这里不重复报错。
     """
     if value is None or isinstance(value, bool):

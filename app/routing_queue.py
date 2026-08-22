@@ -400,10 +400,10 @@ class RoutingProxyQueue:
         if not self._accepting:
             raise QueueClosed
         if upstream_id not in self._targets:
-            raise NoAvailableUpstream(f"Unknown upstream id: {upstream_id}")
+            raise NoAvailableUpstream(f"未知的上游 id：{upstream_id}")
         queue = self._queues.get(upstream_id)
         if queue is None:
-            raise NoAvailableUpstream(f"Unknown upstream id: {upstream_id}")
+            raise NoAvailableUpstream(f"未知的上游 id：{upstream_id}")
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
