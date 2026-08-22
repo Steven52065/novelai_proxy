@@ -211,8 +211,32 @@ async def domain_error_handler(request: Request, exc: DomainError):
     return JSONResponse(status_code=exc.status_code, content=content)
 
 
+MAX_VALIDATION_ERROR_VALUE_CHARS = 200
+
+
+def _truncate_validation_error_values(value):
+    """递归截断校验错误里的超长文本。
+
+    pydantic 的 errors() 会把出错字段的原始输入放进 input，对 /ai/upscale 和
+    /ai/augment-image 来说那是整张 base64 图片：一次失败就会把原图同时写进 400
+    响应体和 ERROR 日志。实测 267KB 的请求体产生 267KB 的响应，真实图片是数 MB，
+    而请求体校验发生在限频之前，反复失败足以撑爆日志。
+    """
+    if isinstance(value, str):
+        if len(value) <= MAX_VALIDATION_ERROR_VALUE_CHARS:
+            return value
+        return f"{value[:MAX_VALIDATION_ERROR_VALUE_CHARS]}...[truncated, {len(value)} chars total]"
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    if isinstance(value, dict):
+        return {key: _truncate_validation_error_values(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_truncate_validation_error_values(item) for item in value]
+    return value
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    errors = json.loads(json_dumps(exc.errors()))
+    errors = json.loads(json_dumps(_truncate_validation_error_values(exc.errors())))
     logger.error("request validation failed path=%s errors=%s", request.url.path, json_dumps(errors))
     return JSONResponse(status_code=400, content={"message": "Invalid request", "details": errors})

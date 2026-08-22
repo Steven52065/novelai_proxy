@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -265,3 +267,51 @@ def test_upscale_and_augment_models_preserve_request_validation(tmp_path: Path, 
         assert bad_emotion.status_code == 400
         assert bad_upscale.json()["message"] == "Invalid request"
         assert isinstance(bad_upscale.json()["details"], list)
+
+
+def test_validation_errors_do_not_echo_the_whole_image(tmp_path: Path, monkeypatch):
+    """校验失败不能把整张 base64 图片写回响应体和错误日志。
+
+    pydantic 会把出错字段的原始输入放进 errors()["input"]，未截断时一次失败就产生
+    一份与请求等大的响应和一条等大的 ERROR 日志。
+    """
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    image = base64.b64encode(os.urandom(120_000)).decode()
+    image_tail = image[-64:]
+
+    with TestClient(app) as client:
+        user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "truncation-user",
+                "tier": "vip",
+                "anlas_total": 100,
+                "allowed_endpoints": ["upscale", "augment-image"],
+            },
+        ).json()
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+
+        rejected = client.post(
+            "/ai/augment-image",
+            headers=headers,
+            json={
+                "req_type": "emotion",
+                "width": 64,
+                "height": 64,
+                "image": image,
+                "prompt": "smile",
+            },
+        )
+
+        assert rejected.status_code == 400
+        assert image_tail not in rejected.text
+        assert len(rejected.content) < 4000
+
+        echoed = next(entry["input"] for entry in rejected.json()["details"] if "input" in entry)
+        echoed_image = echoed["image"] if isinstance(echoed, dict) else echoed
+        assert len(echoed_image) < 400
+        assert echoed_image.startswith(image[:100])
+        assert "truncated" in echoed_image
