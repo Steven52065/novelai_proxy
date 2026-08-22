@@ -159,7 +159,7 @@ def test_generate_passes_unknown_official_fields_without_sdk_validation(tmp_path
     from app.main import app
 
     payload = PAYLOAD | {
-        "model": "future-official-model",
+        "model": "nai-diffusion-4-5-full",
         "parameters": PAYLOAD["parameters"] | {
             "director_reference_descriptions": [{"caption": {"base_caption": "ref"}}],
             "prompt": "official parameter prompt",
@@ -179,11 +179,44 @@ def test_generate_passes_unknown_official_fields_without_sdk_validation(tmp_path
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
 
         assert resp.status_code == 201
-        assert fake_upstream.last_generate_payload["model"] == "future-official-model"
+        assert fake_upstream.last_generate_payload["model"] == "nai-diffusion-4-5-full"
         params = fake_upstream.last_generate_payload["parameters"]
         assert params["director_reference_descriptions"] == [{"caption": {"base_caption": "ref"}}]
         assert params["prompt"] == "official parameter prompt"
         assert params["stream"] == "sse"
+
+def test_generate_rejects_models_missing_from_the_pricing_data(tmp_path: Path, monkeypatch):
+    """计费数据里没有的模型必须直接拦下，不能按最便宜的家族静默计价。
+
+    anlas_pricing.model_family 对未知模型回退到 stableDiffusion，NovelAI 新发模型
+    在同步之前会被少收约 30%。
+    """
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake_upstream = FakeUpstream()
+        app.state.upstream = fake_upstream
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "unknown-model-user", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        resp = client.post(
+            "/ai/generate-image",
+            headers=headers,
+            json=PAYLOAD | {"model": "future-official-model"},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"message": "Unsupported model: future-official-model"}
+        assert fake_upstream.last_generate_payload is None
+
+        allowed = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        assert allowed.status_code == 201
 
 def test_generate_rejects_missing_cost_fields(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))

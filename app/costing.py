@@ -111,6 +111,7 @@ class GenerateCostEstimator:
         )
 
     def calculate(self, params: GenerateCostInputs, *, is_opus: bool) -> tuple[int, bool]:
+        ensure_known_anlas_model(params.model)
         price_params: dict[str, Any] = {
             "width": params.width,
             "height": params.height,
@@ -150,6 +151,28 @@ class GenerateCostEstimator:
             parameters_are_safe=params.free_small_only_parameters_safe,
         )
         return total_cost, is_certainly_free
+
+
+class UnsupportedModelError(ValueError):
+    """Raised when a model has no entry in the synced anlas pricing data."""
+
+    def __init__(self, model: str) -> None:
+        super().__init__(f"unsupported anlas model: {model}")
+        self.model = model
+
+
+def ensure_known_anlas_model(model: str) -> None:
+    """拒绝计费数据里没有的模型。
+
+    anlas_pricing.model_family 复刻前端行为，对未知模型回退到 stableDiffusion，
+    于是 NovelAI 新发布的模型在 pricing_data.json 同步之前会按最便宜的经典曲线
+    计价——1024x1024/28 步算 14 而不是 20，少收 30%，且没有任何告警。代理宁可
+    拦下也不能静默少收，因此这里只认 model_family 里显式列出的模型。
+
+    判据取自 anlas_sync 的同步数据，新增模型只需重跑同步流程，无需改这里。
+    """
+    if model not in anlas_pricing.DATA["model_family"]:
+        raise UnsupportedModelError(model)
 
 
 def build_anlas_subscription(*, is_opus: bool) -> dict[str, int]:

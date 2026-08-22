@@ -140,7 +140,9 @@ def test_free_small_only_rejects_img2img_unknown_model_and_unknown_parameters(tm
         headers = {"Authorization": f"Bearer {api_key}"}
 
         img2img_payload = PAYLOAD | {"action": "img2img", "parameters": PAYLOAD["parameters"] | {"image": "aW1n"}}
-        unknown_model_payload = PAYLOAD | {"model": "future-official-model"}
+        # 计费数据里有、但不在 app.novelai_enums.Model 白名单里的模型：能算出价格，
+        # 所以会走到 free_small_only 策略而不是被计费层的未知模型拦截拦下。
+        unknown_model_payload = PAYLOAD | {"model": "nai-diffusion-furry2"}
         unknown_parameter_payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"future_paid_parameter": True}}
 
         assert client.post("/ai/generate-image", headers=headers, json=img2img_payload).status_code == 403

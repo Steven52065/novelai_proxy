@@ -22,6 +22,7 @@ from ..costing import (
     GenerateCostEstimator,
     GenerateCostInputs,
     IMAGE_ANLAS_PER_VIBE_ENCODING,
+    UnsupportedModelError,
     build_anlas_subscription,
     ensure_supported_anlas_price,
 )
@@ -88,6 +89,15 @@ async def generate_image(
         estimated_cost, cost_is_certainly_free = _generate_cost_estimator.calculate(
             cost_inputs,
             is_opus=novelai_settings.account_tier >= 3,
+        )
+    except UnsupportedModelError as exc:
+        # 未知模型会被计费公式静默按最便宜的家族计价，宁可拦下也不能少收。
+        logger.warning(
+            "generate-image rejected for unsupported model model=%s user_id=%s", exc.model, user.id
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Unsupported model: {exc.model}"},
         )
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
