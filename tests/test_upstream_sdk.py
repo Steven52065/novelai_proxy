@@ -242,6 +242,36 @@ def test_suggest_tags_uses_url_encoded_query_and_returns_json(monkeypatch):
     ]
 
 
+def test_upstream_500_is_not_retried(monkeypatch):
+    """上游 500 是故障信号，必须原样上报，不得重发放大上游负载或重复扣费。"""
+    client, session = _client_with_response(
+        monkeypatch,
+        FakeResponse(
+            status_code=500,
+            json_body={"statusCode": 500, "message": "Internal Server Error"},
+            content_type="application/json",
+        ),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
+
+    assert str(exc_info.value.code) == "500"
+    assert len(session.posts) == 1
+
+
+def test_upstream_suggest_tags_500_is_not_retried(monkeypatch):
+    client, session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=500, json_body={"message": "boom"}, content_type="application/json"),
+    )
+
+    with pytest.raises(APIError):
+        asyncio.run(client.suggest_tags("nai-diffusion-3", "red hair", "en"))
+
+    assert len(session.gets) == 1
+
+
 def test_upstream_binary_post_maps_auth_status_to_auth_error(monkeypatch):
     client, _session = _client_with_response(
         monkeypatch,

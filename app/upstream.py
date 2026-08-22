@@ -9,7 +9,6 @@ from typing import Any, Protocol
 from urllib.parse import urlencode
 from zipfile import ZipFile
 
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random
 from curl_cffi.requests import AsyncSession
 
 from .api_errors import APIError, AuthError, DataSerializationError
@@ -90,12 +89,6 @@ class UpstreamClient:
         params = {"model": model, "prompt": prompt, "lang": lang}
         return await self._get_json(f"{SUGGEST_TAGS_ENDPOINT}?{urlencode(params)}", request=params)
 
-    @retry(
-        wait=wait_random(min=1, max=3),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception(lambda exc: isinstance(exc, APIError) and str(exc.code) == "500"),
-        reraise=True,
-    )
     async def _post_binary(self, url: str, payload: dict[str, Any]) -> bytes:
         async with await self._credential().get_session() as sess:
             response = await sess.post(url, data=json.dumps(payload).encode("utf-8"))
@@ -122,12 +115,6 @@ class UpstreamClient:
         _validate_zip_response(response_content, request=payload)
         return response_content
 
-    @retry(
-        wait=wait_random(min=1, max=3),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception(lambda exc: isinstance(exc, APIError) and str(exc.code) == "500"),
-        reraise=True,
-    )
     async def _get_json(self, url: str, *, request: dict[str, Any]) -> dict[str, Any]:
         async with await self._credential().get_session() as sess:
             response = await sess.get(url)
