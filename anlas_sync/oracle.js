@@ -119,22 +119,24 @@ self.webpackChunk_N_E.push = (chunk) => {
 };
 
 // 4) 注册各 chunk 的模块
-for (const f of ["framework.js", "main.js", "_app.js"]) {
+//    1052 包含定价模块(61225: GI/tY/H_)与 Dk/尺寸模块(57863)
+for (const f of ["framework.js", "main.js", "_app.js", "chunk-1052.js"]) {
   eval(loadChunk(f));
 }
 
 // 5) 取定价模块
-const pricing = global.__wr(23379);
-const model18401 = global.__wr(18401);
-const subModule = global.__wr(71810);
+const pricing = global.__wr(61225);
+const model53856 = global.__wr(53856);
+const subModule = global.__wr(62654);
+const validation = global.__wr(57863);
 
 const fns = {
   GI: (args) => pricing.GI(...args),
   tY: (args) => pricing.tY(...args),
   H_: (args) => pricing.H_(...args),
-  Dk: (args) => pricing.Dk(...args),
+  Dk: (args) => validation.Dk(...args),
   ax: (args) => subModule.ax(...args),
-  Jg: (args) => model18401.Jg(...args),
+  Jg: (args) => model53856.Jg(...args),
 };
 
 function main() {

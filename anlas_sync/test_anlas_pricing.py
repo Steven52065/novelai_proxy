@@ -59,19 +59,51 @@ class TestKnownPrices:
         # 超上限返回 -3
         assert ap.price_generate(base_params(width=3072, height=3072, steps=100), SUB_TIER0, "nai-diffusion-3") == -3
 
+    def test_v5_multiplier(self):
+        # v5 走 SDXL 公式再乘 1.5：NAI3 1024x1024/28=20 -> v5=30
+        p = base_params(width=1024, height=1024)
+        assert ap.price_generate(p, SUB_TIER0, "nai-diffusion-3") == 20
+        assert ap.price_generate(p, SUB_TIER0, "nai-diffusion-5-full") == 30
+        assert ap.price_generate(p, SUB_TIER0, "custom") == 30
+
+
+class TestFreeSmallOpusNegative:
+    def test_v5_negative_usage_disables_free_small(self):
+        sub_neg = {**SUB_OPUS, "usage": {"isNegative": True}}
+        p = base_params(n_samples=4)
+        # v5: 512x768/28 单价 12；正常 Opus 免 1 张 = 36，负 usage 不免 = 48
+        assert ap.price_generate(p, sub_neg, "nai-diffusion-5-full") == 48
+        assert ap.price_generate(p, SUB_OPUS, "nai-diffusion-5-full") == 36
+
+    def test_non_opus_limit_model_unaffected_by_negative_usage(self):
+        sub_neg = {**SUB_OPUS, "usage": {"isNegative": True}}
+        p = base_params(n_samples=4)
+        # nai-diffusion 不在 opus_usage_limit_models，负 usage 不影响免费小图
+        assert ap.price_generate(p, sub_neg, "nai-diffusion") == 15
+
 
 class TestUpscale:
-    def test_opus_small_free(self):
-        assert ap.price_upscale(512, 768, SUB_OPUS) == 0
+    def test_opus_small_now_paid(self):
+        # 新版 tY 取消 Opus 免费档：512x768 Opus 也要 1 anlas
+        assert ap.price_upscale(512, 768, SUB_OPUS) == 1
 
     def test_tier0_1mp(self):
-        assert ap.price_upscale(1024, 1024, SUB_TIER0) == 7
+        assert ap.price_upscale(1024, 1024, SUB_TIER0) == 1
 
-    def test_over_1mp_disabled(self):
-        assert ap.price_upscale(1536, 1024, SUB_TIER0) == -3
+    def test_buckets(self):
+        # <=1MP=1, <=1747627=2, <=2446678=3, <=3MP=4
+        assert ap.price_upscale(1024, 1024, SUB_TIER0) == 1      # 1048576
+        assert ap.price_upscale(1536, 1024, SUB_TIER0) == 2      # 1572864
+        assert ap.price_upscale(2048, 1024, SUB_TIER0) == 3      # 2097152
+        assert ap.price_upscale(2048, 1194, SUB_TIER0) == 3      # 2445312
+        assert ap.price_upscale(2048, 1536, SUB_TIER0) == 4      # 3145728
+        assert ap.price_upscale(3072, 1024, SUB_TIER0) == 4      # 3145728
+
+    def test_zero_disabled(self):
+        assert ap.price_upscale(0, 512, SUB_TIER0) == -3
 
     def test_table(self):
-        # 512x512=262144 -> 表中最小 bucket 262144 -> 1
+        # 512x512=262144 -> 最小 bucket <=1MP -> 1
         assert ap.price_upscale(512, 512, SUB_TIER0) == 1
 
 
@@ -101,6 +133,8 @@ class TestModelFamily:
         assert ap.model_family("nai-diffusion-3") == "stableDiffusionXL"
         assert ap.model_family("nai-diffusion-furry-3") == "stableDiffusionXLFurry"
         assert ap.model_family("nai-diffusion-4-5-curated") == "v4"
+        assert ap.model_family("nai-diffusion-5-full") == "v5"
+        assert ap.model_family("custom") == "v5"
 
     def test_unknown_defaults_sd(self):
         assert ap.model_family("some-future-model") == "stableDiffusion"
@@ -113,12 +147,15 @@ class TestValidate:
     def test_too_many_pixels(self):
         assert not ap.validate_params(base_params(width=2048, height=2048), "nai-diffusion")
 
-    def test_steps_limit_for_es_models(self):
+    def test_steps_limit_for_all_models(self):
+        # 新版 Dk 对所有模型统一 steps<=50，不再区分 es_set
         assert not ap.validate_params(base_params(steps=51), "nai-diffusion-4-5-full")
-        # nai-diffusion-2 也在 es_set 中（与网页一致）
         assert not ap.validate_params(base_params(steps=51), "nai-diffusion-2")
-        # 未知模型不在 es_set，无 steps 限制
-        assert ap.validate_params(base_params(steps=51), "some-future-model")
+        assert not ap.validate_params(base_params(steps=51), "some-future-model")
+
+    def test_missing_dimensions_invalid(self):
+        assert not ap.validate_params(base_params(width=0), "nai-diffusion")
+        assert not ap.validate_params(base_params(height=0), "nai-diffusion")
 
 
 class TestDataIntegrity:
@@ -136,6 +173,26 @@ class TestDataIntegrity:
         assert DATA["vibe"]["per_encoding"] == 2
         assert DATA["vibe"]["free_count"] == 4
         assert DATA["vibe"]["extra_per"] == 2
+        assert DATA["validate_steps_limit"] == 50
+        assert DATA["v5_multiplier"] == 1.5
+
+    def test_opus_usage_limit_models(self):
+        # v5 与 custom 使用 Opus 用量额度，免费小图受 usage.isNegative 影响
+        assert set(DATA["opus_usage_limit_models"]) == {
+            "custom",
+            "nai-diffusion-5-curated",
+            "nai-diffusion-5-curated-inpainting",
+            "nai-diffusion-5-full",
+            "nai-diffusion-5-full-inpainting",
+        }
+
+    def test_upscale_table(self):
+        assert DATA["upscale_table"] == [
+            [1048576, 1],
+            [1747627, 2],
+            [2446678, 3],
+            [3145728, 4],
+        ]
 
     def test_model_family_covers_extracted_models(self):
         for model in DATA["model_family"]:

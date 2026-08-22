@@ -33,11 +33,15 @@ ACCOUNT_TYPES = [0, 1, 2, 3, 4]
 
 
 def random_sub(rng: random.Random) -> dict:
-    return {
+    sub = {
         "tier": rng.choice(TIERS),
         "expiresAt": rng.choice([0, 9999999999]),
         "accountType": rng.choice(ACCOUNT_TYPES),
     }
+    # v5/custom 的 opusUsageLimit 免费小图禁用条件
+    if rng.random() < 0.3:
+        sub["usage"] = {"isNegative": rng.random() < 0.5}
+    return sub
 
 
 def random_params(rng: random.Random, model: str) -> dict:

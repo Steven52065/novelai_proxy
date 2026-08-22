@@ -9,6 +9,12 @@
 2. 从 HTML 中解析所有 /_next/static/chunks/*.js 的 URL
 3. 按前缀挑选需要的 chunk 下载到 cache/ 目录（固定文件名）
 4. 写入 cache/manifest.json 记录来源与下载时间
+
+注意:
+- novelai.net 的 CDN 会拦截默认 TLS 指纹的请求（httpx 会报 SSL 错误），
+  因此这里使用 curl_cffi 并模拟 Chrome 136 的指纹。
+- chunk 前缀（1052/7416/1741）对应当前前端中的计费模块，官网改版后
+  需要按 anlas_sync/ANALYSIS.md 第 10 节重新定位并更新 NEEDED。
 """
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
+from curl_cffi import requests
 
 BASE = "https://novelai.net"
 PAGE_URL = BASE + "/image"
@@ -31,9 +37,12 @@ NEEDED = [
     ("/_next/static/chunks/framework-", "framework.js"),
     ("/_next/static/chunks/main-", "main.js"),
     ("/_next/static/chunks/pages/_app-", "_app.js"),
-    ("/_next/static/chunks/2075-", "chunk-2075.js"),
-    ("/_next/static/chunks/3811-", "chunk-3811.js"),
-    ("/_next/static/chunks/4126-", "chunk-4126.js"),
+    # 1052: GI/tY/H_ 定价模块(61225)、Dk/尺寸校验模块(57863)
+    ("/_next/static/chunks/1052-", "chunk-1052.js"),
+    # 7416: SW.getPrice (vibe 引用编码价格, 模块 25690)
+    ("/_next/static/chunks/7416-", "chunk-7416.js"),
+    # 1741: image 页主组件（角色引用附加费）
+    ("/_next/static/chunks/1741-", "chunk-1741.js"),
 ]
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -45,11 +54,12 @@ def sha256(data: bytes) -> str:
 
 
 def fetch(url: str, timeout: int = 120) -> bytes:
-    r = httpx.get(
+    r = requests.get(
         url,
         headers={"User-Agent": UA},
         timeout=timeout,
-        follow_redirects=True,
+        allow_redirects=True,
+        impersonate="chrome136",
     )
     r.raise_for_status()
     return r.content

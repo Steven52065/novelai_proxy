@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """NovelAI anlas 计费逻辑的 Python 实现（数据来自 generated/pricing_data.json）。
 
-数据由 extract.py 从网页前端 chunk 中自动提取，公式逐条对照网页逻辑（module 23379 等）。
+数据由 extract.py 从网页前端 chunk 中自动提取，公式逐条对照网页逻辑（module 61225 等）。
 函数签名与 Node oracle（oracle.js）保持一致，可用 compare.py 做随机对拍验证。
 """
 from __future__ import annotations
@@ -23,8 +23,10 @@ _FAMILY_SD2 = "stableDiffusionGroup2"
 _FAMILY_SDXL = "stableDiffusionXL"
 _FAMILY_SDXL_FURRY = "stableDiffusionXLFurry"
 _FAMILY_V4 = "v4"
+_FAMILY_V5 = "v5"
 
-_FAMILY_SDXL_LIKE = frozenset({_FAMILY_SDXL, _FAMILY_SDXL_FURRY, _FAMILY_V4})
+# v5 也走 SDXL 公式（再乘 v5_multiplier）
+_FAMILY_SDXL_LIKE = frozenset({_FAMILY_SDXL, _FAMILY_SDXL_FURRY, _FAMILY_V4, _FAMILY_V5})
 
 
 def _load_data() -> dict:
@@ -37,30 +39,31 @@ DATA: dict = _load_data()
 # ---------------------------------------------------------------- 基础判断
 
 def model_family(model: str) -> str:
-    """模型 -> 家族（对应前端 module 18401 Jg）。未知模型默认 stableDiffusion。"""
+    """模型 -> 家族（对应前端 module 53856 Jg）。未知模型默认 stableDiffusion。"""
     return DATA["model_family"].get(model, _FAMILY_SD)
 
 
 def is_active_subscription(sub: dict) -> bool:
-    """订阅是否有效（对应前端 module 71810 ax）。"""
+    """订阅是否有效（对应前端 module 62654 ax）。"""
     return (
         sub.get("accountType", 0) in _ACTIVE_ACCOUNT_TYPES
         or (sub.get("expiresAt", 0) > time.time() and sub.get("tier", 0) > 0)
     )
 
 
-def is_es_model(model: str) -> bool:
-    """是否属于 Dk 校验中需要 steps<=50 限制的模型（对应前端 es()）。"""
-    return model in DATA["es_set"]
-
-
 def validate_params(params: dict, model: str) -> bool:
-    """参数校验（对应前端 module 23379 Dk/eI）。"""
+    """参数校验（对应前端 module 57863 Dk）。
+
+    新版 Dk 对所有模型统一要求 width/height 存在、steps<=50、
+    w*h<=max_pixels（不再有 es_set 特例）。
+    """
     w = params.get("width")
     h = params.get("height")
     steps = params.get("steps", 0) or 0
     return (
-        (not is_es_model(model) or (bool(w) and bool(h) and steps <= 50))
+        bool(w)
+        and bool(h)
+        and steps <= DATA.get("validate_steps_limit", 50)
         and (w or 0) * (h or 0) <= DATA["max_pixels"]
     )
 
@@ -74,7 +77,7 @@ def _classic(w: int, h: int, steps: int) -> float:
 
 
 def _sdxl(w: int, h: int, steps: int, sm: bool, sm_dyn: bool) -> float:
-    """SDXL / SDXL Furry / v4 公式。"""
+    """SDXL / SDXL Furry / v4 / v5 公式（v5 倍率由调用方处理）。"""
     sf = DATA["sdxl_formula"]
     o = w * h
     base = math.ceil(sf["pixels"] * o + sf["per_step"] * o * steps)
@@ -109,7 +112,7 @@ def _lookup(w: int, h: int, steps: int, sampler: str, sm: bool, sm_dyn: bool) ->
 
 
 def price_generate(params: dict, sub: dict, model: str, free_small_disabled: bool = False) -> int:
-    """生图价格（对应前端 module 23379 GI）。
+    """生图价格（对应前端 module 61225 GI）。
 
     params 键: width, height, steps, n_samples, sampler, sm, sm_dyn,
                image(可选), mask(可选), strength(可选), inpaintImg2ImgStrength(可选),
@@ -134,12 +137,20 @@ def price_generate(params: dict, sub: dict, model: str, free_small_disabled: boo
     steps = params["steps"]
     v = params["n_samples"]
     free = DATA["free_small"]
+    # v5/custom 使用 Opus 用量额度；当订阅 usage.isNegative 时前端会
+    # 禁用这些模型的免费小图（module 61225 GI: D = PE(model).opusUsageLimit
+    # && sub.usage?.isNegative）。
+    opus_negative = (
+        model in DATA.get("opus_usage_limit_models", ())
+        and bool((sub.get("usage") or {}).get("isNegative"))
+    )
     if (
         not params.get("characterRef")
         and w * h <= free["max_pixels"]
         and steps <= free["max_steps"]
         and sub.get("tier", 0) >= free["min_tier"]
         and is_active_subscription(sub)
+        and not opus_negative
         and not free_small_disabled
     ):
         v -= 1
@@ -148,6 +159,8 @@ def price_generate(params: dict, sub: dict, model: str, free_small_disabled: boo
     sampler = params["sampler"]
     if family in _FAMILY_SDXL_LIKE:
         wval = _sdxl(w, h, steps, bool(params.get("sm")), bool(params.get("sm_dyn")))
+        if family == _FAMILY_V5:
+            wval *= DATA.get("v5_multiplier", 1.5)
     elif m <= 1048576 and sampler in DATA["classic_samplers"]:
         wval = _classic(w, h, steps)
     else:
@@ -169,20 +182,24 @@ def price_generate(params: dict, sub: dict, model: str, free_small_disabled: boo
 
 
 def price_upscale(width: int, height: int, sub: dict) -> int:
-    """放大价格（对应前端 module 23379 tY/e1）。"""
+    """放大价格（对应前端 module 61225 tY）。
+
+    新版 tY 不再包含 Opus 免费档，直接按 upscale_table 分桶
+    （<=1MP 1 anlas、<=1747627 2、<=2446678 3、<=3MP 4）。
+    """
     n = width * height
-    free = DATA["free_small"]
-    if n <= 409600 and sub.get("tier", 0) >= 3 and is_active_subscription(sub):
-        return 0
+    if n == 0:
+        return -3
     price = -3
     for px, p in DATA["upscale_table"]:
         if n <= px:
             price = p
+            break
     return price
 
 
 def vibe_extra_price(count: int) -> int:
-    """vibe 引用数 >4 时的附加费（对应前端 module 23379 H_）。"""
+    """vibe 引用数 >4 时的附加费（对应前端 module 61225 H_）。"""
     v = DATA["vibe"]
     return max(0, count - v["free_count"]) * v["extra_per"]
 
