@@ -172,6 +172,9 @@ def _validate_zip_response(content: bytes, *, request: dict[str, Any]) -> None:
         ) from exc
 
 
+_MAX_ERROR_BODY_CHARS = 2000
+
+
 def _response_error(response) -> dict[str, Any]:
     try:
         body = response.json()
@@ -180,8 +183,13 @@ def _response_error(response) -> dict[str, Any]:
     except Exception:
         pass
     content = response.content
-    message = content.decode("utf-8", errors="replace") if len(content) <= 200 else "Response content too long"
-    return {"statusCode": response.status_code, "message": message}
+    text = content.decode("utf-8", errors="replace").strip()
+    # 非 JSON 的上游错误（网关 HTML 页、纯文本）过去在超过 200 字节时被整体丢弃，
+    # 只留下一句 "Response content too long"，排查 500 时没有任何信息量。
+    # 改为保留开头片段并标注截断长度。
+    if len(text) > _MAX_ERROR_BODY_CHARS:
+        text = f"{text[:_MAX_ERROR_BODY_CHARS]}...[truncated, {len(text)} chars total]"
+    return {"statusCode": response.status_code, "message": text or "Upstream request failed"}
 
 
 def _raise_response_error(response, request: dict[str, Any]) -> None:

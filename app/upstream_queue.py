@@ -590,19 +590,33 @@ def _as_error_text(value: object) -> str:
     return str(value).strip()
 
 
+_UPSTREAM_500_KNOWN_FIELDS = frozenset({"statusCode", "message", "details"})
+
+
 def _format_upstream_500_error_message(exc: APIError) -> str:
-    """仅用于上游 500：拼出管理面板可见的原始 message/details。"""
+    """仅用于上游 500：拼出管理面板可见的原始 message/details 及任何额外字段。"""
     response = exc.response
     message = _as_error_text(exc.message)
     details = None
+    extras: dict[str, object] = {}
     if isinstance(response, dict):
         raw_message = _as_error_text(response.get("message"))
         if raw_message:
             message = raw_message
         if "details" in response and response.get("details") is not None:
             details = response.get("details")
+        # 文档中 500 只有 statusCode/message/details，但实测上游会偏离 Swagger，
+        # 因此把未知字段一并记下，避免排查时丢掉唯一有用的线索。
+        extras = {
+            key: value
+            for key, value in response.items()
+            if key not in _UPSTREAM_500_KNOWN_FIELDS and value is not None
+        }
     if not message:
         message = "Internal Server Error"
-    if details is None:
-        return message
-    return f"{message} | details={details!r}"
+    parts = [message]
+    if details is not None:
+        parts.append(f"details={details!r}")
+    for key in sorted(extras):
+        parts.append(f"{key}={extras[key]!r}")
+    return " | ".join(parts)

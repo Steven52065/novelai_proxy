@@ -303,3 +303,32 @@ def test_upstream_binary_post_rejects_empty_success_response(monkeypatch):
 
     with pytest.raises(DataSerializationError):
         asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
+
+
+def test_upstream_long_non_json_error_body_is_preserved_not_discarded(monkeypatch):
+    """网关 500 常以大段 HTML 返回；整体丢弃会让 usage_logs 失去排查价值。"""
+    body = ("<html><title>502 Bad Gateway</title>" + "x" * 3000 + "</html>").encode("utf-8")
+    client, _session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=500, content=body, content_type="text/html"),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
+
+    message = exc_info.value.message
+    assert message.startswith("<html><title>502 Bad Gateway</title>")
+    assert "truncated" in message
+    assert str(len(body)) in message
+
+
+def test_upstream_short_non_json_error_body_is_kept_verbatim(monkeypatch):
+    client, _session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=500, content=b"upstream exploded", content_type="text/plain"),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
+
+    assert exc_info.value.message == "upstream exploded"
