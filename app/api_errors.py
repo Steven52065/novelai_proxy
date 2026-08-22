@@ -66,4 +66,12 @@ class ConcurrentGenerationError(APIError):
 def api_error_status_code(exc: APIError) -> int:
     if isinstance(exc, DataSerializationError):
         return 502
-    return int(exc.code) if str(exc.code or "").isdigit() else 502
+    if not str(exc.code or "").isdigit():
+        return 502
+    status_code = int(exc.code)
+    # 上游可能返回 2xx 但 Content-Type 不在白名单（网关拦截页等），此时错误对象
+    # 携带的是 2xx。直接透传会让客户端把失败当成功，也会把 usage_logs.error_code
+    # 记成 201。任何非错误码一律折叠为 502。
+    if status_code < 400:
+        return 502
+    return status_code

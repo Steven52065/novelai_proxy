@@ -36,3 +36,13 @@ def test_api_error_subtypes_and_status_mapping():
     assert api_error_status_code(APIError("failed", {}, {}, "403")) == 403
     assert api_error_status_code(APIError("failed", {}, {}, "unknown")) == 502
     assert api_error_status_code(DataSerializationError("invalid payload", {}, {}, "201")) == 502
+
+
+def test_api_error_never_reports_a_non_error_status_code():
+    """上游 2xx + 非白名单 Content-Type 也会抛 APIError，不能把失败报成 2xx。"""
+    for code in (200, 201, "201", 302, 399):
+        assert api_error_status_code(APIError("failed", {}, {}, code)) == 502
+
+    assert api_error_status_code(APIError("failed", {}, {}, 400)) == 400
+    assert api_error_status_code(APIError("failed", {}, {}, 429)) == 429
+    assert api_error_status_code(APIError("failed", {}, {}, 500)) == 500
