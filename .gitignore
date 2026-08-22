@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .claude/
 config.yaml
+key.txt
 *.py[cod]
 *.db
 *.db-shm
