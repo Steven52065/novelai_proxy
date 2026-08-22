@@ -39,6 +39,8 @@ class GenerateCostInputs:
     character_ref: bool
     reference_cost: int
     free_small_only_parameters_safe: bool
+    # 原始 parameters，供 free_small_only 失败原因（未知键/禁用键）使用。
+    parameters: dict[str, Any]
 
 
 class ReferenceCostCalculator:
@@ -108,9 +110,11 @@ class GenerateCostEstimator:
             reference_cost=self.reference_cost_calculator.calculate(parameters),
             # Unknown NovelAI fields are still proxied, but they cannot be treated as definitely free.
             free_small_only_parameters_safe=self.free_small_only_policy.parameters_are_safe(parameters),
+            parameters=parameters,
         )
 
-    def calculate(self, params: GenerateCostInputs, *, is_opus: bool) -> tuple[int, bool]:
+    def _base_cost(self, params: GenerateCostInputs, *, is_opus: bool) -> int:
+        """计算单次生成的 anlas 基础费用（不含参考图附加费）。"""
         ensure_known_anlas_model(params.model)
         price_params: dict[str, Any] = {
             "width": params.width,
@@ -134,7 +138,10 @@ class GenerateCostEstimator:
             build_anlas_subscription(is_opus=is_opus),
             params.model,
         )
-        base_cost = ensure_supported_anlas_price(raw_base_cost)
+        return ensure_supported_anlas_price(raw_base_cost)
+
+    def calculate(self, params: GenerateCostInputs, *, is_opus: bool) -> tuple[int, bool]:
+        base_cost = self._base_cost(params, is_opus=is_opus)
         total_cost = base_cost + params.reference_cost
         is_certainly_free = self.free_small_only_policy.is_allowed(
             is_opus=is_opus,
@@ -151,6 +158,36 @@ class GenerateCostEstimator:
             parameters_are_safe=params.free_small_only_parameters_safe,
         )
         return total_cost, is_certainly_free
+
+    def free_small_only_violations(
+        self,
+        params: GenerateCostInputs,
+        *,
+        is_opus: bool,
+    ) -> tuple[str, ...]:
+        """返回 free_small_only 判定不免费时的中文原因（参数级 + 条件级）。
+
+        参数级（未知键/禁用键）来自 parameter_violations；随后拼接
+        violations() 的未知采样器与边界条件。放行/拦截判定本身不变。
+        """
+        reasons = list(self.free_small_only_policy.parameter_violations(params.parameters))
+        reasons.extend(
+            self.free_small_only_policy.violations(
+                is_opus=is_opus,
+                model=params.model,
+                action=params.action,
+                width=params.width,
+                height=params.height,
+                steps=params.steps,
+                n_samples=params.n_samples,
+                sampler_was_known=params.sampler_was_known,
+                has_image=params.image,
+                base_cost=self._base_cost(params, is_opus=is_opus),
+                reference_cost=params.reference_cost,
+                parameters_are_safe=params.free_small_only_parameters_safe,
+            )
+        )
+        return tuple(reasons)
 
 
 class UnsupportedModelError(ValueError):

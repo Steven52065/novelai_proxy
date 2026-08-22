@@ -135,3 +135,45 @@ def test_free_small_only_parameter_policy_allows_empty_forbidden_transport_field
 
     assert policy.parameters_are_safe(FREE_SMALL_PAYLOAD["parameters"] | {"reference_image_multiple_cached": []}) is True
     assert policy.parameters_are_safe(FREE_SMALL_PAYLOAD["parameters"] | {"reference_image_multiple_cached": ["cache-id"]}) is False
+
+def _violations(payload: dict, *, is_opus: bool = True) -> tuple[str, ...]:
+    estimator = GenerateCostEstimator()
+    inputs = estimator.extract_inputs(payload)
+    return estimator.free_small_only_violations(inputs, is_opus=is_opus)
+
+
+def test_free_small_only_violations_empty_when_allowed():
+    assert _violations(FREE_SMALL_PAYLOAD) == ()
+
+
+def test_free_small_only_violations_cover_parameter_keys_then_boundaries():
+    payload = FREE_SMALL_PAYLOAD | {
+        "parameters": FREE_SMALL_PAYLOAD["parameters"] | {
+            "future_paid_parameter": True,
+            "image": "base64-image",
+            "steps": 29,
+            "width": 1216,
+            "height": 1216,
+            "n_samples": 2,
+        }
+    }
+
+    reasons = _violations(payload)
+
+    assert "存在未知参数：future_paid_parameter" in reasons
+    assert "参数 image 不允许用于免费小图" in reasons
+    assert any("steps" in r and "29" in r for r in reasons)
+    assert any("1216x1216" in r for r in reasons)
+    assert any("n_samples=2" in r for r in reasons)
+
+
+def test_free_small_only_violations_report_unknown_sampler_and_non_generate_action():
+    reasons = _violations(
+        FREE_SMALL_PAYLOAD | {
+            "action": "img2img",
+            "parameters": FREE_SMALL_PAYLOAD["parameters"] | {"sampler": "future_sampler"},
+        }
+    )
+
+    assert any("采样器未知" in r for r in reasons)
+    assert any("img2img" in r for r in reasons)

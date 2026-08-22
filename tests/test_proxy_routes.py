@@ -421,3 +421,122 @@ def test_generate_preserves_reference_fields_and_charges_extra_anlas(tmp_path: P
         # New frontend-compatible total: 17 base generation + 10 precise
         # reference cost (2 refs × 5) + 2 extra vibe-reference surcharge.
         assert success_log["estimated_anlas_cost"] == 29
+
+def test_generate_rejects_invalid_sampler_with_chinese_400(tmp_path: Path, monkeypatch):
+    """generate 入口硬校验 sampler，非法值返回 400 中文（含参数名/值/模型/允许列表）。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-sampler", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"sampler": "future_sampler"}}
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "sampler" in body["message"]
+        assert "future_sampler" in body["message"]
+        assert "nai-diffusion-3" in body["message"]
+        assert app.state.upstream.last_generate_payload is None
+
+
+def test_generate_rejects_invalid_noise_schedule_with_chinese_400(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-noise", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        cases = [
+            {"noise_schedule": "future_schedule"},                    # 非法值
+            {"noise_schedule": "karras", "model": "nai-diffusion"},    # 模型不支持
+            {"noise_schedule": "native", "sampler": "k_dpm_2"},        # 交集不含
+        ]
+        for overrides in cases:
+            payload = PAYLOAD | {"model": overrides.pop("model", "nai-diffusion-3"),
+                                 "parameters": PAYLOAD["parameters"] | overrides}
+            resp = client.post("/ai/generate-image", headers=headers, json=payload)
+            assert resp.status_code == 400, overrides
+            assert "noise_schedule" in resp.json()["message"], overrides
+
+
+def test_generate_valid_sampler_and_noise_schedule_still_201(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-ok", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        payload = PAYLOAD | {
+            "parameters": PAYLOAD["parameters"] | {"noise_schedule": "karras"},
+        }
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 201
+        assert app.state.upstream.last_generate_payload["parameters"]["noise_schedule"] == "karras"
+
+
+def test_generate_validation_not_applied_to_img2img_and_infill(tmp_path: Path, monkeypatch):
+    """img2img / infill 不启用 sampler / noise_schedule 硬校验。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-img2img", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        # k_dpm_2 对 nai-diffusion-3 在 generate 下会被校验拒绝，但 img2img / infill 不校验。
+        img2img_payload = PAYLOAD | {
+            "action": "img2img",
+            "parameters": PAYLOAD["parameters"] | {
+                "sampler": "k_dpm_2",
+                "image": "base64-image",
+                "strength": 0.5,
+            },
+        }
+        infill_payload = PAYLOAD | {
+            "model": "nai-diffusion-3-inpainting",
+            "action": "infill",
+            "parameters": PAYLOAD["parameters"] | {
+                "sampler": "k_dpm_2",
+                "image": "base64-image",
+                "mask": "base64-mask",
+                "strength": 0.5,
+            },
+        }
+
+        img2img_resp = client.post("/ai/generate-image", headers=headers, json=img2img_payload)
+        assert img2img_resp.status_code == 201
+        assert "参数 sampler" not in img2img_resp.text
+
+        infill_resp = client.post("/ai/generate-image", headers=headers, json=infill_payload)
+        assert infill_resp.status_code == 201
+        assert "参数 sampler" not in infill_resp.text

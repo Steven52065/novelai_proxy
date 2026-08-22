@@ -38,6 +38,7 @@ from ..image_format_policies import effective_image_format_config
 from ..queue_tiers import is_vip_tier
 from ..logging_utils import dump_model_payload, logger
 from ..novelai_models import AugmentImageRequest, ReqType, UpscaleRequest
+from ..policies.generate_validation import validate_generate_parameters
 from ..quota_manager import QuotaManager
 from ..request_accounting import mark_request_total_duration
 from ..routing_queue import RoutingProxyQueue
@@ -73,6 +74,24 @@ async def generate_image(
 
     try:
         request_payload = _normalize_generate_image_payload(payload)
+    except HTTPException:
+        raise
+
+    # 仅文生图 generate 硬校验 sampler / noise_schedule（数据来自 anlas_sync 同步）；
+    # img2img / infill 以及 upscale / augment / encode-vibe 不启用本校验。
+    validation_errors = validate_generate_parameters(
+        model=request_payload.get("model"),
+        action=request_payload.get("action", "generate"),
+        parameters=request_payload.get("parameters"),
+    )
+    if validation_errors:
+        logger.warning(
+            "generate-image parameter validation failed errors=%s",
+            "；".join(validation_errors),
+        )
+        return JSONResponse(status_code=400, content={"message": "；".join(validation_errors)})
+
+    try:
         cost_inputs = _generate_cost_estimator.extract_inputs(request_payload)
     except HTTPException:
         raise
@@ -102,6 +121,14 @@ async def generate_image(
     except Exception:
         return JSONResponse(status_code=400, content={"message": "Failed to calculate anlas cost"})
 
+    # free_small_only 拦截时给用户中文原因（仅 generate 端点）；非 generate 端点保持英文提示。
+    free_small_only_reasons: tuple[str, ...] = ()
+    if user.free_small_only and not cost_is_certainly_free:
+        free_small_only_reasons = _generate_cost_estimator.free_small_only_violations(
+            cost_inputs,
+            is_opus=novelai_settings.account_tier >= 3,
+        )
+
     return await _submit_zip_task(
         request=request,
         user=user,
@@ -110,6 +137,7 @@ async def generate_image(
         request_payload=request_payload,
         estimated_cost=estimated_cost,
         free_small_only_allowed=cost_is_certainly_free,
+        free_small_only_reasons=free_small_only_reasons,
         # 日限额按实际计费结果计数，不能复用 cost_is_certainly_free：后者是
         # free_small_only 放行用的保守白名单，任何未知参数都会让它变 False，
         # 而计费仍是 0。两者不一致时，请求既不扣 anlas 也不占日限额。
@@ -262,6 +290,7 @@ async def _submit_zip_task(
     estimated_cost: int,
     handler: Callable[[Any], Awaitable[bytes]],
     free_small_only_allowed: bool = False,
+    free_small_only_reasons: tuple[str, ...] = (),
     free_small_daily_count: int = 0,
     proxy_service: ProxyRequestService,
 ):
@@ -275,6 +304,7 @@ async def _submit_zip_task(
         handler=handler,
         media_type="application/zip",
         free_small_only_allowed=free_small_only_allowed,
+        free_small_only_reasons=free_small_only_reasons,
         free_small_daily_count=free_small_daily_count,
         response_headers={"Content-Disposition": "attachment;filename=image.zip"},
         process_zip_response=True,
@@ -293,6 +323,7 @@ async def _submit_binary_task(
     handler: Callable[[Any], Awaitable[bytes]],
     media_type: str,
     free_small_only_allowed: bool = False,
+    free_small_only_reasons: tuple[str, ...] = (),
     free_small_daily_count: int = 0,
     response_headers: dict[str, str] | None = None,
     process_zip_response: bool = True,
@@ -307,6 +338,7 @@ async def _submit_binary_task(
             estimated_cost=estimated_cost,
             handler=handler,
             free_small_only_allowed=free_small_only_allowed,
+            free_small_only_reasons=free_small_only_reasons,
             free_small_daily_count=free_small_daily_count,
             process_zip_response=process_zip_response,
         ),

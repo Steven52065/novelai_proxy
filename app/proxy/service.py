@@ -43,6 +43,8 @@ class ProxyTaskRequest:
     estimated_cost: int
     handler: Callable[[Any], Awaitable[bytes]]
     free_small_only_allowed: bool = False
+    # 仅 generate 端点会带中文失败原因；非 generate 端点保持空，走英文提示。
+    free_small_only_reasons: tuple[str, ...] = ()
     free_small_daily_count: int = 0
     process_zip_response: bool = True
 
@@ -314,6 +316,22 @@ class ProxyRequestService:
                 task.action,
                 task.estimated_cost,
             )
+            if task.free_small_only_reasons:
+                # 仅生图中文：generate 端点带逐条原因；非 generate 端点 reasons 为空走英文。
+                message = "用户仅限免费小图生成，该请求不符合免费条件"
+                return self._pre_queue_rejection(
+                    request_id,
+                    task,
+                    status_code=403,
+                    content={
+                        "message": message,
+                        "reasons": list(task.free_small_only_reasons),
+                    },
+                    error_code="free_small_only_blocked",
+                    error_message=message,
+                    log_level="INFO",
+                )
+            # 非 generate 端点（upscale / augment / encode-vibe 等）保持英文提示。
             return self._pre_queue_rejection(
                 request_id,
                 task,

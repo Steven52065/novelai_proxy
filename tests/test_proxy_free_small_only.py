@@ -107,7 +107,8 @@ def test_free_small_only_rejects_paid_or_uncertain_request(tmp_path: Path, monke
         rejected_log = next(row for row in logs if row["status"] == "rejected")
         assert rejected_log["error_code"] == "free_small_only_blocked"
 
-def test_free_small_only_rejects_unknown_sampler_even_if_cost_is_zero(tmp_path: Path, monkeypatch):
+def test_generate_validation_rejects_unknown_sampler_before_free_small_only(tmp_path: Path, monkeypatch):
+    """未知采样器现在由 generate 参数校验先拦截（400 中文），不再走到 free_small_only（403）。"""
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 
@@ -123,7 +124,11 @@ def test_free_small_only_rejects_unknown_sampler_even_if_cost_is_zero(tmp_path: 
         payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"sampler": "future_sampler"}}
         resp = client.post("/ai/generate-image", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
 
-        assert resp.status_code == 403
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "sampler" in body["message"]
+        assert "future_sampler" in body["message"]
+        assert "nai-diffusion-3" in body["message"]
 
 def test_free_small_only_rejects_img2img_unknown_model_and_unknown_parameters(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
@@ -217,3 +222,104 @@ def test_free_small_only_rejects_vibe_upscale_and_augment(tmp_path: Path, monkey
         rejected_logs = [row for row in logs if row["status"] == "rejected"]
         assert {row["action"] for row in rejected_logs} == {"encode-vibe", "upscale", "sketch"}
         assert {row["error_code"] for row in rejected_logs} == {"free_small_only_blocked"}
+
+def test_free_small_only_generate_rejection_has_chinese_message_and_reasons(tmp_path: Path, monkeypatch):
+    """generate 被 free_small_only 拦截时返回中文总述 + 逐条中文 reasons。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-reasons", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | {"steps": 29}}
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 403
+        body = resp.json()
+        assert "免费" in body["message"]
+        assert body["reasons"]
+        assert any("steps" in reason and "29" in reason for reason in body["reasons"])
+        logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
+        rejected_log = next(row for row in logs if row["status"] == "rejected")
+        assert rejected_log["error_code"] == "free_small_only_blocked"
+        assert "免费" in rejected_log["error_message"]
+
+
+def test_free_small_only_generate_reasons_cover_pixels_samples_unknown_and_forbidden_keys(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "free-only-reasons-more", "tier": "normal", "anlas_total": 100, "free_small_only": True},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        cases = [
+            (
+                {"width": 1216, "height": 1216},
+                "图片像素超过免费上限",
+            ),
+            (
+                {"n_samples": 2},
+                "生成数量超过 1",
+            ),
+            (
+                {"future_paid_parameter": True},
+                "存在未知参数：future_paid_parameter",
+            ),
+            (
+                {"image": "base64-image", "strength": 0.5},
+                "参数 image 不允许用于免费小图",
+            ),
+        ]
+        for overrides, expected_reason in cases:
+            payload = PAYLOAD | {"parameters": PAYLOAD["parameters"] | overrides}
+            resp = client.post("/ai/generate-image", headers=headers, json=payload)
+            assert resp.status_code == 403, overrides
+            body = resp.json()
+            assert "免费" in body["message"], overrides
+            assert any(expected_reason in reason for reason in body["reasons"]), (overrides, body)
+
+
+def test_free_small_only_non_generate_endpoints_keep_english_message(tmp_path: Path, monkeypatch):
+    """非 generate 端点（upscale 等）的 free_small_only 文案保持英文。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "free-only-english",
+                "tier": "normal",
+                "anlas_total": 100,
+                "free_small_only": True,
+                "allowed_endpoints": ["generate-image", "upscale"],
+            },
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        upscale = client.post(
+            "/ai/upscale",
+            headers=headers,
+            json={"image": "aW1n", "width": 64, "height": 64, "scale": 2},
+        )
+
+        assert upscale.status_code == 403
+        assert upscale.json()["message"] == "User is limited to definitely free small image generations"
+        assert "reasons" not in upscale.json()
