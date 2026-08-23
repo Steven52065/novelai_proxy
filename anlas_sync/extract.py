@@ -150,6 +150,19 @@ def extract_family_samplers(
             if value not in seen:
                 seen.append(value)
         out[family] = seen
+    # 这张表是 app 层 v4/v5 采样器硬校验的依据（generate_validation），空表会让
+    # 对应模型的文生图全部被代理 400 拦掉，所以宁可中止也不能把坏数据写出去。
+    # 这里兜住两条静默失效路径：switch 变形会让 mapping 为空、混淆变量名改动
+    # （见 ANALYSIS.md §12.5）会让 tables 取不到值从而每个家族都是空列表。
+    # 第三条（家族标签对不上导致家族被丢掉）表整体仍非空，由 main() 交叉核对。
+    if not out:
+        raise SystemExit("错误: 模块 32036 家族-采样器表为空（switch 结构或混淆变量名可能已变）")
+    empty = sorted(family for family, values in out.items() if not values)
+    if empty:
+        raise SystemExit(
+            f"错误: 模块 32036 家族-采样器表以下家族为空：{'、'.join(empty)}"
+            "（o/l/s/d/u 这几个混淆变量名可能已变）"
+        )
     return out
 
 
@@ -479,6 +492,13 @@ def main() -> int:
         print("错误: 未找到采样器/家族枚举", file=sys.stderr)
         return 1
     data["family_samplers"] = extract_family_samplers(mod32036, sampler_enum, family_enum)
+    # 家族标签对不上时该家族会被静默丢掉，此时表整体仍非空，只能靠 model_family
+    # 交叉核对：任何模型能映射到的家族都必须有采样器，否则该家族下的模型会被
+    # app 层 generate_validation 全部拦成 400。
+    missing_families = sorted(set(data["model_family"].values()) - set(data["family_samplers"]))
+    if missing_families:
+        print(f"错误: 家族-采样器表缺少家族：{'、'.join(missing_families)}", file=sys.stderr)
+        return 1
     print(f"[17] 家族-采样器表: {data['family_samplers']}")
     data["noise_schedule"] = extract_noise_schedule(mod53856, model_names, sampler_enum)
     print(f"[17] 噪点表: values={data['noise_schedule']['values']} "
