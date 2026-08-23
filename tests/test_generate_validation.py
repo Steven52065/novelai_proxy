@@ -26,6 +26,11 @@ def _params(**overrides) -> dict:
     return params
 
 
+def _recommended(message: str) -> set[str]:
+    """从报错里取出"允许的采样器"列表，用于比对两条报错推荐的是不是同一批。"""
+    return set(message.split("允许的采样器：")[1].split("、"))
+
+
 def test_valid_sampler_passes():
     assert validate_generate_parameters("nai-diffusion-3", "generate", _params()) == []
 
@@ -109,6 +114,37 @@ def test_v4_5_full_accepts_real_upstream_extra_samplers():
             "generate",
             _params(sampler=sampler),
         ) == [], sampler
+
+
+def test_unknown_sampler_message_does_not_recommend_rejected_samplers():
+    """回归：v4/v5 拼错采样器时，推荐列表不能含上游会拒绝的采样器。
+
+    修复前第一条报错列的是整个 Sampler 枚举（含 ddim），用户照着改成 ddim
+    又会撞上第二条报错说 ddim 不受支持，两条提示自相矛盾、白跑一次往返。
+    """
+    typo = validate_generate_parameters(
+        "nai-diffusion-4-5-full", "generate", _params(sampler="k_eular")
+    )
+    rejected = validate_generate_parameters(
+        "nai-diffusion-4-5-full", "generate", _params(sampler="ddim")
+    )
+    assert len(typo) == 1 and len(rejected) == 1
+
+    allowed = set(anlas_pricing.samplers_for_model("nai-diffusion-4-5-full")) | V4_V5_EXTRA_SAMPLERS
+    # 两条报错必须推荐同一批采样器，否则用户会被前后矛盾的提示带沟里。
+    assert _recommended(typo[0]) == allowed
+    assert _recommended(rejected[0]) == allowed
+    assert "ddim" not in _recommended(typo[0])
+
+
+def test_unknown_sampler_message_lists_full_enum_for_non_strict_families():
+    """非 v4/v5 家族不收窄采样器，拼错时仍推荐整个枚举。"""
+    errors = validate_generate_parameters(
+        "nai-diffusion-3", "generate", _params(sampler="k_eular")
+    )
+
+    assert len(errors) == 1
+    assert _recommended(errors[0]) == {s.value for s in Sampler}
 
 
 def test_invalid_noise_schedule_value_rejected():

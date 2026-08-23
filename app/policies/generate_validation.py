@@ -65,16 +65,16 @@ def validate_generate_parameters(model: Any, action: Any, parameters: Any) -> li
             )
 
     sampler = parameters.get("sampler")
-    if sampler is not None and not _is_known_sampler(sampler):
-        errors.append(
-            f"参数 sampler 的值 {sampler!r} 不是已知采样器；"
-            f"允许的采样器：{_join(sorted(s.value for s in Sampler))}"
-        )
-    elif sampler is not None and anlas_pricing.model_family(model) in STRICT_SAMPLER_FAMILIES:
-        # v4 / v5 家族：family_samplers + V4_V5_EXTRA_SAMPLERS 即实测接受范围，
-        # 其余枚举采样器（如 4.5 full + ddim）上游会拒绝，这里提前 400 拦截。
-        allowed = set(anlas_pricing.samplers_for_model(model)) | V4_V5_EXTRA_SAMPLERS
-        if sampler not in allowed:
+    if sampler is not None:
+        # 允许集合按模型算一次、两条报错共用：拼错采样器时也只推荐该模型真能用的，
+        # 否则 v4/v5 会出现"提示里写着 ddim，改成 ddim 又被拒"的前后矛盾。
+        allowed = _allowed_samplers(model)
+        if not _is_known_sampler(sampler):
+            errors.append(
+                f"参数 sampler 的值 {sampler!r} 不是已知采样器；"
+                f"允许的采样器：{_join(sorted(allowed))}"
+            )
+        elif sampler not in allowed:
             errors.append(
                 f"参数 sampler 的值 {sampler!r} 对模型 {model} 不受支持；"
                 f"允许的采样器：{_join(sorted(allowed))}"
@@ -104,6 +104,18 @@ def _dimension(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _allowed_samplers(model: str) -> set[str]:
+    """该模型实际可用的采样器集合。
+
+    v4 / v5 家族按真实上游实测收窄为 family_samplers + V4_V5_EXTRA_SAMPLERS
+    （其余枚举采样器如 4.5 full + ddim 上游会 500 拒绝）；其余家族维持整个
+    Sampler 枚举——菜单表不是校验规则，实测 v3 + k_dpm_2 等菜单外组合可正常出图。
+    """
+    if anlas_pricing.model_family(model) in STRICT_SAMPLER_FAMILIES:
+        return set(anlas_pricing.samplers_for_model(model)) | V4_V5_EXTRA_SAMPLERS
+    return {s.value for s in Sampler}
 
 
 def _is_known_sampler(value: Any) -> bool:
