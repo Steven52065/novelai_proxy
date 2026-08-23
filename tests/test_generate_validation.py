@@ -4,7 +4,11 @@ import pytest
 
 from anlas_sync import anlas_pricing
 from app.novelai_enums import Sampler
-from app.policies.generate_validation import validate_generate_parameters
+from app.policies.generate_validation import (
+    STRICT_SAMPLER_FAMILIES,
+    V4_V5_EXTRA_SAMPLERS,
+    validate_generate_parameters,
+)
 
 
 def _params(**overrides) -> dict:
@@ -53,18 +57,58 @@ def test_non_string_sampler_rejected_instead_of_crashing(bad_sampler):
     assert "sampler" in errors[0]
 
 
-def test_every_enum_sampler_passes_for_every_known_model():
-    """采样器只做枚举成员判断，不按模型家族收窄。
-
-    前端模块 32036 的家族采样器表是下拉菜单数据，不是校验规则：实测上游对
-    v3+k_dpm_2、v3+k_dpmpp_3m_sde 等菜单外组合都会正常出图。
-    """
+def test_every_enum_sampler_passes_for_non_strict_families():
+    """非 v4/v5 家族只做枚举判断，不按家族收窄（实测 v3 菜单外组合可正常出图）。"""
     for model in anlas_pricing.DATA["model_family"]:
+        if anlas_pricing.model_family(model) in STRICT_SAMPLER_FAMILIES:
+            continue
         for sampler in (s.value for s in Sampler):
             assert validate_generate_parameters(model, "generate", _params(sampler=sampler)) == [], (
                 model,
                 sampler,
             )
+
+
+def test_v4_v5_families_accept_family_table_plus_extra_samplers():
+    """v4/v5 家族按真实上游实测收窄：family_samplers + V4_V5_EXTRA_SAMPLERS 放行，其余 400。"""
+    for model in anlas_pricing.DATA["model_family"]:
+        family = anlas_pricing.model_family(model)
+        if family not in STRICT_SAMPLER_FAMILIES:
+            continue
+        allowed = set(anlas_pricing.samplers_for_model(model)) | V4_V5_EXTRA_SAMPLERS
+        for sampler in (s.value for s in Sampler):
+            errors = validate_generate_parameters(model, "generate", _params(sampler=sampler))
+            if sampler in allowed:
+                assert errors == [], (model, sampler)
+            else:
+                assert len(errors) == 1, (model, sampler)
+                assert sampler in errors[0]
+                assert model in errors[0]
+                assert "不受支持" in errors[0]
+
+
+def test_v4_5_full_rejects_ddim_before_upstream():
+    """回归：4.5 full + ddim 不在 v4 家族表，必须 400，不再转发上游。"""
+    errors = validate_generate_parameters(
+        "nai-diffusion-4-5-full",
+        "generate",
+        _params(sampler="ddim"),
+    )
+    assert len(errors) == 1
+    message = errors[0]
+    assert "ddim" in message
+    assert "nai-diffusion-4-5-full" in message
+    assert "k_euler_ancestral" in message  # 允许列表里有家族采样器
+
+
+def test_v4_5_full_accepts_real_upstream_extra_samplers():
+    """实测上游接受但不在 v4 家族表内的遗留采样器必须放行。"""
+    for sampler in sorted(V4_V5_EXTRA_SAMPLERS):
+        assert validate_generate_parameters(
+            "nai-diffusion-4-5-full",
+            "generate",
+            _params(sampler=sampler),
+        ) == [], sampler
 
 
 def test_invalid_noise_schedule_value_rejected():

@@ -447,6 +447,35 @@ def test_generate_rejects_invalid_sampler_with_chinese_400(tmp_path: Path, monke
         assert app.state.upstream.last_generate_payload is None
 
 
+def test_generate_rejects_v4_5_full_ddim_with_chinese_400(tmp_path: Path, monkeypatch):
+    """v4/v5 家族按同步表收窄采样器：4.5 full + ddim 提前 400，不再转发上游。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-v4-sampler", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        payload = PAYLOAD | {
+            "model": "nai-diffusion-4-5-full",
+            "parameters": PAYLOAD["parameters"] | {"sampler": "ddim"},
+        }
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert "sampler" in body["message"]
+        assert "ddim" in body["message"]
+        assert "nai-diffusion-4-5-full" in body["message"]
+        assert app.state.upstream.last_generate_payload is None
+
+
 def test_generate_non_string_sampler_returns_400_not_500(tmp_path: Path, monkeypatch):
     """回归：不可哈希的 sampler 曾在校验里抛 TypeError，导致 500。"""
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
