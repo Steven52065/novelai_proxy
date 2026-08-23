@@ -317,16 +317,16 @@ class ProxyRequestService:
                 task.estimated_cost,
             )
             if task.free_small_only_reasons:
-                # generate 端点带逐条原因；非 generate 端点 reasons 为空，只返回统一中文提示。
+                # generate 端点把逐条原因合并进用户可见 message；
+                # 非 generate 端点 reasons 为空，只返回统一中文提示。
+                # 管理员日志 error_message 仍只记总述，不拼原因。
                 message = "用户仅限免费小图生成，该请求不符合免费条件"
+                user_message = "；".join((message, *task.free_small_only_reasons))
                 return self._pre_queue_rejection(
                     request_id,
                     task,
                     status_code=403,
-                    content={
-                        "message": message,
-                        "reasons": list(task.free_small_only_reasons),
-                    },
+                    content={"message": user_message},
                     error_code="free_small_only_blocked",
                     error_message=message,
                     log_level="INFO",

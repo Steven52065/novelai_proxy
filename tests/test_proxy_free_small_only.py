@@ -222,8 +222,8 @@ def test_free_small_only_rejects_vibe_upscale_and_augment(tmp_path: Path, monkey
         assert {row["action"] for row in rejected_logs} == {"encode-vibe", "upscale", "sketch"}
         assert {row["error_code"] for row in rejected_logs} == {"free_small_only_blocked"}
 
-def test_free_small_only_generate_rejection_has_chinese_message_and_reasons(tmp_path: Path, monkeypatch):
-    """generate 被 free_small_only 拦截时返回中文总述 + 逐条中文 reasons。"""
+def test_free_small_only_generate_rejection_message_includes_reasons(tmp_path: Path, monkeypatch):
+    """generate 被 free_small_only 拦截时，逐条中文原因合并进用户可见 message，不再单独返回 reasons。"""
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
 
@@ -243,12 +243,13 @@ def test_free_small_only_generate_rejection_has_chinese_message_and_reasons(tmp_
         assert resp.status_code == 403
         body = resp.json()
         assert "免费" in body["message"]
-        assert body["reasons"]
-        assert any("steps" in reason and "29" in reason for reason in body["reasons"])
+        assert "reasons" not in body
+        assert "步骤数超过免费上限（steps=29，上限 28）" in body["message"]
         logs = client.get("/admin/api/logs", auth=("admin", "admin123")).json()["logs"]
         rejected_log = next(row for row in logs if row["status"] == "rejected")
         assert rejected_log["error_code"] == "free_small_only_blocked"
-        assert "免费" in rejected_log["error_message"]
+        # 管理员日志保持现状：error_message 只记总述，不拼原因。
+        assert rejected_log["error_message"] == "用户仅限免费小图生成，该请求不符合免费条件"
 
 
 def test_free_small_only_generate_reasons_cover_pixels_samples_unknown_and_forbidden_keys(tmp_path: Path, monkeypatch):
@@ -289,7 +290,8 @@ def test_free_small_only_generate_reasons_cover_pixels_samples_unknown_and_forbi
             assert resp.status_code == 403, overrides
             body = resp.json()
             assert "免费" in body["message"], overrides
-            assert any(expected_reason in reason for reason in body["reasons"]), (overrides, body)
+            assert expected_reason in body["message"], (overrides, body)
+            assert "reasons" not in body, overrides
 
 
 def test_free_small_only_non_generate_endpoints_returns_chinese_message(tmp_path: Path, monkeypatch):
