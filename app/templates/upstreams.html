@@ -83,6 +83,7 @@
       <thead>
         <tr>
           <th>ID</th>
+          <th>上传者</th>
           <th>Token</th>
           <th>状态</th>
           <th>更新</th>
@@ -93,6 +94,16 @@
       {% for upstream in upstreams %}
         <tr data-upstream-id="{{ upstream.id }}">
           <td data-label="ID"><code>{{ upstream.id }}</code></td>
+          <td data-label="上传者">
+            {% if upstream.owner_user_id is none %}
+              管理员
+            {% elif upstream.owner_user is none %}
+              未知用户 #{{ upstream.owner_user_id }}
+            {% else %}
+              {{ upstream.owner_user.name }}{% if upstream.owner_user.deleted_at %}（已删除）{% endif %}
+              <code>#{{ upstream.owner_user_id }}</code>
+            {% endif %}
+          </td>
           <td data-label="Token"><code>{{ upstream.api_key_masked }}</code></td>
           <td data-label="状态">
             {% if upstream.enabled %}
@@ -139,7 +150,7 @@
         </tr>
       {% else %}
         <tr class="empty-row">
-          <td colspan="5">暂无上游账号</td>
+          <td colspan="6">暂无上游账号</td>
         </tr>
       {% endfor %}
       </tbody>
