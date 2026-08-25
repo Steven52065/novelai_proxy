@@ -20,6 +20,7 @@ class NovelAIUpstreamRecord:
     enabled: bool
     created_at: str
     updated_at: str | None
+    owner_user_id: int | None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,27 @@ def validate_upstream_id(upstream_id: str) -> str:
     return normalized
 
 
+def self_service_upstream_prefix(user_id: int) -> str:
+    """自助上传上游 ID 的前缀，例如 u12-。归属始终以 owner_user_id 列为准，前缀只是展示投影。"""
+    return f"u{int(user_id)}-"
+
+
+def validate_upstream_label(label: str) -> str:
+    """校验自助上传的备注，返回 strip 后的结果；空备注返回空字符串，由调用方决定走自动编号。"""
+    normalized = label.strip()
+    if not normalized:
+        return ""
+    if len(normalized) > 32:
+        raise InvalidDomainInput("备注不能超过 32 个字符")
+    if "/" in normalized or "\\" in normalized or "#" in normalized:
+        raise InvalidDomainInput("备注不能包含 /、\\、# 字符")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in normalized):
+        raise InvalidDomainInput("备注不能包含控制字符")
+    if normalized in {".", ".."}:
+        raise InvalidDomainInput("备注不能是 . 或 ..")
+    return normalized
+
+
 def validate_api_key(api_key: str) -> str:
     normalized = api_key.strip()
     if not normalized:
@@ -62,6 +84,7 @@ def upstream_to_public_dict(record: NovelAIUpstreamRecord) -> dict[str, Any]:
         "api_key_masked": mask_token(record.api_key),
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "owner_user_id": record.owner_user_id,
     }
 
 
@@ -73,7 +96,7 @@ class NovelAIUpstreamRepository:
         where = "" if include_disabled else "WHERE enabled = 1"
         rows = self.db.query_all(
             f"""
-            SELECT id, api_key, enabled, created_at, updated_at
+            SELECT id, api_key, enabled, created_at, updated_at, owner_user_id
             FROM novelai_upstreams
             {where}
             ORDER BY id
@@ -84,7 +107,7 @@ class NovelAIUpstreamRepository:
     def get(self, upstream_id: str) -> NovelAIUpstreamRecord | None:
         row = self.db.query_one(
             """
-            SELECT id, api_key, enabled, created_at, updated_at
+            SELECT id, api_key, enabled, created_at, updated_at, owner_user_id
             FROM novelai_upstreams
             WHERE id = ?
             """,
@@ -92,23 +115,110 @@ class NovelAIUpstreamRepository:
         )
         return self._row_to_record(row) if row is not None else None
 
-    def create(self, *, upstream_id: str, api_key: str, enabled: bool = True) -> NovelAIUpstreamRecord:
+    def create(
+        self,
+        *,
+        upstream_id: str,
+        api_key: str,
+        enabled: bool = True,
+        owner_user_id: int | None = None,
+    ) -> NovelAIUpstreamRecord:
         upstream_id = validate_upstream_id(upstream_id)
         api_key = validate_api_key(api_key)
         timestamp = utc_now_iso()
         try:
             self.db.execute(
                 """
-                INSERT INTO novelai_upstreams(id, api_key, enabled, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO novelai_upstreams(id, api_key, enabled, created_at, owner_user_id)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (upstream_id, api_key, 1 if enabled else 0, timestamp),
+                (upstream_id, api_key, 1 if enabled else 0, timestamp, owner_user_id),
             )
         except IntegrityError as exc:
-            raise UpstreamConflict(f"上游 id 已存在：{upstream_id}") from exc
+            if self.get(upstream_id) is not None:
+                raise UpstreamConflict(f"上游 id 已存在：{upstream_id}") from exc
+            raise
         created = self.get(upstream_id)
         assert created is not None
         return created
+
+    def list_owned_by(self, user_id: int) -> list[NovelAIUpstreamRecord]:
+        rows = self.db.query_all(
+            """
+            SELECT id, api_key, enabled, created_at, updated_at, owner_user_id
+            FROM novelai_upstreams
+            WHERE owner_user_id = ?
+            ORDER BY id
+            """,
+            (int(user_id),),
+        )
+        return [self._row_to_record(row) for row in rows]
+
+    def count_owned_by(self, user_id: int) -> int:
+        row = self.db.query_one(
+            """
+            SELECT COUNT(*) AS c
+            FROM novelai_upstreams
+            WHERE owner_user_id = ?
+            """,
+            (int(user_id),),
+        )
+        return int(row["c"]) if row is not None else 0
+
+    def create_owned(
+        self,
+        *,
+        owner_user_id: int,
+        label: str,
+        api_key: str,
+        enabled: bool,
+        max_per_user: int,
+    ) -> NovelAIUpstreamRecord:
+        """自助上传：配额检查、自动编号与 INSERT 在同一事务内完成。"""
+        normalized_label = validate_upstream_label(label)
+        api_key = validate_api_key(api_key)
+        owner_user_id = int(owner_user_id)
+        with self.db.transaction() as conn:
+            if self.count_owned_by(owner_user_id) >= max_per_user:
+                raise InvalidDomainInput(f"最多只能上传 {max_per_user} 个上游账号")
+            if normalized_label:
+                upstream_id = f"{self_service_upstream_prefix(owner_user_id)}{normalized_label}"
+            else:
+                upstream_id = self._next_auto_upstream_id(conn, owner_user_id)
+            timestamp = utc_now_iso()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO novelai_upstreams(id, api_key, enabled, created_at, owner_user_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (upstream_id, api_key, 1 if enabled else 0, timestamp, owner_user_id),
+                )
+            except IntegrityError as exc:
+                if self.get(upstream_id) is not None:
+                    raise UpstreamConflict(f"上游 id 已存在：{upstream_id}") from exc
+                raise
+        created = self.get(upstream_id)
+        assert created is not None
+        return created
+
+    @staticmethod
+    def _next_auto_upstream_id(conn, user_id: int) -> str:
+        """按 ID 前缀扫描取最小未占用正整数，管理员手建的同前缀 key 也会被计入占用。"""
+        prefix = self_service_upstream_prefix(user_id)
+        rows = conn.execute(
+            "SELECT id FROM novelai_upstreams WHERE id LIKE ?",
+            (f"{prefix}%",),
+        ).fetchall()
+        used: set[int] = set()
+        for row in rows:
+            suffix = str(row["id"])[len(prefix):]
+            if suffix.isdigit():
+                used.add(int(suffix))
+        number = 1
+        while number in used:
+            number += 1
+        return f"{prefix}{number}"
 
     def update(
         self,
@@ -237,12 +347,14 @@ class NovelAIUpstreamRepository:
 
     @staticmethod
     def _row_to_record(row) -> NovelAIUpstreamRecord:
+        owner_user_id = row["owner_user_id"]
         return NovelAIUpstreamRecord(
             id=row["id"],
             api_key=row["api_key"],
             enabled=bool(row["enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            owner_user_id=int(owner_user_id) if owner_user_id is not None else None,
         )
 
 
