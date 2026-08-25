@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from sqlite3 import IntegrityError
 from typing import Any, Callable
@@ -67,6 +68,8 @@ def validate_upstream_label(label: str) -> str:
         raise InvalidDomainInput("备注不能包含控制字符")
     if normalized in {".", ".."}:
         raise InvalidDomainInput("备注不能是 . 或 ..")
+    if re.match(r"^u\d+-", normalized):
+        raise InvalidDomainInput("备注不能以 u+数字- 形式开头，避免与用户 ID 前缀混淆")
     return normalized
 
 
