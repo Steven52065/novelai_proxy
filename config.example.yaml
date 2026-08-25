@@ -86,9 +86,10 @@ routing:
     # 值越大，低分上游保留的流量越多；值越小，成功率高的上游获得的流量倾斜越明显。
     min_weight: 0.15
 
-# NovelAI 上游账号和计费设置在管理后台维护：
+# NovelAI 上游账号和计费设置主要由管理后台维护：
 # http://127.0.0.1:8080/admin/upstreams
 # config.yaml 中不再支持 novelai: 配置段。
+# 开启自助服务后，普通用户也可在 /account 页面自行上传和管理上游 key（见下方 self_service.upstreams）。
 
 # 上游错误自动禁用配置。
 # 当某个 NovelAI 上游账号返回指定 HTTP 状态码时，会自动把该账号设为禁用，
@@ -165,6 +166,13 @@ self_service:
     default_group_id:
     # 自助登录 session 签名密钥。生产环境请使用高强度随机字符串，不能提交真实值。
     session_secret: ""
+  # 用户自助上传上游 NovelAI key（/account 页面）。
+  # 上传后进入公共池，所有用户都能使用；上传者只拥有该 key 的管理权限。
+  upstreams:
+    # 是否开放自助上传。默认 true；关闭后 /account/api/upstreams 相关接口全部返回 404。
+    enabled: true
+    # 每个用户最多可上传的 key 数量，0 表示禁止上传。
+    max_per_user: 5
 
 # 兼容旧配置的日志级别字段。
 # 如果没有配置下面的 logging.level，程序会使用该值初始化日志级别。

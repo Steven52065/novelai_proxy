@@ -180,8 +180,14 @@ class DiscordSelfServiceConfig(BaseModel):
     session_secret: str = ""
 
 
+class SelfServiceUpstreamsConfig(BaseModel):
+    enabled: bool = True
+    max_per_user: int = Field(default=5, ge=0)
+
+
 class SelfServiceConfig(BaseModel):
     discord: DiscordSelfServiceConfig = Field(default_factory=DiscordSelfServiceConfig)
+    upstreams: SelfServiceUpstreamsConfig = Field(default_factory=SelfServiceUpstreamsConfig)
 
 
 class AppConfig(BaseModel):
