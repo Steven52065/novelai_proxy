@@ -255,7 +255,8 @@ CREATE TABLE IF NOT EXISTS novelai_upstreams (
     api_key TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
-    updated_at TEXT
+    updated_at TEXT,
+    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS novelai_settings (
@@ -287,6 +288,10 @@ USER_GROUPS_COLUMNS = (
     ("default_image_format_policy", "TEXT NOT NULL DEFAULT 'follow_global'"),
 )
 
+NOVELAI_UPSTREAMS_COLUMNS = (
+    ("owner_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+)
+
 
 def initialize_schema(db: Any) -> None:
     with db._lock:
@@ -298,6 +303,8 @@ def initialize_schema(db: Any) -> None:
             db._add_column_if_missing("users", column, definition)
         for column, definition in USER_GROUPS_COLUMNS:
             db._add_column_if_missing("user_groups", column, definition)
+        for column, definition in NOVELAI_UPSTREAMS_COLUMNS:
+            db._add_column_if_missing("novelai_upstreams", column, definition)
         db._migrate_group_daily_limit_into_members()
         for sql in USAGE_LOGS_INDEX_SQL:
             db.conn.execute(sql)
