@@ -40,6 +40,12 @@ from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 from ..users import load_user_rate_limit_rules, reset_api_key
 from .accounts import DiscordProfile, disable_linked_discord_user, login_or_register_discord_user
+from .session import (
+    SESSION_COOKIE,
+    current_self_service_user_id,
+    ensure_self_service_account_active,
+    require_discord_enabled,
+)
 from .discord import (
     DiscordMemberNotFound,
     DiscordOAuthClient,
@@ -51,7 +57,6 @@ from .discord import (
 
 router = APIRouter()
 OAUTH_STATE_COOKIE = "novelai_proxy_discord_oauth_state"
-SESSION_COOKIE = "novelai_proxy_self_service_session"
 API_KEY_FLASH_COOKIE = "novelai_proxy_self_service_key_flash"
 OAUTH_STATE_TTL_SECONDS = 5 * 60
 SESSION_TTL_SECONDS = 7 * 24 * 3600
@@ -66,7 +71,7 @@ async def signup_page(
     request: Request,
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
 ):
-    _require_discord_enabled(config)
+    require_discord_enabled(config)
     return templates.TemplateResponse(request, "signup.html", {"active": "signup"})
 
 
@@ -76,7 +81,7 @@ async def discord_start(
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
     oauth: DiscordOAuthClient = Depends(get_discord_oauth_client),
 ):
-    _require_discord_enabled(config)
+    require_discord_enabled(config)
     state = secrets.token_urlsafe(24)
     response = RedirectResponse(
         oauth.authorization_url(
@@ -106,7 +111,7 @@ async def discord_callback(
     db: Database = Depends(get_db),
     quota_manager: QuotaManager = Depends(get_quota_manager),
 ):
-    _require_discord_enabled(config)
+    require_discord_enabled(config)
     saved_state = verify_payload(request.cookies.get(OAUTH_STATE_COOKIE), config.session_secret)
     if not code or not state or saved_state is None or saved_state.get("state") != state:
         raise HTTPException(status_code=400, detail={"message": "Discord OAuth 状态无效"})
@@ -196,8 +201,8 @@ async def account_page(
     free_small_daily_limit_manager: FreeSmallDailyLimitManager = Depends(get_free_small_daily_limit_manager),
     proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
 ):
-    _require_discord_enabled(config)
-    user_id = _current_self_service_user_id(request, config.session_secret)
+    require_discord_enabled(config)
+    user_id = current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         return RedirectResponse("/signup", status_code=303)
     user = db.query_one(
@@ -256,11 +261,11 @@ async def account_rate_limit_rules(
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
     db: Database = Depends(get_db),
 ):
-    _require_discord_enabled(config)
-    user_id = _current_self_service_user_id(request, config.session_secret)
+    require_discord_enabled(config)
+    user_id = current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         raise HTTPException(status_code=401, detail={"message": "需要登录"})
-    _ensure_self_service_account_active(db, user_id)
+    ensure_self_service_account_active(db, user_id)
     return {"rules": _self_service_rate_limit_rules(db, user_id)}
 
 
@@ -272,11 +277,11 @@ async def account_queue_status(
     db: Database = Depends(get_db),
     proxy_queue: RoutingProxyQueue = Depends(get_proxy_queue),
 ):
-    _require_discord_enabled(config)
-    user_id = _current_self_service_user_id(request, config.session_secret)
+    require_discord_enabled(config)
+    user_id = current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         raise HTTPException(status_code=401, detail={"message": "需要登录"})
-    _ensure_self_service_account_active(db, user_id)
+    ensure_self_service_account_active(db, user_id)
     return _queue_status_from_snapshot(
         proxy_queue.snapshot(),
         max_queue_size=app_config.queue.max_queue_size,
@@ -290,11 +295,11 @@ async def account_update_image_format_policy(
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
     db: Database = Depends(get_db),
 ):
-    _require_discord_enabled(config)
-    user_id = _current_self_service_user_id(request, config.session_secret)
+    require_discord_enabled(config)
+    user_id = current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         return RedirectResponse("/signup", status_code=303)
-    _ensure_self_service_account_active(db, user_id)
+    ensure_self_service_account_active(db, user_id)
     try:
         normalized = normalize_image_format_policy(image_format_policy)
     except ValueError as exc:
@@ -312,11 +317,11 @@ async def account_reset_key(
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
     db: Database = Depends(get_db),
 ):
-    _require_discord_enabled(config)
-    user_id = _current_self_service_user_id(request, config.session_secret)
+    require_discord_enabled(config)
+    user_id = current_self_service_user_id(request, config.session_secret)
     if user_id is None:
         return RedirectResponse("/signup", status_code=303)
-    _ensure_self_service_account_active(db, user_id)
+    ensure_self_service_account_active(db, user_id)
     api_key = reset_api_key(db, user_id)
     response = RedirectResponse("/account", status_code=303)
     _api_key_flash.set_flash(response, request, api_key, owner_id=user_id)
@@ -328,7 +333,7 @@ async def account_logout(
     request: Request,
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
 ):
-    _require_discord_enabled(config)
+    require_discord_enabled(config)
     response = RedirectResponse("/signup", status_code=303)
     delete_response_cookie(response, request, SESSION_COOKIE)
     delete_response_cookie(response, request, API_KEY_FLASH_COOKIE)
@@ -388,12 +393,6 @@ def _queue_status_from_snapshot(snapshot: dict, *, max_queue_size: int) -> dict[
         "queued_count": queued_count,
         "queued_total": upstream_count * max_queue_size,
     }
-
-
-def _require_discord_enabled(config: DiscordSelfServiceConfig) -> DiscordSelfServiceConfig:
-    if not config.enabled:
-        raise HTTPException(status_code=404, detail={"message": "Discord 自助服务未启用"})
-    return config
 
 
 def _reject_discord_user(db: Database, profile: DiscordProfile, message: str) -> NoReturn:
@@ -496,27 +495,6 @@ def _set_session_cookie(response, request: Request, secret: str, user_id: int) -
         ),
         max_age=SESSION_TTL_SECONDS,
     )
-
-
-def _current_self_service_user_id(request: Request, secret: str) -> int | None:
-    payload = verify_payload(request.cookies.get(SESSION_COOKIE), secret)
-    if payload is None:
-        return None
-    try:
-        return int(payload["user_id"])
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-def _ensure_self_service_account_active(db: Database, user_id: int) -> None:
-    user = db.query_one(
-        "SELECT is_active, deleted_at FROM users WHERE id = ?",
-        (user_id,),
-    )
-    if user is None or user["deleted_at"] is not None:
-        raise HTTPException(status_code=403, detail={"message": "账号不可用"})
-    if not int(user["is_active"]):
-        raise HTTPException(status_code=403, detail={"message": "账号已被禁用"})
 
 
 def _self_service_rate_limit_rules(db: Database, user_id: int) -> list[dict[str, object]]:
