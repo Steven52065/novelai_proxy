@@ -111,6 +111,106 @@
 
       <section class="panel panel-flush">
         <h2 class="h2-sm h2-mb">
+          <i data-lucide="key-round" class="h2-icon h2-icon-info"></i>
+          上游账号
+        </h2>
+        <p class="muted muted-13 h2-mb-sm">上传后进入公共池，所有用户都能使用；仅支持 Opus 订阅账号。</p>
+        <form id="self-upstream-create-form" class="form-grid compact-form">
+          <label>
+            备注（可空，留空自动编号）
+            <input type="text" name="label" maxlength="32" placeholder="例如：主号">
+          </label>
+          <label>
+            Token
+            <input type="password" name="api_key" required autocomplete="new-password">
+          </label>
+          <label class="upstream-switch-field">
+            <span class="upstream-switch-label">启用</span>
+            <span class="upstream-switch">
+              <input class="upstream-switch-input" type="checkbox" name="enabled" checked>
+              <span class="upstream-switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
+          <div class="responsive-actions">
+            <button type="submit">
+              <i data-lucide="plus" class="btn-icon"></i>
+              上传
+            </button>
+          </div>
+        </form>
+        <p id="self-upstream-status" class="muted muted-13" role="status" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table class="responsive-card-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Token</th>
+                <th>状态</th>
+                <th>更新</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for upstream in self_upstreams %}
+              <tr data-upstream-id="{{ upstream.id }}">
+                <td data-label="ID"><code>{{ upstream.id }}</code></td>
+                <td data-label="Token"><code>{{ upstream.api_key_masked }}</code></td>
+                <td data-label="状态">
+                  {% if upstream.enabled %}
+                    <span class="badge badge-active">启用</span>
+                  {% elif upstream.id in auto_disabled_upstream_ids %}
+                    <span class="badge badge-inactive">自动禁用：Token 可能已失效</span>
+                  {% else %}
+                    <span class="badge badge-inactive">禁用</span>
+                  {% endif %}
+                </td>
+                <td data-label="更新" title="UTC 原始时间：{{ upstream.updated_at or upstream.created_at }}">{{ upstream.changed_at_display }}</td>
+                <td data-label="操作">
+                  <div class="inline-actions">
+                    <button type="button" class="secondary edit-token-btn" title="更新 Token">
+                      <i data-lucide="key-round" class="btn-icon"></i>
+                      <span>更新 Token</span>
+                    </button>
+                    <div class="token-editor" hidden>
+                      <input class="token-input" type="password" placeholder="新 Token" autocomplete="new-password">
+                      <button type="button" class="secondary update-token-btn" title="保存 Token">
+                        <i data-lucide="save" class="btn-icon"></i>
+                        <span>保存</span>
+                      </button>
+                    </div>
+                    <button type="button" class="secondary toggle-btn" data-enabled="{{ 'false' if upstream.enabled else 'true' }}" title="{{ '禁用' if upstream.enabled else '启用' }}">
+                      {% if upstream.enabled %}
+                        <i data-lucide="pause" class="btn-icon"></i>
+                        <span>禁用</span>
+                      {% else %}
+                        <i data-lucide="play" class="btn-icon"></i>
+                        <span>启用</span>
+                      {% endif %}
+                    </button>
+                    <button type="button" class="danger delete-btn" title="删除">
+                      <i data-lucide="trash-2" class="btn-icon"></i>
+                      <span>删除</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            {% else %}
+              <tr class="empty-row">
+                <td colspan="5" class="cell-centered empty-pad-lg">
+                  <div class="empty-stack">
+                    <i data-lucide="key-round" class="empty-icon"></i>
+                    <span class="muted">暂未上传上游账号</span>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel panel-flush">
+        <h2 class="h2-sm h2-mb">
           <i data-lucide="image" class="h2-icon"></i>
           图片输出格式
         </h2>
@@ -321,6 +421,116 @@
           button.querySelector("span").textContent = "已复制";
         } catch (err) {
           button.querySelector("span").textContent = "复制失败";
+        }
+      });
+    });
+
+    const selfUpstreamStatus = document.getElementById("self-upstream-status");
+
+    function setSelfUpstreamStatus(message, isError = false) {
+      if (!selfUpstreamStatus) return;
+      selfUpstreamStatus.textContent = message;
+      selfUpstreamStatus.style.color = isError ? "var(--danger-text)" : "";
+    }
+
+    async function requestSelfUpstreamJson(url, options) {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options && options.headers ? options.headers : {})
+        }
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error((body && body.message) || (body && body.detail && body.detail.message) || "请求失败");
+      }
+      return body;
+    }
+
+    function reloadSelfUpstreams(message) {
+      setSelfUpstreamStatus(message);
+      window.setTimeout(() => {
+        location.reload();
+      }, 350);
+    }
+
+    document.getElementById("self-upstream-create-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await requestSelfUpstreamJson("/account/api/upstreams", {
+          method: "POST",
+          body: JSON.stringify({
+            label: String(form.get("label") || ""),
+            api_key: String(form.get("api_key") || ""),
+            enabled: form.get("enabled") === "on"
+          })
+        });
+        reloadSelfUpstreams("上游账号已上传");
+      } catch (error) {
+        setSelfUpstreamStatus(error.message, true);
+      }
+    });
+
+    document.querySelectorAll("tr[data-upstream-id]").forEach((row) => {
+      const upstreamId = row.dataset.upstreamId;
+      const editTokenBtn = row.querySelector(".edit-token-btn");
+      const updateTokenBtn = row.querySelector(".update-token-btn");
+      const toggleBtn = row.querySelector(".toggle-btn");
+      const deleteBtn = row.querySelector(".delete-btn");
+      if (!editTokenBtn || !updateTokenBtn || !toggleBtn || !deleteBtn) return;
+
+      editTokenBtn.addEventListener("click", () => {
+        const editor = row.querySelector(".token-editor");
+        editor.hidden = !editor.hidden;
+        if (!editor.hidden) {
+          editor.querySelector(".token-input").focus();
+        }
+      });
+
+      updateTokenBtn.addEventListener("click", async () => {
+        const input = row.querySelector(".token-input");
+        if (!input.value.trim()) {
+          setSelfUpstreamStatus("请先输入新 Token。", true);
+          return;
+        }
+        try {
+          await requestSelfUpstreamJson(`/account/api/upstreams/${encodeURIComponent(upstreamId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({api_key: input.value})
+          });
+          reloadSelfUpstreams("Token 已更新");
+        } catch (error) {
+          setSelfUpstreamStatus(error.message, true);
+        }
+      });
+
+      toggleBtn.addEventListener("click", async () => {
+        const enabled = toggleBtn.dataset.enabled === "true";
+        try {
+          await requestSelfUpstreamJson(`/account/api/upstreams/${encodeURIComponent(upstreamId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({enabled})
+          });
+          reloadSelfUpstreams(enabled ? "上游账号已启用" : "上游账号已禁用");
+        } catch (error) {
+          setSelfUpstreamStatus(error.message, true);
+        }
+      });
+
+      deleteBtn.addEventListener("click", async () => {
+        if (!await confirmDialog(`确认删除上游账号 ${upstreamId} 吗？删除后该 Token 将不能再用于转发请求。`, {danger: true})) {
+          return;
+        }
+        try {
+          await requestSelfUpstreamJson(`/account/api/upstreams/${encodeURIComponent(upstreamId)}`, {
+            method: "DELETE",
+            body: "{}"
+          });
+          reloadSelfUpstreams("上游账号已删除");
+        } catch (error) {
+          setSelfUpstreamStatus(error.message, true);
         }
       });
     });

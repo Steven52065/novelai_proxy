@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from ..admin.common import format_display_time
 from ..allowlists import AllowedEndpoints, AllowedUpstreams
 from ..api_key_flash import ApiKeyFlashStore
 from ..config import AppConfig, DiscordSelfServiceConfig
@@ -38,6 +39,7 @@ from ..rate_limit_rules import PERIOD_CHOICES
 from ..routing_queue import RoutingProxyQueue
 from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
+from ..upstreams import NovelAIUpstreamRepository, upstream_to_public_dict
 from ..users import load_user_rate_limit_rules, reset_api_key
 from .accounts import DiscordProfile, disable_linked_discord_user, login_or_register_discord_user
 from .session import (
@@ -233,6 +235,17 @@ async def account_page(
     free_small_daily = free_small_daily_limit_manager.get_snapshot(user_id)
     has_api_key_flash = API_KEY_FLASH_COOKIE in request.cookies
     new_api_key = _api_key_flash.pop_flash(request, owner_id=user_id)
+    self_upstreams = []
+    for record in NovelAIUpstreamRepository(db).list_owned_by(user_id):
+        data = upstream_to_public_dict(record)
+        changed_at = data.get("updated_at") or data.get("created_at")
+        data["changed_at_display"] = format_display_time(changed_at)
+        self_upstreams.append(data)
+    auto_disabled_upstream_ids = {
+        str(notification.metadata.get("upstream_id"))
+        for notification in request.app.state.admin_notifications.pending()
+        if notification.event_type == "upstream_auto_disabled" and notification.metadata.get("upstream_id")
+    }
     response = templates.TemplateResponse(
         request,
         "account.html",
@@ -248,6 +261,8 @@ async def account_page(
             "queue_status": queue_status,
             "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
             "new_api_key": new_api_key,
+            "self_upstreams": self_upstreams,
+            "auto_disabled_upstream_ids": auto_disabled_upstream_ids,
         },
     )
     if has_api_key_flash:
