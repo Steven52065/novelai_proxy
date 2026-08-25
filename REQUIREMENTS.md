@@ -135,8 +135,8 @@ queue:
   upstream_interval_max_seconds: 5
   upstream_error_extra_delay_seconds: 5
 
-novelai:
-  api_key: ""  # 上游 NovelAI 账号的 JWT token
+# 上游 NovelAI 账号（JWT token）已不再写入 config.yaml，
+# 统一在管理后台 /admin/upstreams 维护（见 2.9 上游账号管理）。
 ```
 
 ### 2.8 用户组和 Discord 自助注册
@@ -164,7 +164,24 @@ Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
 
 用户组还有一套独立的「组内每人限频」模板（`group_member_rate_limit_rules`），语义与组共享限流不同：保存组配置时把模板展开写入每个成员自己的 `rate_limit_rules`，因此**每个成员各自独立计数**，超限时 `limit_scope` 仍是 `user`。与「每日免费小图限制」一致，它是写入时复制的默认值，不是运行时继承：新建成员和 Discord 自助注册会继承模板；修改组模板后可选择「仅覆盖跟随组配置的成员 / 覆盖全部成员 / 仅保存组配置」；成员被手动改过后，也可以在用户编辑页勾选「保存时套用组默认值」把规则拉回组模板。
 
-### 2.9 暂不实现（预留扩展）
+### 2.9 上游账号管理
+
+NovelAI 上游账号（JWT token）统一存在 `novelai_upstreams` 表中，由管理后台 `/admin/upstreams` 维护，不再支持 `config.yaml` 的 `novelai:` 配置段。
+
+- 管理员可增删改上游 key、更换 token、启用/禁用、测试连通性，并维护全局账号等级（`account_tier`，Opus 计费依据）。
+- 上游 ID 由管理员自定义；`__all__` 是保留字不能作为 ID，`default` 是常用的默认 ID。ID 创建后不可变（`usage_logs`、`dashboard_hourly_stats`、白名单都按字符串引用它）。
+- 调度支持多上游：请求按当前启用的上游集合路由，上游被禁用/删除后会自动从运行态与调度队列移除；命中错误码（默认 403）会自动禁用该上游并通知管理员。
+- 删除保护：仍被用户或用户组白名单引用的上游不能删除，管理端返回 409 并列出引用方；可先停用或调整白名单。
+- 若启用 Discord 自助服务（`self_service.discord.enabled`），普通用户可在 `/account` 页面上传和管理自己的上游 key，开关与上限由 `self_service.upstreams` 控制（`enabled`、`max_per_user`）：
+  - 上传的 key 进入**公共池**，所有用户都能用它跑图；上传者只拥有管理权。
+  - 自助 key 的 ID 由服务端生成，格式为 `u{用户ID}-{备注}`；备注可空，留空时自动编号（`u12-1`、`u12-2`…，复用已删除的最小未占用编号）。
+  - 用户可新增、删除、更换 token（ID 不变）、启用/禁用自己的 key；不能改 ID，不能测试连通性。
+  - **归属判定只读 `owner_user_id` 列，绝不解析 ID 字符串**；访问他人或管理员 key 一律返回 404，不暴露「该 ID 是否存在」。
+  - 用户被停用/软删除后，其上传的 key 保持原样继续服务，只是失去管理权。
+  - 自助 key 同样受删除保护；用户停用/删除仍被白名单引用的 key 时会给管理员写一条通知。
+  - 上传表单明示「仅支持 Opus 订阅账号」：`novelai_settings.account_tier` 是全局单值，非 Opus key 会让落到它上面的请求按错误价格计费。
+
+### 2.10 暂不实现（预留扩展）
 
 - 文字生成（`/ai/generate`、`/ai/generate-stream`）代理
 - 语音生成（`/ai/generate-voice`）代理
@@ -328,12 +345,15 @@ novelai_proxy/
 
 | 场景 | HTTP 状态码 | 响应体 |
 |------|------------|--------|
-| API Key 缺失或无效 | 401 | `{"message": "Invalid or missing API Key"}` |
-| 用户被禁用 | 403 | `{"message": "Account disabled"}` |
-| 限频超限 | 429 | `{"message": "Rate limit exceeded: ...", "retry_after": 30, "limit_scope": "user"}` |
-| 用户组限频超限 | 429 | `{"message": "Group rate limit exceeded: ...", "retry_after": 30, "limit_scope": "group"}` |
-| Anlas 余额不足 | 402 | `{"message": "Insufficient anlas: need X, have Y"}` |
-| 队列满载 | 503 | `{"message": "Queue full, please retry later"}` |
+| API Key 缺失或无效 | 401 | `{"message": "API Key 无效或缺失"}` |
+| 用户被禁用 | 403 | `{"message": "账号已被禁用"}` |
+| 个人限频超限 | 429 | `{"message": "请求频率超限：分钟最多 3 次", "retry_after": 30, "limit_scope": "user"}`，附 `Retry-After` 头 |
+| 用户组限频超限 | 429 | `{"message": "用户组请求频率超限：分钟最多 10 次", "retry_after": 30, "limit_scope": "group"}`，附 `Retry-After` 头 |
+| 免费小图日限额超限 | 429 | `{"message": "免费小图每日限额已用尽：每日最多 10 次", "retry_after": 3600, "limit_scope": "user", "limit": ..., "used": ...}`，附 `Retry-After` 头 |
+| Anlas 余额不足 | 402 | `{"message": "anlas 额度不足：需要 X，可用 Y", "need": X, "have": Y}` |
+| 队列满载 | 503 | `{"message": "队列已满，请稍后重试"}` |
+
+> 以上文案为当前实现的中文错误信息；限频的具体周期与次数随配置变化，`retry_after` 为秒。
 
 ---
 
