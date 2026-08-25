@@ -37,8 +37,8 @@ from .proxy.service import ProxyRequestService
 from .quota_manager import QuotaManager
 from .rate_limiter import RateLimiter
 from .routing_queue import RoutingProxyQueue
+from .self_service import router as self_service_router
 from .self_service.discord import DiscordOAuthClient
-from .self_service.routes import router as self_service_router
 from .upstreams import UpstreamRuntimeManager
 from .upstream_auto_disable import UpstreamAutoDisableService
 from .users.service import user_is_available
