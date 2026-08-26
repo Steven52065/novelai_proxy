@@ -23,7 +23,27 @@ from .session import (
 if TYPE_CHECKING:
     from ..admin_notifications import AdminNotificationRepository
 
-router = APIRouter()
+
+def require_self_service_user(
+    request: Request,
+    discord_config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
+    app_config: AppConfig = Depends(get_config),
+    db: Database = Depends(get_db),
+) -> int:
+    require_discord_enabled(discord_config)
+    _require_upstreams_enabled(app_config)
+    user_id = _require_login(request, discord_config)
+    ensure_self_service_account_active(db, user_id)
+    return user_id
+
+
+def get_self_service_upstreams_config(
+    app_config: AppConfig = Depends(get_config),
+) -> SelfServiceUpstreamsConfig:
+    return _require_upstreams_enabled(app_config)
+
+
+router = APIRouter(dependencies=[Depends(require_self_service_user)])
 
 
 class UpstreamCreateInput(BaseModel):
@@ -39,15 +59,9 @@ class UpstreamUpdateInput(BaseModel):
 
 @router.get("/account/api/upstreams")
 async def list_upstreams(
-    request: Request,
-    discord_config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
-    app_config: AppConfig = Depends(get_config),
     db: Database = Depends(get_db),
+    user_id: int = Depends(require_self_service_user),
 ):
-    require_discord_enabled(discord_config)
-    _require_upstreams_enabled(app_config)
-    user_id = _require_login(request, discord_config)
-    ensure_self_service_account_active(db, user_id)
     repo = NovelAIUpstreamRepository(db)
     return {
         "upstreams": [upstream_to_public_dict(record) for record in repo.list_owned_by(user_id)],
@@ -58,14 +72,10 @@ async def list_upstreams(
 async def create_upstream(
     request: Request,
     payload: UpstreamCreateInput,
-    discord_config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
-    app_config: AppConfig = Depends(get_config),
     db: Database = Depends(get_db),
+    upstreams_config: SelfServiceUpstreamsConfig = Depends(get_self_service_upstreams_config),
+    user_id: int = Depends(require_self_service_user),
 ):
-    require_discord_enabled(discord_config)
-    upstreams_config = _require_upstreams_enabled(app_config)
-    user_id = _require_login(request, discord_config)
-    ensure_self_service_account_active(db, user_id)
     repo = NovelAIUpstreamRepository(db)
     record = repo.create_owned(
         owner_user_id=user_id,
@@ -83,14 +93,9 @@ async def update_upstream(
     request: Request,
     upstream_id: str,
     payload: UpstreamUpdateInput,
-    discord_config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
-    app_config: AppConfig = Depends(get_config),
     db: Database = Depends(get_db),
+    user_id: int = Depends(require_self_service_user),
 ):
-    require_discord_enabled(discord_config)
-    _require_upstreams_enabled(app_config)
-    user_id = _require_login(request, discord_config)
-    ensure_self_service_account_active(db, user_id)
     repo = NovelAIUpstreamRepository(db)
     owned = _require_owned(repo, upstream_id, user_id)
     record = repo.update(upstream_id, api_key=payload.api_key, enabled=payload.enabled)
@@ -104,14 +109,9 @@ async def update_upstream(
 async def delete_upstream(
     request: Request,
     upstream_id: str,
-    discord_config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
-    app_config: AppConfig = Depends(get_config),
     db: Database = Depends(get_db),
+    user_id: int = Depends(require_self_service_user),
 ):
-    require_discord_enabled(discord_config)
-    _require_upstreams_enabled(app_config)
-    user_id = _require_login(request, discord_config)
-    ensure_self_service_account_active(db, user_id)
     repo = NovelAIUpstreamRepository(db)
     _require_owned(repo, upstream_id, user_id)
     try:
