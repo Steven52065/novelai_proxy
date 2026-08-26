@@ -89,11 +89,9 @@ async def upstreams_page(request: Request):
     runtime = request.app.state.upstream_runtime
     repo = runtime.repository
     notification_repo = request.app.state.admin_notifications
-    auto_disabled_upstream_ids = {
-        str(notification.metadata.get("upstream_id"))
-        for notification in notification_repo.pending()
-        if notification.event_type == "upstream_auto_disabled" and notification.metadata.get("upstream_id")
-    }
+    auto_disabled_upstream_ids = notification_repo.pending_upstream_ids(
+        "upstream_auto_disabled"
+    )
     records = repo.list(include_disabled=True)
     owner_map = _build_owner_map(request.app.state.db, records)
     return templates.TemplateResponse(

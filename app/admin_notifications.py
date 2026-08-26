@@ -70,6 +70,29 @@ class AdminNotificationRepository:
         )
         return [self._row_to_notification(row) for row in rows]
 
+    def pending_upstream_ids(self, event_type: str) -> set[str]:
+        """只取某类未处理通知的 upstream_id，避免为无关通知构造对象。"""
+        rows = self.db.query_all(
+            """
+            SELECT metadata
+            FROM admin_notifications
+            WHERE dismissed_at IS NULL AND event_type = ?
+            """,
+            (event_type,),
+        )
+        ids: set[str] = set()
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            upstream_id = metadata.get("upstream_id")
+            if upstream_id:
+                ids.add(str(upstream_id))
+        return ids
+
     def dismiss(self, notification_id: int) -> bool:
         cursor = self.db.execute(
             """

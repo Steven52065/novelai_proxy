@@ -241,11 +241,9 @@ async def account_page(
         changed_at = data.get("updated_at") or data.get("created_at")
         data["changed_at_display"] = format_display_time(changed_at)
         self_upstreams.append(data)
-    auto_disabled_upstream_ids = {
-        str(notification.metadata.get("upstream_id"))
-        for notification in request.app.state.admin_notifications.pending()
-        if notification.event_type == "upstream_auto_disabled" and notification.metadata.get("upstream_id")
-    }
+    auto_disabled_upstream_ids = request.app.state.admin_notifications.pending_upstream_ids(
+        "upstream_auto_disabled"
+    )
     response = templates.TemplateResponse(
         request,
         "account.html",

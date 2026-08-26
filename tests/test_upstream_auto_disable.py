@@ -133,6 +133,83 @@ def test_auto_disable_notification_dedupes_until_upstream_is_reenabled(tmp_path:
         assert len(pending) == 2
 
 
+def test_pending_upstream_ids_returns_only_matching_event_type(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        repo = app.state.admin_notifications
+        repo.create(
+            event_type="upstream_auto_disabled",
+            title="a",
+            content="a",
+            metadata={"upstream_id": "opus-a"},
+        )
+        repo.create(
+            event_type="upstream_auto_disabled",
+            title="b",
+            content="b",
+            metadata={"upstream_id": "opus-b"},
+        )
+        repo.create(
+            event_type="upstream_auto_disabled",
+            title="empty-id",
+            content="empty-id",
+            metadata={"upstream_id": ""},
+        )
+        repo.create(
+            event_type="other",
+            title="other",
+            content="other",
+            metadata={"upstream_id": "opus-other"},
+        )
+
+        assert repo.pending_upstream_ids("upstream_auto_disabled") == {"opus-a", "opus-b"}
+
+
+def test_pending_upstream_ids_skips_dismissed_and_malformed_metadata(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        repo = app.state.admin_notifications
+        dismissed = repo.create(
+            event_type="upstream_auto_disabled",
+            title="dismissed",
+            content="dismissed",
+            metadata={"upstream_id": "opus-dismissed"},
+        )
+        repo.dismiss(dismissed.id)
+        malformed = repo.create(
+            event_type="upstream_auto_disabled",
+            title="malformed",
+            content="malformed",
+            metadata={"upstream_id": "opus-malformed"},
+        )
+        client.app.state.db.execute(
+            "UPDATE admin_notifications SET metadata = ? WHERE id = ?",
+            ("not-json", malformed.id),
+        )
+        list_metadata = repo.create(
+            event_type="upstream_auto_disabled",
+            title="list",
+            content="list",
+            metadata={"upstream_id": "opus-list"},
+        )
+        client.app.state.db.execute(
+            "UPDATE admin_notifications SET metadata = ? WHERE id = ?",
+            ('["not", "a", "dict"]', list_metadata.id),
+        )
+        repo.create(
+            event_type="upstream_auto_disabled",
+            title="empty",
+            content="empty",
+            metadata={},
+        )
+
+        assert repo.pending_upstream_ids("upstream_auto_disabled") == set()
+
+
 def test_admin_notifications_pending_order_and_dismiss(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
