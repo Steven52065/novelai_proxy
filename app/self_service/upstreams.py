@@ -93,9 +93,9 @@ async def update_upstream(
     ensure_self_service_account_active(db, user_id)
     repo = NovelAIUpstreamRepository(db)
     owned = _require_owned(repo, upstream_id, user_id)
+    record = repo.update(upstream_id, api_key=payload.api_key, enabled=payload.enabled)
     if payload.enabled is False and owned.enabled:
         _notify_if_referenced(request, db, upstream_id, action="disable")
-    record = repo.update(upstream_id, api_key=payload.api_key, enabled=payload.enabled)
     _reload_upstream(request, record.id)
     return {"upstream": upstream_to_public_dict(record)}
 

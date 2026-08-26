@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.allowlists import AllowedUpstreams
 from app.database import Database, utc_now_iso
 from app.self_service.discord import DiscordMemberNotFound
-from app.upstreams import mask_token
+from app.upstreams import NovelAIUpstreamRepository, mask_token
 from app.users import reset_api_key
 from helpers import PAYLOAD, FakeUpstream, csrf_headers, write_test_config
 
@@ -476,6 +478,37 @@ def test_disable_with_references_notifies_admin(tmp_path: Path, monkeypatch):
             "SELECT COUNT(*) AS c FROM admin_notifications WHERE event_type = 'self_service_upstream_referenced'"
         )
         assert notification["c"] == 1
+
+
+def test_update_failure_does_not_notify_admin(tmp_path: Path, monkeypatch):
+    # 通知必须在 repo.update 成功之后发送：更新失败时不能留下不存在的管理员通知
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
+        uid_b = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u2'")["id"])
+        _set_allowed_upstreams(client.app.state.db, uid_b, [upstream["id"]])
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+
+        def boom(self, upstream_id, *, api_key=None, enabled=None):
+            raise RuntimeError("update boom")
+
+        monkeypatch.setattr(NovelAIUpstreamRepository, "update", boom)
+        with pytest.raises(RuntimeError, match="update boom"):
+            client.patch(
+                f"/account/api/upstreams/{upstream['id']}",
+                headers=_csrf(client),
+                json={"enabled": False},
+            )
+
+        notification = client.app.state.db.query_one(
+            "SELECT COUNT(*) AS c FROM admin_notifications WHERE event_type = 'self_service_upstream_referenced'"
+        )
+        assert notification["c"] == 0
 
 
 def test_upstreams_disabled_by_config_returns_404(tmp_path: Path, monkeypatch):
