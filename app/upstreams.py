@@ -216,7 +216,7 @@ class NovelAIUpstreamRepository:
         used: set[int] = set()
         for row in rows:
             suffix = str(row["id"])[len(prefix):]
-            if suffix.isdigit():
+            if re.fullmatch(r"[0-9]+", suffix):
                 used.add(int(suffix))
         number = 1
         while number in used:

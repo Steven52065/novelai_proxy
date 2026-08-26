@@ -553,6 +553,21 @@ def test_auto_numbering_and_reuse(tmp_path: Path, monkeypatch):
         assert third["id"] == f"u{uid}-2"
 
 
+def test_auto_numbering_ignores_non_ascii_digit_label(tmp_path: Path, monkeypatch):
+    # 备注 ² 的 isdigit() 为真但 int() 会抛 ValueError，编号扫描必须跳过它
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+        uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
+
+        _create_upstream(client, label="²", api_key="secret-token-a")
+        nxt = _create_upstream(client, api_key="secret-token-b")  # 留空备注走自动编号
+        assert nxt["id"] == f"u{uid}-1"
+
+
 def test_auto_numbering_skips_admin_occupied_prefix(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(tmp_path)
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
