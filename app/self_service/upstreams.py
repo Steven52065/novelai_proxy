@@ -189,6 +189,10 @@ def _notify_if_referenced(request: Request, db: Database, upstream_id: str, *, a
     if not conflicts:
         return
     notification_repo: AdminNotificationRepository = request.app.state.admin_notifications
+    if notification_repo.has_pending_upstream_action(
+        "self_service_upstream_referenced", upstream_id, action
+    ):
+        return
     notification_repo.create(
         event_type="self_service_upstream_referenced",
         title="自助上游仍被用户引用",

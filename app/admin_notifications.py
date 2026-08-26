@@ -93,6 +93,27 @@ class AdminNotificationRepository:
                 ids.add(str(upstream_id))
         return ids
 
+    def has_pending_upstream_action(self, event_type: str, upstream_id: str, action: str) -> bool:
+        """判断同一上游的同一动作是否已有未处理通知，避免用户反复重试撑大通知表。"""
+        rows = self.db.query_all(
+            """
+            SELECT metadata
+            FROM admin_notifications
+            WHERE dismissed_at IS NULL AND event_type = ?
+            """,
+            (event_type,),
+        )
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            if str(metadata.get("upstream_id")) == upstream_id and metadata.get("action") == action:
+                return True
+        return False
+
     def dismiss(self, notification_id: int) -> bool:
         cursor = self.db.execute(
             """

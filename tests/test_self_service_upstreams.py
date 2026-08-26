@@ -464,6 +464,42 @@ def test_delete_conflict_hides_references(tmp_path: Path, monkeypatch):
         assert notification["c"] == 1
 
 
+def test_repeated_delete_conflict_notifies_admin_once(tmp_path: Path, monkeypatch):
+    # 同一上游的同一动作只写一条未处理通知：否则用户反复重试即可撑大 admin_notifications
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
+        uid_b = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u2'")["id"])
+        _set_allowed_upstreams(client.app.state.db, uid_b, [upstream["id"]])
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+
+        for _ in range(3):
+            resp = client.delete(f"/account/api/upstreams/{upstream['id']}", headers=_csrf(client))
+            assert resp.status_code == 409
+
+        counted = client.app.state.db.query_one(
+            "SELECT COUNT(*) AS c FROM admin_notifications WHERE event_type = 'self_service_upstream_referenced'"
+        )
+        assert counted["c"] == 1
+
+        # 管理员处理掉之后，再次触发才会重新提醒
+        client.app.state.db.execute(
+            "UPDATE admin_notifications SET dismissed_at = ? WHERE event_type = 'self_service_upstream_referenced'",
+            (utc_now_iso(),),
+        )
+        resp = client.delete(f"/account/api/upstreams/{upstream['id']}", headers=_csrf(client))
+        assert resp.status_code == 409
+        counted = client.app.state.db.query_one(
+            "SELECT COUNT(*) AS c FROM admin_notifications WHERE event_type = 'self_service_upstream_referenced'"
+        )
+        assert counted["c"] == 2
+
+
 def test_disable_with_references_notifies_admin(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(tmp_path)
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
