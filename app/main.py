@@ -82,6 +82,12 @@ async def lifespan(app: FastAPI):
         notifications=admin_notifications,
     )
     upstream_clients = upstream_runtime.sync()
+    if config.self_service.discord.enabled and config.self_service.upstreams.enabled:
+        logger.warning(
+            "自助上游上传已开放：普通用户可在 /account 上传 NovelAI key 并进入公共池，"
+            "每人最多 %s 个。如需关闭请设置 self_service.upstreams.enabled: false",
+            config.self_service.upstreams.max_per_user,
+        )
     default_upstream_id = app.state.default_upstream_id
     proxy_queue = RoutingProxyQueue(
         targets=upstream_runtime.queue_targets(),
