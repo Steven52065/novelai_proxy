@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,6 +23,33 @@ from .session import (
 
 if TYPE_CHECKING:
     from ..admin_notifications import AdminNotificationRepository
+
+
+_WRITE_MIN_INTERVAL_SECONDS = 1.0
+_PRUNE_INTERVAL_SECONDS = 300
+_last_write_at: dict[int, float] = {}
+_last_prune_at = 0.0
+
+
+def _enforce_write_cooldown(user_id: int) -> None:
+    """自助写操作的粗粒度冷却：每次写都会重建全体共用的路由队列目标，需防抖。"""
+    global _last_prune_at
+    now = time.monotonic()
+    previous = _last_write_at.get(user_id)
+    if previous is not None and now - previous < _WRITE_MIN_INTERVAL_SECONDS:
+        raise HTTPException(
+            status_code=429,
+            detail={"message": "操作过于频繁，请稍后再试"},
+            headers={"Retry-After": "1"},
+        )
+    # 按时间间隔剪枝，而不是按字典大小：后者在活跃用户多于阈值时会每次请求
+    # 全量扫描却一个都删不掉，所谓上限并不是上限。
+    if now - _last_prune_at > _PRUNE_INTERVAL_SECONDS:
+        cutoff = now - _PRUNE_INTERVAL_SECONDS
+        for key in [k for k, v in _last_write_at.items() if v < cutoff]:
+            _last_write_at.pop(key, None)
+        _last_prune_at = now
+    _last_write_at[user_id] = now
 
 
 def require_self_service_user(
@@ -77,6 +105,7 @@ async def create_upstream(
     user_id: int = Depends(require_self_service_user),
 ):
     repo = NovelAIUpstreamRepository(db)
+    _enforce_write_cooldown(user_id)
     record = repo.create_owned(
         owner_user_id=user_id,
         label=payload.label,
@@ -97,6 +126,7 @@ async def update_upstream(
     user_id: int = Depends(require_self_service_user),
 ):
     repo = NovelAIUpstreamRepository(db)
+    _enforce_write_cooldown(user_id)
     owned = _require_owned(repo, upstream_id, user_id)
     record = repo.update(upstream_id, api_key=payload.api_key, enabled=payload.enabled)
     if payload.enabled is False and owned.enabled:
@@ -113,6 +143,7 @@ async def delete_upstream(
     user_id: int = Depends(require_self_service_user),
 ):
     repo = NovelAIUpstreamRepository(db)
+    _enforce_write_cooldown(user_id)
     _require_owned(repo, upstream_id, user_id)
     try:
         repo.delete(upstream_id)

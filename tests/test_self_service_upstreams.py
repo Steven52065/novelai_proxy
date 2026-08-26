@@ -146,6 +146,16 @@ def _set_allowed_upstreams(db: Database, user_id: int, upstream_ids: list[str]) 
         (AllowedUpstreams.of(upstream_ids).serialize(), user_id),
     )
 
+
+@pytest.fixture(autouse=True)
+def _disable_write_cooldown(monkeypatch):
+    """除专门的冷却用例外，其余用例按测试节奏连续写，不触发 1 秒冷却。"""
+    from app.self_service import upstreams as self_service_upstreams
+
+    monkeypatch.setattr(self_service_upstreams, "_WRITE_MIN_INTERVAL_SECONDS", 0.0)
+    self_service_upstreams._last_write_at.clear()
+
+
 # ---------- 安全边界（最高优先级） ----------
 
 
@@ -509,6 +519,36 @@ def test_update_failure_does_not_notify_admin(tmp_path: Path, monkeypatch):
             "SELECT COUNT(*) AS c FROM admin_notifications WHERE event_type = 'self_service_upstream_referenced'"
         )
         assert notification["c"] == 0
+
+
+def test_write_cooldown_blocks_rapid_patch(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+    from app.self_service import upstreams as self_service_upstreams
+
+    with TestClient(app) as client:
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        # 本用例专门验证冷却：恢复 1 秒间隔并清空进程级状态
+        monkeypatch.setattr(self_service_upstreams, "_WRITE_MIN_INTERVAL_SECONDS", 1.0)
+        self_service_upstreams._last_write_at.clear()
+
+        first = client.patch(
+            f"/account/api/upstreams/{upstream['id']}",
+            headers=_csrf(client),
+            json={"enabled": False},
+        )
+        second = client.patch(
+            f"/account/api/upstreams/{upstream['id']}",
+            headers=_csrf(client),
+            json={"enabled": True},
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+        assert second.json()["message"] == "操作过于频繁，请稍后再试"
+        assert second.headers.get("retry-after") == "1"
 
 
 def test_upstreams_disabled_by_config_returns_404(tmp_path: Path, monkeypatch):
