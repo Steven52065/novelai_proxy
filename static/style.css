@@ -572,6 +572,16 @@ h2 .muted,
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
 }
 
+/* /account 布局：账号状态占左列两行，右侧依次为 API Key、图片输出格式，提交账号独占整行 */
+.account-page .layout-grid > .panel:first-child {
+  grid-row: span 2;
+  align-self: stretch;
+}
+
+.account-page .layout-grid > .panel:last-child {
+  grid-column: 1 / -1;
+}
+
 .upstreams-page .upstream-switch-field,
 .account-page .upstream-switch-field {
   min-height: var(--control-h);

@@ -111,8 +111,29 @@
 
       <section class="panel panel-flush">
         <h2 class="h2-sm h2-mb">
+          <i data-lucide="image" class="h2-icon"></i>
+          图片输出格式
+        </h2>
+        <form method="post" action="/account/image-format-policy" class="stack stack-sm">
+          <label>
+            格式策略
+            <select name="image_format_policy">
+              {% for choice in image_format_policy_choices %}
+              <option value="{{ choice.value }}" {{ "selected" if user.image_format_policy == choice.value else "" }}>{{ choice.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit" class="btn-fit">
+            <i data-lucide="save" class="btn-icon"></i>
+            保存
+          </button>
+        </form>
+      </section>
+
+      <section class="panel panel-flush">
+        <h2 class="h2-sm h2-mb">
           <i data-lucide="key-round" class="h2-icon h2-icon-info"></i>
-          上游账号
+          提交账号
         </h2>
         <p class="muted muted-13 h2-mb-sm">上传后进入公共池，所有用户都能使用；仅支持 Opus 订阅账号。</p>
         <form id="self-upstream-create-form" class="form-grid compact-form">
@@ -207,27 +228,6 @@
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section class="panel panel-flush">
-        <h2 class="h2-sm h2-mb">
-          <i data-lucide="image" class="h2-icon"></i>
-          图片输出格式
-        </h2>
-        <form method="post" action="/account/image-format-policy" class="stack stack-sm">
-          <label>
-            格式策略
-            <select name="image_format_policy">
-              {% for choice in image_format_policy_choices %}
-              <option value="{{ choice.value }}" {{ "selected" if user.image_format_policy == choice.value else "" }}>{{ choice.label }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <button type="submit" class="btn-fit">
-            <i data-lucide="save" class="btn-icon"></i>
-            保存
-          </button>
-        </form>
       </section>
     </div>
 
