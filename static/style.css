@@ -562,11 +562,18 @@ h2 .muted,
   align-items: end;
 }
 
+/* 上游表单与开关：管理端上游页与 /account 自助上游面板共用同一套样式 */
 .upstreams-page .compact-form {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
-.upstreams-page .upstream-switch-field {
+/* /account 面板较窄：固定四列（备注/Token 自适应，启用/上传按内容宽），避免“上传”换行 */
+.account-page .compact-form {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+}
+
+.upstreams-page .upstream-switch-field,
+.account-page .upstream-switch-field {
   min-height: var(--control-h);
   display: flex;
   align-items: center;
@@ -575,13 +582,15 @@ h2 .muted,
   padding: 0;
 }
 
-.upstreams-page .upstream-switch-label {
+.upstreams-page .upstream-switch-label,
+.account-page .upstream-switch-label {
   color: #cbd5e1;
   font-size: 13px;
   font-weight: 600;
 }
 
-.upstreams-page .upstream-switch {
+.upstreams-page .upstream-switch,
+.account-page .upstream-switch {
   position: relative;
   display: inline-flex;
   width: 48px;
@@ -589,7 +598,8 @@ h2 .muted,
   flex: none;
 }
 
-.upstreams-page .upstream-switch-input {
+.upstreams-page .upstream-switch-input,
+.account-page .upstream-switch-input {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -601,7 +611,8 @@ h2 .muted,
   cursor: pointer;
 }
 
-.upstreams-page .upstream-switch-track {
+.upstreams-page .upstream-switch-track,
+.account-page .upstream-switch-track {
   position: absolute;
   inset: 0;
   border-radius: var(--radius-pill);
@@ -610,7 +621,8 @@ h2 .muted,
   transition: var(--transition-fast);
 }
 
-.upstreams-page .upstream-switch-track::after {
+.upstreams-page .upstream-switch-track::after,
+.account-page .upstream-switch-track::after {
   content: "";
   position: absolute;
   top: 3px;
@@ -623,21 +635,25 @@ h2 .muted,
   transition: var(--transition-fast);
 }
 
-.upstreams-page .upstream-switch-input:checked + .upstream-switch-track {
+.upstreams-page .upstream-switch-input:checked + .upstream-switch-track,
+.account-page .upstream-switch-input:checked + .upstream-switch-track {
   background: rgba(16, 185, 129, 0.26);
   border-color: rgba(16, 185, 129, 0.5);
 }
 
-.upstreams-page .upstream-switch-input:checked + .upstream-switch-track::after {
+.upstreams-page .upstream-switch-input:checked + .upstream-switch-track::after,
+.account-page .upstream-switch-input:checked + .upstream-switch-track::after {
   transform: translateX(20px);
   background: var(--success-text);
 }
 
-.upstreams-page .upstream-switch-input:focus-visible + .upstream-switch-track {
+.upstreams-page .upstream-switch-input:focus-visible + .upstream-switch-track,
+.account-page .upstream-switch-input:focus-visible + .upstream-switch-track {
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
 }
 
-.upstreams-page .inline-actions {
+.upstreams-page .inline-actions,
+.account-page .inline-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -646,7 +662,8 @@ h2 .muted,
   min-width: 420px;
 }
 
-.upstreams-page .token-editor {
+.upstreams-page .token-editor,
+.account-page .token-editor {
   display: flex;
   gap: var(--space-2);
   align-items: center;
@@ -654,17 +671,20 @@ h2 .muted,
   order: 2;
 }
 
-.upstreams-page .token-editor[hidden] {
+.upstreams-page .token-editor[hidden],
+.account-page .token-editor[hidden] {
   display: none;
 }
 
-.upstreams-page .inline-actions .token-input {
+.upstreams-page .inline-actions .token-input,
+.account-page .inline-actions .token-input {
   min-width: 180px;
   height: 40px;
   flex: 1 1 220px;
 }
 
-.upstreams-page .inline-actions button {
+.upstreams-page .inline-actions button,
+.account-page .inline-actions button {
   min-height: 40px;
   display: inline-flex;
   align-items: center;
@@ -4114,6 +4134,26 @@ pre {
     align-items: stretch;
   }
   .upstreams-table .token-input {
+    height: 40px;
+    min-height: 40px;
+    width: 100%;
+  }
+  /* --- /account 自助上游表格移动端：操作按钮与上游管理页一致 --- */
+  .account-page .inline-actions {
+    width: 100%;
+    min-width: 0;
+    justify-content: stretch;
+    justify-self: stretch;
+  }
+  .account-page .inline-actions > button {
+    flex: 1 1 calc(50% - var(--space-2));
+  }
+  .account-page .token-editor {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .account-page .token-input {
     height: 40px;
     min-height: 40px;
     width: 100%;
