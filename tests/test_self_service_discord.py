@@ -506,6 +506,7 @@ def test_account_queue_status_uses_live_snapshot_and_refresh_controls(tmp_path: 
         text = _normalized_text(page.text)
         assert "生成队列状态" in text
         assert "禁止提交合租账号" in text
+        assert "提交账号仅限pst格式的API Key！" in text
         assert "正在生成 2/2 正在排队 3/4" in text
         assert 'id="account-queue-refresh"' in page.text
         assert "/account/api/queue-status" in page.text
