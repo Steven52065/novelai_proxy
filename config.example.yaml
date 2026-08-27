@@ -34,16 +34,16 @@ security:
 queue:
   # 每个上游 key 的本地等待队列最大长度。超过后调度层会尝试该用户允许的其他上游；
   # 如果全部允许的上游队列都满，新请求会返回 503。
-  max_queue_size: 50
+  max_queue_size: 2
   # 调度队列最大长度。留空时默认等于 max_queue_size * 已启用上游 key 数量。
   # 该队列位于用户请求入口和各上游独立队列之间，用于避免突发请求无限堆积。
-  dispatch_max_queue_size:
+  dispatch_max_queue_size: 1
   # 相邻两次发往 NovelAI 上游请求之间的随机间隔范围，单位秒。
   # 每次请求都会在 min 和 max 之间随机选择一个间隔；两者相同则为固定间隔。
-  upstream_interval_min_seconds: 2
-  upstream_interval_max_seconds: 5
+  upstream_interval_min_seconds: 3
+  upstream_interval_max_seconds: 6
   # 如果上一个上游请求返回 API 报错，则下一次请求在随机队列间隔基础上额外等待的秒数。
-  upstream_error_extra_delay_seconds: 5
+  upstream_error_extra_delay_seconds: 10
   # 单个上游请求的最大执行时长，单位秒。
   # 只统计等待 NovelAI 上游返回内容的时间；不包含本地排队、随机间隔或错误后的额外等待。
   upstream_execution_timeout_seconds: 60
@@ -60,7 +60,7 @@ queue:
   retry_429_queue_length_threshold: 3
   # 429 错误自动重试的最大尝试次数（包括初次尝试）。
   # 例如设置为 5，表示初次尝试 + 最多 4 次重试。
-  retry_429_max_attempts: 5
+  retry_429_max_attempts: 3
 
 # 调度层分流配置。
 routing:
@@ -70,7 +70,7 @@ routing:
   #   该策略只影响进入生成队列的上游分流；suggest-tags 等不进入队列的查询接口仍按固定顺序选择用户允许的上游。
   #   上游请求成功会提高该上游分数，失败或 429 会降低该上游分数。
   #   不会熔断上游，也不会把某个上游完全移出候选；低分上游仍会保留少量流量，方便短时占用恢复后自然升权。
-  strategy: round_robin
+  strategy: adaptive_weighted_random
   adaptive:
     # 初始健康分。服务启动后没有历史记录时，每个上游都会使用该分数。
     # 取值范围 0.0 ~ 1.0；值越高表示启动时越信任所有上游。
@@ -100,6 +100,7 @@ upstream_auto_disable:
   # 默认 403，通常表示 API Key 或账号状态不可用。
   status_codes:
     - 403
+    - 401
 
 # SQLite 数据库配置。
 database:
@@ -189,7 +190,7 @@ logging:
   # 应用文本日志文件名，最终路径为 logs/novelai_proxy.log。
   request_log_file: novelai_proxy.log
   # 是否把成功生成接口返回的 zip 内容解包保存到本地，便于 debug。
-  save_generated_images: true
+  save_generated_images: false
   # 生成图片归档目录名，最终路径为 logs/generated_images/{request_id}/。
   generated_images_dir: generated_images
   # 是否不把用户请求的 Payload 记录到使用日志。默认 false（记录）。
