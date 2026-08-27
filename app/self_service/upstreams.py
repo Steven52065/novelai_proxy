@@ -52,6 +52,15 @@ def _enforce_write_cooldown(user_id: int) -> None:
     _last_write_at[user_id] = now
 
 
+def _validate_api_key(api_key: str) -> None:
+    """自助上传的 Token 必须是 NovelAI Key，且以 pst- 开头。"""
+    if not api_key.startswith("pst-"):
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Token 必须以 pst- 开头"},
+        )
+
+
 def require_self_service_user(
     request: Request,
     discord_config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
@@ -105,6 +114,7 @@ async def create_upstream(
     user_id: int = Depends(require_self_service_user),
 ):
     repo = NovelAIUpstreamRepository(db)
+    _validate_api_key(payload.api_key)
     _enforce_write_cooldown(user_id)
     record = repo.create_owned(
         owner_user_id=user_id,
@@ -128,6 +138,8 @@ async def update_upstream(
     repo = NovelAIUpstreamRepository(db)
     _enforce_write_cooldown(user_id)
     owned = _require_owned(repo, upstream_id, user_id)
+    if payload.api_key is not None:
+        _validate_api_key(payload.api_key)
     record = repo.update(upstream_id, api_key=payload.api_key, enabled=payload.enabled)
     if payload.enabled is False and owned.enabled:
         _notify_if_referenced(request, db, upstream_id, action="disable")

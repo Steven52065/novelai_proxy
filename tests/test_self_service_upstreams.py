@@ -21,7 +21,7 @@ REQUIRED_GUILD_ID = "200000000000000001"
 REQUIRED_ROLE_ID = "300000000000000001"
 
 SELF_SERVICE_CSRF = "novelai_proxy_self_service_csrf"
-LONG_TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
+LONG_TOKEN = "pst-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
 LONG_MASKED = mask_token(LONG_TOKEN)
 
 
@@ -166,7 +166,7 @@ def test_user_cannot_patch_other_users_upstream(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         uid_a = _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
 
         resp = client.patch(
@@ -181,7 +181,7 @@ def test_user_cannot_patch_other_users_upstream(tmp_path: Path, monkeypatch):
             "SELECT api_key, owner_user_id FROM novelai_upstreams WHERE id = ?",
             (upstream["id"],),
         )
-        assert row["api_key"] == "secret-token-a"
+        assert row["api_key"] == "pst-secret-token-a"
         assert row["owner_user_id"] == uid_a
 
 
@@ -192,7 +192,7 @@ def test_user_cannot_delete_other_users_upstream(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
 
         resp = client.delete(f"/account/api/upstreams/{upstream['id']}", headers=_csrf(client))
@@ -267,6 +267,56 @@ def test_user_cannot_manage_literal_same_prefix_admin_key(tmp_path: Path, monkey
         assert row["owner_user_id"] is None
 
 
+def test_create_rejects_token_without_pst_prefix(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+        uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
+
+        # 不带 pst- 前缀、以及带引号包裹的 Key 都不能提交
+        for bad_key in ("token-no-prefix", '"pst-quoted-key"'):
+            resp = client.post(
+                "/account/api/upstreams",
+                headers=_csrf(client),
+                json={"label": "x", "api_key": bad_key, "enabled": True},
+            )
+            assert resp.status_code == 400
+            assert resp.json()["message"] == "Token 必须以 pst- 开头"
+
+        count = int(client.app.state.db.query_one(
+            "SELECT COUNT(*) AS c FROM novelai_upstreams WHERE owner_user_id = ?",
+            (uid,),
+        )["c"])
+        assert count == 0
+
+
+def test_update_rejects_token_without_pst_prefix(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _login(client, user_id=DISCORD_USER_ID, username="u1")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
+
+        resp = client.patch(
+            f"/account/api/upstreams/{upstream['id']}",
+            headers=_csrf(client),
+            json={"api_key": "token-no-prefix"},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["message"] == "Token 必须以 pst- 开头"
+        row = client.app.state.db.query_one(
+            "SELECT api_key FROM novelai_upstreams WHERE id = ?",
+            (upstream["id"],),
+        )
+        assert row["api_key"] == "pst-secret-token-a"
+
+
 def test_label_mimicking_other_user_prefix_rejected_and_encoded_slash_404(tmp_path: Path, monkeypatch):
     config_path, _ = _write_self_service_config(tmp_path)
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
@@ -274,12 +324,12 @@ def test_label_mimicking_other_user_prefix_rejected_and_encoded_slash_404(tmp_pa
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="x", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="x", api_key="pst-secret-token-a")
 
         resp = client.post(
             "/account/api/upstreams",
             headers=_csrf(client),
-            json={"label": "u13-steal", "api_key": "whatever"},
+            json={"label": "u13-steal", "api_key": "pst-whatever"},
         )
         assert resp.status_code == 400
         assert "前缀混淆" in resp.json()["message"]
@@ -294,7 +344,7 @@ def test_label_mimicking_other_user_prefix_rejected_and_encoded_slash_404(tmp_pa
         row = client.app.state.db.query_one(
             "SELECT api_key FROM novelai_upstreams WHERE id = ?", (upstream["id"],)
         )
-        assert row["api_key"] == "secret-token-a"
+        assert row["api_key"] == "pst-secret-token-a"
 
 
 def test_invalid_labels_rejected_with_chinese_message(tmp_path: Path, monkeypatch):
@@ -308,7 +358,7 @@ def test_invalid_labels_rejected_with_chinese_message(tmp_path: Path, monkeypatc
             resp = client.post(
                 "/account/api/upstreams",
                 headers=_csrf(client),
-                json={"label": label, "api_key": "whatever"},
+                json={"label": label, "api_key": "pst-whatever"},
             )
             assert resp.status_code == 400, (label, resp.text)
             assert resp.json()["message"]
@@ -321,7 +371,7 @@ def test_unauthenticated_requests_rejected_without_db_writes(tmp_path: Path, mon
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         # 清掉会话，模拟未登录
         client.cookies.delete("novelai_proxy_self_service_session")
 
@@ -345,7 +395,7 @@ def test_disabled_account_rejected(tmp_path: Path, monkeypatch):
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         client.app.state.db.execute("UPDATE users SET is_active = 0 WHERE id = ?", (uid,))
 
         for method in ("get", "post", "patch", "delete"):
@@ -369,7 +419,7 @@ def test_deleted_account_rejected(tmp_path: Path, monkeypatch):
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         client.app.state.db.execute("UPDATE users SET deleted_at = ? WHERE id = ?", (utc_now_iso(), uid))
 
         get = client.get("/account/api/upstreams")
@@ -386,7 +436,7 @@ def test_write_operations_require_csrf(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
 
         post = client.post("/account/api/upstreams", json={"api_key": "x"})
         patch = client.patch(f"/account/api/upstreams/{upstream['id']}", json={"enabled": False})
@@ -427,11 +477,11 @@ def test_plaintext_token_never_appears_in_self_service_responses(tmp_path: Path,
         patch = client.patch(
             f"/account/api/upstreams/{upstream['id']}",
             headers=_csrf(client),
-            json={"api_key": "SECRET-TOKEN-abcdef1234567890XYZ"},
+            json={"api_key": "pst-SECRET-TOKEN-abcdef1234567890XYZ"},
         )
         assert patch.status_code == 200
-        assert "SECRET-TOKEN-abcdef1234567890XYZ" not in patch.text
-        assert "SECRET-TOKEN-abcdef1234567890XYZ" not in client.get("/account/api/upstreams").text
+        assert "pst-SECRET-TOKEN-abcdef1234567890XYZ" not in patch.text
+        assert "pst-SECRET-TOKEN-abcdef1234567890XYZ" not in client.get("/account/api/upstreams").text
 
 
 def test_delete_conflict_hides_references(tmp_path: Path, monkeypatch):
@@ -442,7 +492,7 @@ def test_delete_conflict_hides_references(tmp_path: Path, monkeypatch):
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid_a = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
         uid_b = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u2'")["id"])
         _set_allowed_upstreams(client.app.state.db, uid_b, [upstream["id"]])
@@ -472,7 +522,7 @@ def test_repeated_delete_conflict_notifies_admin_once(tmp_path: Path, monkeypatc
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
         uid_b = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u2'")["id"])
         _set_allowed_upstreams(client.app.state.db, uid_b, [upstream["id"]])
@@ -507,7 +557,7 @@ def test_disable_with_references_notifies_admin(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
         uid_b = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u2'")["id"])
         _set_allowed_upstreams(client.app.state.db, uid_b, [upstream["id"]])
@@ -534,7 +584,7 @@ def test_update_failure_does_not_notify_admin(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         _login(client, user_id=SECOND_DISCORD_USER_ID, username="u2")
         uid_b = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u2'")["id"])
         _set_allowed_upstreams(client.app.state.db, uid_b, [upstream["id"]])
@@ -565,7 +615,7 @@ def test_write_cooldown_blocks_rapid_patch(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         # 本用例专门验证冷却：恢复 1 秒间隔并清空进程级状态
         monkeypatch.setattr(self_service_upstreams, "_WRITE_MIN_INTERVAL_SECONDS", 1.0)
         self_service_upstreams._last_write_at.clear()
@@ -632,7 +682,7 @@ def test_create_with_label_sets_id_and_owner(tmp_path: Path, monkeypatch):
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
 
-        upstream = _create_upstream(client, label="主号", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="主号", api_key="pst-secret-token-a")
 
         assert upstream["id"] == f"u{uid}-主号"
         assert upstream["owner_user_id"] == uid
@@ -652,13 +702,13 @@ def test_auto_numbering_and_reuse(tmp_path: Path, monkeypatch):
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
 
-        first = _create_upstream(client, api_key="secret-token-1")
-        second = _create_upstream(client, api_key="secret-token-2")
+        first = _create_upstream(client, api_key="pst-secret-token-1")
+        second = _create_upstream(client, api_key="pst-secret-token-2")
         assert first["id"] == f"u{uid}-1"
         assert second["id"] == f"u{uid}-2"
 
         client.delete(f"/account/api/upstreams/{second['id']}", headers=_csrf(client))
-        third = _create_upstream(client, api_key="secret-token-3")
+        third = _create_upstream(client, api_key="pst-secret-token-3")
         assert third["id"] == f"u{uid}-2"
 
 
@@ -672,8 +722,8 @@ def test_auto_numbering_ignores_non_ascii_digit_label(tmp_path: Path, monkeypatc
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
 
-        _create_upstream(client, label="²", api_key="secret-token-a")
-        nxt = _create_upstream(client, api_key="secret-token-b")  # 留空备注走自动编号
+        _create_upstream(client, label="²", api_key="pst-secret-token-a")
+        nxt = _create_upstream(client, api_key="pst-secret-token-b")  # 留空备注走自动编号
         assert nxt["id"] == f"u{uid}-1"
 
 
@@ -685,8 +735,8 @@ def test_auto_numbering_skips_admin_occupied_prefix(tmp_path: Path, monkeypatch)
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
-        _create_upstream(client, api_key="secret-token-1")
-        _create_upstream(client, api_key="secret-token-2")
+        _create_upstream(client, api_key="pst-secret-token-1")
+        _create_upstream(client, api_key="pst-secret-token-2")
         created = client.post(
             "/admin/api/upstreams",
             auth=("admin", "admin123"),
@@ -694,7 +744,7 @@ def test_auto_numbering_skips_admin_occupied_prefix(tmp_path: Path, monkeypatch)
         )
         assert created.status_code == 200
 
-        fourth = _create_upstream(client, api_key="secret-token-4")
+        fourth = _create_upstream(client, api_key="pst-secret-token-4")
         assert fourth["id"] == f"u{uid}-4"
 
 
@@ -706,12 +756,12 @@ def test_duplicate_label_conflicts(tmp_path: Path, monkeypatch):
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         uid = int(client.app.state.db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
-        _create_upstream(client, label="主号", api_key="secret-token-a")
+        _create_upstream(client, label="主号", api_key="pst-secret-token-a")
 
         resp = client.post(
             "/account/api/upstreams",
             headers=_csrf(client),
-            json={"label": "主号", "api_key": "secret-token-b"},
+            json={"label": "主号", "api_key": "pst-secret-token-b"},
         )
 
         assert resp.status_code == 409
@@ -725,20 +775,20 @@ def test_update_token_keeps_id_and_replaces_runtime_client(tmp_path: Path, monke
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         before = app.state.upstream_clients[upstream["id"]]
 
         resp = client.patch(
             f"/account/api/upstreams/{upstream['id']}",
             headers=_csrf(client),
-            json={"api_key": "secret-token-b"},
+            json={"api_key": "pst-secret-token-b"},
         )
 
         assert resp.status_code == 200
         assert resp.json()["upstream"]["id"] == upstream["id"]
-        assert "secret-token-b" not in resp.text
+        assert "pst-secret-token-b" not in resp.text
         assert app.state.upstream_clients[upstream["id"]] is not before
-        assert app.state.upstream_clients[upstream["id"]].api_key == "secret-token-b"
+        assert app.state.upstream_clients[upstream["id"]].api_key == "pst-secret-token-b"
 
 
 def test_toggle_and_delete_sync_runtime(tmp_path: Path, monkeypatch):
@@ -748,7 +798,7 @@ def test_toggle_and_delete_sync_runtime(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
         assert upstream["id"] in app.state.upstream_clients
 
         resp = client.patch(
@@ -782,13 +832,13 @@ def test_max_per_user_limit(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        _create_upstream(client, api_key="secret-token-1")
-        _create_upstream(client, api_key="secret-token-2")
+        _create_upstream(client, api_key="pst-secret-token-1")
+        _create_upstream(client, api_key="pst-secret-token-2")
 
         resp = client.post(
             "/account/api/upstreams",
             headers=_csrf(client),
-            json={"api_key": "secret-token-3"},
+            json={"api_key": "pst-secret-token-3"},
         )
 
         assert resp.status_code == 400
@@ -805,7 +855,7 @@ def test_max_per_user_zero_blocks_all(tmp_path: Path, monkeypatch):
         resp = client.post(
             "/account/api/upstreams",
             headers=_csrf(client),
-            json={"api_key": "secret-token-1"},
+            json={"api_key": "pst-secret-token-1"},
         )
 
         assert resp.status_code == 400
@@ -819,7 +869,7 @@ def test_other_user_can_generate_through_pool(tmp_path: Path, monkeypatch):
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="pool", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="pool", api_key="pst-secret-token-a")
         fake = FakeUpstream()
         app.state.upstream_clients[upstream["id"]] = fake
 
@@ -848,7 +898,7 @@ def test_owner_disable_and_delete_keep_key_serving(tmp_path: Path, monkeypatch):
         _login(client, user_id=DISCORD_USER_ID, username="u1")
         db = client.app.state.db
         uid_a = int(db.query_one("SELECT id FROM users WHERE name = 'Dc: u1'")["id"])
-        upstream = _create_upstream(client, label="pool", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="pool", api_key="pst-secret-token-a")
         fake = FakeUpstream()
         app.state.upstream_clients[upstream["id"]] = fake
 
@@ -980,7 +1030,7 @@ def test_admin_can_patch_and_delete_self_service_upstream(tmp_path: Path, monkey
 
     with TestClient(app) as client:
         _login(client, user_id=DISCORD_USER_ID, username="u1")
-        upstream = _create_upstream(client, label="main", api_key="secret-token-a")
+        upstream = _create_upstream(client, label="main", api_key="pst-secret-token-a")
 
         patch = client.patch(
             f"/admin/api/upstreams/{upstream['id']}",
