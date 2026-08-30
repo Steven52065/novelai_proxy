@@ -144,7 +144,7 @@
             <input type="text" name="label" maxlength="32" placeholder="例如：主号">
           </label>
           <label>
-            Token
+            Key
             <input type="password" name="api_key" required autocomplete="new-password">
           </label>
           <label class="upstream-switch-field">
@@ -167,7 +167,7 @@
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Token</th>
+                <th>Key</th>
                 <th>状态</th>
                 <th>更新</th>
                 <th>操作</th>
@@ -177,12 +177,12 @@
             {% for upstream in self_upstreams %}
               <tr data-upstream-id="{{ upstream.id }}">
                 <td data-label="ID"><code>{{ upstream.id }}</code></td>
-                <td data-label="Token"><code>{{ upstream.api_key_masked }}</code></td>
+                <td data-label="Key"><code>{{ upstream.api_key_masked }}</code></td>
                 <td data-label="状态">
                   {% if upstream.enabled %}
                     <span class="badge badge-active">启用</span>
                   {% elif upstream.id in auto_disabled_upstream_ids %}
-                    <span class="badge badge-inactive">自动禁用：Token 可能已失效</span>
+                    <span class="badge badge-inactive">自动禁用：Key 可能已失效</span>
                   {% else %}
                     <span class="badge badge-inactive">禁用</span>
                   {% endif %}
@@ -190,13 +190,13 @@
                 <td data-label="更新" title="UTC 原始时间：{{ upstream.updated_at or upstream.created_at }}">{{ upstream.changed_at_display }}</td>
                 <td data-label="操作">
                   <div class="inline-actions">
-                    <button type="button" class="secondary edit-token-btn" title="更新 Token">
+                    <button type="button" class="secondary edit-token-btn" title="更新 Key">
                       <i data-lucide="key-round" class="btn-icon"></i>
-                      <span>更新 Token</span>
+                      <span>更新 Key</span>
                     </button>
                     <div class="token-editor" hidden>
-                      <input class="token-input" type="password" placeholder="新 Token" autocomplete="new-password">
-                      <button type="button" class="secondary update-token-btn" title="保存 Token">
+                      <input class="token-input" type="password" placeholder="新 Key" autocomplete="new-password">
+                      <button type="button" class="secondary update-token-btn" title="保存 Key">
                         <i data-lucide="save" class="btn-icon"></i>
                         <span>保存</span>
                       </button>
@@ -495,7 +495,7 @@
       updateTokenBtn.addEventListener("click", async () => {
         const input = row.querySelector(".token-input");
         if (!input.value.trim()) {
-          setSelfUpstreamStatus("请先输入新 Token。", true);
+          setSelfUpstreamStatus("请先输入新 Key。", true);
           return;
         }
         try {
@@ -503,7 +503,7 @@
             method: "PATCH",
             body: JSON.stringify({api_key: input.value})
           });
-          reloadSelfUpstreams("Token 已更新");
+          reloadSelfUpstreams("Key 已更新");
         } catch (error) {
           setSelfUpstreamStatus(error.message, true);
         }
@@ -523,7 +523,7 @@
       });
 
       deleteBtn.addEventListener("click", async () => {
-        if (!await confirmDialog(`确认删除上游账号 ${upstreamId} 吗？删除后该 Token 将不能再用于转发请求。`, {danger: true})) {
+        if (!await confirmDialog(`确认删除上游账号 ${upstreamId} 吗？删除后该 Key 将不能再用于转发请求。`, {danger: true})) {
           return;
         }
         try {

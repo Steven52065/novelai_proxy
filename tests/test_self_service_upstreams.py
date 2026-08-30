@@ -284,7 +284,7 @@ def test_create_rejects_token_without_pst_prefix(tmp_path: Path, monkeypatch):
                 json={"label": "x", "api_key": bad_key, "enabled": True},
             )
             assert resp.status_code == 400
-            assert resp.json()["message"] == "Token 必须以 pst- 开头"
+            assert resp.json()["message"] == "Key格式错误"
 
         count = int(client.app.state.db.query_one(
             "SELECT COUNT(*) AS c FROM novelai_upstreams WHERE owner_user_id = ?",
@@ -309,7 +309,7 @@ def test_update_rejects_token_without_pst_prefix(tmp_path: Path, monkeypatch):
         )
 
         assert resp.status_code == 400
-        assert resp.json()["message"] == "Token 必须以 pst- 开头"
+        assert resp.json()["message"] == "Key格式错误"
         row = client.app.state.db.query_one(
             "SELECT api_key FROM novelai_upstreams WHERE id = ?",
             (upstream["id"],),

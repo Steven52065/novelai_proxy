@@ -57,7 +57,7 @@ def _validate_api_key(api_key: str) -> None:
     if not api_key.startswith("pst-"):
         raise HTTPException(
             status_code=400,
-            detail={"message": "Token 必须以 pst- 开头"},
+            detail={"message": "Key格式错误"},
         )
 
 
