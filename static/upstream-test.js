@@ -66,12 +66,19 @@
     activeUpstreamId = null;
   }
 
+  function disabledStateRows(data) {
+    return data?.upstream_enabled === false
+      ? [["当前状态", "已禁用（本次测试不改变启用状态）"]]
+      : [];
+  }
+
   function renderSuccess(data) {
     busy = false;
     summary.textContent = "测试完成，上游返回了可预览图片。";
     setState("成功", "status-success");
     setDetails([
       ["上游渠道", data.upstream_id],
+      ...disabledStateRows(data),
       ["耗时", `${data.elapsed_ms ?? 0} ms`],
       ["Zip 大小", `${data.zip_bytes ?? 0} bytes`],
       ["图片数量", String(data.image_count ?? 0)],
@@ -101,6 +108,7 @@
     setState("失败", "status-error");
     setDetails([
       ["上游渠道", data?.upstream_id || activeUpstreamId || "-"],
+      ...disabledStateRows(data),
       ["错误码", data?.error_code || `HTTP ${fallbackStatus}`],
       ["错误类型", data?.error_type || "RequestError"],
       ["错误消息", data?.message || "上游测试失败"],
@@ -116,7 +124,7 @@
   async function runUpstreamTest() {
     if (!activeUpstreamId || busy) return;
     busy = true;
-    summary.textContent = "测试请求已进入该上游队列，等待执行结果。";
+    summary.textContent = "测试请求已提交，等待上游响应。";
     setState("测试中", "status-info");
     setDetails([
       ["上游渠道", activeUpstreamId],
