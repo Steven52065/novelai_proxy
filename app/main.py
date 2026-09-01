@@ -19,6 +19,7 @@ from .admin.auth import (
 )
 from .admin.router import router as admin_router
 from .admin.session_middleware import AdminSessionRefreshMiddleware
+from .admin.upstream_probe import DirectUpstreamProbe
 from .admin_notifications import AdminNotificationRepository
 from .cache_control import SensitiveResponseCacheMiddleware
 from .config import configuration_security_warnings, load_config
@@ -131,6 +132,7 @@ async def lifespan(app: FastAPI):
         client_secret=config.self_service.discord.client_secret,
     )
     app.state.proxy_queue = proxy_queue
+    app.state.direct_upstream_probe = DirectUpstreamProbe()
     app.state.proxy_service = ProxyRequestService(
         rate_limiter=app.state.rate_limiter,
         quota_manager=quota_manager,
