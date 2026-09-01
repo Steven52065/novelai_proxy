@@ -318,7 +318,11 @@ class UsageLogRepository:
         )
 
     def get_last_call_for_user(self, user_id: int, *, created_from: str) -> Row | None:
-        """取用户在窗口内最后一次调用，仅用于 /account 展示。"""
+        """取用户在窗口内最后一次调用，仅用于 /account 展示。
+
+        按 created_at 而非 id 排序，才能直接复用 idx_usage_user_created(user_id, created_at)
+        的索引顺序，省掉一次临时 B-tree 排序；两列同向单调递增，id DESC 只用于同秒并列时兜底。
+        """
         return self.db.query_one(
             """
             SELECT created_at, status, error_code, error_message
@@ -326,7 +330,7 @@ class UsageLogRepository:
             WHERE user_id = ?
               AND created_at >= ?
               AND action NOT LIKE 'replay:%'
-            ORDER BY id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1
             """,
             (int(user_id), created_from),

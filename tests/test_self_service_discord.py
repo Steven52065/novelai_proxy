@@ -1718,6 +1718,9 @@ def test_account_last_call_redacts_ssl_error_details(tmp_path: Path, monkeypatch
         page = client.get("/account")
 
         assert page.status_code == 200
+        # 正向断言不可省：只断言“不含 curl”时，若日志行因故没被渲染，
+        # 这条安全用例会静默通过，等于没测。
+        assert "调用失败，请稍后重试" in _normalized_text(page.text)
         assert "curl" not in page.text
         assert "SSLError" not in page.text
 
@@ -1852,3 +1855,124 @@ def test_account_last_call_excludes_admin_replay_rows(tmp_path: Path, monkeypatc
         assert format_display_time(earlier) in text
         assert format_display_time(later) not in text
         assert "10.4.246.189" not in page.text
+
+
+# 上游返回非 JSON 时，app/upstream.py 的 _response_error() 会把最多 2000 字符的
+# 原始响应体当作 message 落库。400/429 在白名单里，若不做形状检查就会把网关页
+# 里的 nginx 版本、ray-id、origin IP 原样渲染给用户。
+_GATEWAY_HTML_ERROR = (
+    "<html><head><title>400 Bad Request</title></head><body>"
+    "<center><h1>400 Bad Request</h1></center><hr><center>nginx/1.24.0</center>"
+    "<!-- ray-id: 8f2a1c3d4e5b6a7f  edge: NRT  origin-ip: 10.5.0.142 -->"
+    "</body></html>"
+)
+
+
+@pytest.mark.parametrize("error_code", ["400", "429"])
+def test_account_last_call_redacts_non_json_gateway_body(error_code, tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id=f"req-gateway-{error_code}",
+            status="failed",
+            error_code=error_code,
+            error_message=_GATEWAY_HTML_ERROR,
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        assert "调用失败，请稍后重试" in _normalized_text(page.text)
+        assert "nginx" not in page.text
+        assert "ray-id" not in page.text
+        assert "10.5.0.142" not in page.text
+
+
+def test_account_last_call_keeps_short_whitelisted_message(tmp_path: Path, monkeypatch):
+    """形状检查不能误伤正常的上游短文案。"""
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-400-short",
+            status="failed",
+            error_code="400",
+            error_message="width must be a multiple of 64",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        assert "width must be a multiple of 64" in _normalized_text(page.text)
+
+
+def test_account_last_call_omits_colon_when_message_missing(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-400-empty",
+            status="failed",
+            error_code="400",
+            error_message=None,
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "调用失败，请稍后重试" in text
+        assert "上游返回 400：" not in text
+
+
+def test_last_call_labels_cover_every_usage_log_status():
+    """新增 usage_logs 状态时必须同步这两张表，否则用户会看到裸的英文状态名。"""
+    from app.self_service.last_call import LAST_CALL_STATUS_BADGES, LAST_CALL_STATUS_LABELS
+    from app.usage_logs import USAGE_LOG_STATUSES
+
+    assert set(LAST_CALL_STATUS_LABELS) == set(USAGE_LOG_STATUSES)
+    assert set(LAST_CALL_STATUS_BADGES) == set(USAGE_LOG_STATUSES)
+
+
+@pytest.mark.parametrize("status,label", [("queued", "排队中"), ("running", "运行中")])
+def test_account_last_call_in_progress_is_not_styled_as_error(status, label, tmp_path: Path, monkeypatch):
+    """排队中/运行中不能套 badge-inactive——那是红色告警样式，会让人以为出错。"""
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id=f"req-{status}",
+            status=status,
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        assert label in _normalized_text(page.text)
+        assert f'<span class="badge badge-normal">{label}</span>' in page.text
+        assert f'<span class="badge badge-inactive">{label}</span>' not in page.text

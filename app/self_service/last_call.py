@@ -13,6 +13,17 @@ LAST_CALL_STATUS_LABELS = {
     "rejected": "已拒绝",
 }
 
+# 徽章配色按语义分三档，不能只按“是否成功”二分：badge-inactive 用的是
+# --danger-bg 与红色前景（与「账号已禁用」同款），排队中/运行中套上去会让
+# 正常等待显示成告警，用户会以为出错而重复提交。
+LAST_CALL_STATUS_BADGES = {
+    "success": "badge-active",
+    "failed": "badge-inactive",
+    "rejected": "badge-inactive",
+    "queued": "badge-normal",
+    "running": "badge-normal",
+}
+
 # /account「最近调用」失败原因白名单：只有文案硬编码在本仓库、或只描述该用户
 # 自身状态的错误码才把 error_message 原文展示给用户。其余一律折叠成通用文案，
 # 避免把上游内网 IP/端口、curl/OpenSSL 传输栈细节、以及他人自助上游的数字 ID
@@ -45,14 +56,31 @@ GENERIC_FAILURE_MESSAGES = {
 }
 
 
+# 白名单命中后仍要过一道“形状检查”：上游返回非 JSON 时，_response_error()
+# （app/upstream.py）会把最多 2000 字符的原始响应体当作 message 落库，网关 HTML 页
+# 里可能带 nginx 版本、ray-id、origin IP。真正安全的上游文案都是短单行，
+# 因此超长、多行或含标签的一律按未命中处理。
+_MAX_SAFE_MESSAGE_CHARS = 200
+
+
+def _looks_like_safe_message(message: str) -> bool:
+    if len(message) > _MAX_SAFE_MESSAGE_CHARS:
+        return False
+    return not any(char in message for char in "<\n\r")
+
+
 def describe_failure(error_code: str | None, error_message: str | None) -> str:
     """把 usage_logs 里的失败原因转成可展示文案；未命中白名单不回显 error_code，
     否则 SSLError 之类的异常类名本身仍会暴露传输栈细节。"""
-    if error_code in SAFE_ERROR_CODES:
-        if error_code.isdigit():
-            return f"上游返回 {error_code}：{error_message or ''}"
-        return error_message or "调用失败，请稍后重试"
-    return GENERIC_FAILURE_MESSAGES.get(error_code or "", "调用失败，请稍后重试")
+    generic = GENERIC_FAILURE_MESSAGES.get(error_code or "", "调用失败，请稍后重试")
+    if error_code not in SAFE_ERROR_CODES:
+        return generic
+    message = (error_message or "").strip()
+    if not message or not _looks_like_safe_message(message):
+        return generic
+    if error_code.isdigit():
+        return f"上游返回 {error_code}：{message}"
+    return message
 
 
 def build_last_call_view(row: Row | None) -> dict | None:
@@ -68,6 +96,7 @@ def build_last_call_view(row: Row | None) -> dict | None:
         "time_display": format_display_time(row["created_at"]),
         "status": status,
         "status_label": LAST_CALL_STATUS_LABELS.get(status, status),
+        "badge_class": LAST_CALL_STATUS_BADGES.get(status, "badge-normal"),
         "is_success": is_success,
         "reason": reason,
     }
