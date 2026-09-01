@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import logging
 import re
 import secrets
@@ -40,8 +42,10 @@ from ..routing_queue import RoutingProxyQueue
 from ..signed_tokens import expiring_payload, sign_payload, verify_payload
 from ..templating import templates
 from ..upstreams import NovelAIUpstreamRepository, upstream_to_public_dict
+from ..usage_logs import UsageLogRepository
 from ..users import load_user_rate_limit_rules, reset_api_key
 from .accounts import DiscordProfile, disable_linked_discord_user, login_or_register_discord_user
+from .last_call import build_last_call_view
 from .session import (
     SESSION_COOKIE,
     current_self_service_user_id,
@@ -249,6 +253,14 @@ async def account_page(
     auto_disabled_upstream_ids = request.app.state.admin_notifications.pending_upstream_ids(
         "upstream_auto_disabled"
     )
+    last_call_days = app_config.self_service.account.last_call_days
+    last_call = None
+    if last_call_days > 0:
+        created_from = (datetime.now(timezone.utc) - timedelta(days=last_call_days)).isoformat()
+        usage_logs: UsageLogRepository = request.app.state.usage_logs
+        last_call = build_last_call_view(
+            usage_logs.get_last_call_for_user(user_id, created_from=created_from)
+        )
     response = templates.TemplateResponse(
         request,
         "account.html",
@@ -266,6 +278,8 @@ async def account_page(
             "new_api_key": new_api_key,
             "self_upstreams": self_upstreams,
             "auto_disabled_upstream_ids": auto_disabled_upstream_ids,
+            "last_call": last_call,
+            "last_call_days": last_call_days,
         },
     )
     if has_api_key_flash:
