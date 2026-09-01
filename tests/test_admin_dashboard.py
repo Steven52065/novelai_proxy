@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import zipfile
@@ -8,8 +10,16 @@ import zipfile
 from fastapi.testclient import TestClient
 from app.api_errors import APIError
 
-from helpers import FakeImageHosting, FakeUpstream, write_test_config, write_test_config_with_upstreams
+from helpers import (
+    BlockingFakeUpstream,
+    FakeImageHosting,
+    FakeUpstream,
+    PAYLOAD,
+    write_test_config,
+    write_test_config_with_upstreams,
+)
 from app.queue_errors import QueueFull
+from queue_manager_helpers import _wait_until
 
 
 class FailingAPIErrorUpstream(FakeUpstream):
@@ -261,6 +271,9 @@ def test_admin_upstream_test_queue_full_returns_503(tmp_path: Path, monkeypatch)
         def snapshot(self):
             return {"queue_size": 0, "running": None, "running_items": [], "queued": [], "dispatch_queue_size": 0, "upstreams": []}
 
+        def has_upstream_target(self, _upstream_id):
+            return True
+
         async def submit_upstream_probe(self, **_kwargs):
             raise QueueFull
 
@@ -273,6 +286,127 @@ def test_admin_upstream_test_queue_full_returns_503(tmp_path: Path, monkeypatch)
         body = resp.json()
         assert body["ok"] is False
         assert body["error_code"] == "queue_full"
+
+
+def test_admin_upstream_test_works_for_disabled_upstream(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        disabled = client.patch(
+            "/admin/api/upstreams/opus-a",
+            auth=("admin", "admin123"),
+            json={"enabled": False},
+        )
+        assert disabled.status_code == 200
+        assert app.state.upstream_clients == {}
+
+        fake = FakeUpstream()
+        monkeypatch.setattr("app.upstreams.UpstreamClient", lambda api_key: fake)
+
+        before_logs = app.state.db.query_one("SELECT COUNT(*) AS c FROM usage_logs")["c"]
+        resp = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["upstream_enabled"] is False
+        assert body["image_count"] == 1
+        payload = fake.last_generate_payload
+        assert payload is not None
+        assert payload["model"] == "nai-diffusion-4-5-full"
+        assert payload["input"] == "A simple red apple on a white plate."
+        assert payload["parameters"]["width"] == 512
+        assert payload["parameters"]["height"] == 512
+        assert payload["parameters"]["steps"] == 28
+        assert payload["parameters"]["n_samples"] == 1
+        assert app.state.db.query_one("SELECT COUNT(*) AS c FROM usage_logs")["c"] == before_logs
+
+
+def test_admin_upstream_test_keeps_disabled_upstream_disabled(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        client.patch("/admin/api/upstreams/opus-a", auth=("admin", "admin123"), json={"enabled": False})
+        assert app.state.upstream_clients == {}
+
+        fake = FakeUpstream()
+        monkeypatch.setattr("app.upstreams.UpstreamClient", lambda api_key: fake)
+        probe = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+        assert probe.status_code == 200
+        assert probe.json()["upstream_enabled"] is False
+
+        row = app.state.db.query_one("SELECT enabled FROM novelai_upstreams WHERE id = ?", ("opus-a",))
+        assert row["enabled"] == 0
+        assert app.state.upstream_clients == {}
+
+        user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "disabled-probe-user", "anlas_total": 100},
+        ).json()
+        generated = client.post(
+            "/ai/generate-image",
+            headers={"Authorization": f"Bearer {user['api_key']}"},
+            json=PAYLOAD,
+        )
+        assert generated.status_code == 503
+        assert generated.json()["message"] == "当前没有可用的已启用上游"
+
+
+def test_admin_upstream_test_rejects_concurrent_probe_on_same_disabled_upstream(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    release_event = threading.Event()
+    with TestClient(app) as client:
+        client.patch("/admin/api/upstreams/opus-a", auth=("admin", "admin123"), json={"enabled": False})
+        assert app.state.upstream_clients == {}
+
+        fake = BlockingFakeUpstream(release_event)
+        monkeypatch.setattr("app.upstreams.UpstreamClient", lambda api_key: fake)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(
+                client.post,
+                "/admin/api/upstreams/opus-a/test",
+                auth=("admin", "admin123"),
+            )
+            _wait_until(lambda: len(fake.generate_started_at) == 1)
+
+            second = pool.submit(
+                client.post,
+                "/admin/api/upstreams/opus-a/test",
+                auth=("admin", "admin123"),
+            )
+            second_resp = second.result(timeout=5)
+            assert second_resp.status_code == 409
+            second_body = second_resp.json()
+            assert second_body["error_code"] == "upstream_test_in_progress"
+            assert second_body["upstream_enabled"] is False
+
+            release_event.set()
+            first_resp = first.result(timeout=5)
+            assert first_resp.status_code == 200
+            assert first_resp.json()["ok"] is True
+            assert first_resp.json()["upstream_enabled"] is False
+
+
+def test_admin_upstream_test_marks_enabled_upstream_without_disabled_hint(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config_with_upstreams(tmp_path, ["opus-a"])))
+    from app.main import app
+
+    with TestClient(app) as client:
+        fake = FakeUpstream()
+        app.state.upstream = fake
+
+        resp = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["upstream_enabled"] is True
 
 
 def test_admin_dashboard_includes_upstream_test_modal_and_fetch(tmp_path: Path, monkeypatch):
