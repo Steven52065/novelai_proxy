@@ -56,7 +56,9 @@ class RoutingConfig(BaseModel):
 
 class UpstreamAutoDisableConfig(BaseModel):
     enabled: bool = True
-    status_codes: list[int] = Field(default_factory=lambda: [403])
+    # 400 validation error / 401 access token incorrect / 402 active subscription required
+    # / 403 账号状态异常，四者都表示该上游账号当前不可用，与 config.example.yaml 保持一致。
+    status_codes: list[int] = Field(default_factory=lambda: [400, 401, 402, 403])
 
     @field_validator("status_codes")
     @classmethod
