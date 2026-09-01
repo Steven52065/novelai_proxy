@@ -158,6 +158,8 @@ Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
 - `default_group_id` 是本地 `user_groups.id`，服务启动时会校验该组存在且启用。
 - `client_secret` 和 `session_secret` 只能写入本地 `config.yaml`，不能提交到 Git。
 - 自助账号页只展示和重置本项目 Proxy API Key；代理 API 不接受 Discord token。
+- 自助账号页显示「最近调用」栏：用户最后一次调用的时间与结果（成功 / 失败 / 已拒绝 / 排队中 / 运行中），失败时给出原因。回看窗口由 `self_service.account.last_call_days` 控制，默认 7 天滚动窗口，设为 0 则隐藏该栏。被代理层在打到上游前拒绝的请求（限频、额度不足等）同样计入；管理员重放产生的日志行不计入。
+- 该栏的失败原因**不透传** `usage_logs.error_message` 原文。实测该列会包含上游内网 IP 与端口（`500`）、curl / OpenSSL 报错细节（异常类名码），以及形如 `u{用户ID}-{备注}` 的他人上游 ID（`no_available_upstream`）。仅 `400`、`429` 及本项目自己生成的错误码放行原文，其余一律折叠为通用文案；`401` / `402` 因描述的是公共号池健康状况，也折叠处理。`upstream_id` 与 `output_files` 两列不向用户展示。
 - 系统不持久化 Discord `access_token` 或 `refresh_token`，也不应在日志中输出这些 token。
 
 组共享限流与个人限流同时生效。请求先检查个人限流，再检查用户所属启用用户组的共享限流；任一超限都会返回 `429`。组限流按组内成员在窗口内非 `rejected` 的 `DISTINCT request_id` 统计，重试 attempt 不重复计数。
