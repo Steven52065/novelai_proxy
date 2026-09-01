@@ -264,6 +264,45 @@
       <p id="account-queue-refresh-status" class="muted muted-13 account-queue-refresh-status" role="status" aria-live="polite"></p>
     </section>
 
+    {% if last_call_days > 0 %}
+    <section class="panel panel-mt">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="history" class="h2-icon"></i>
+        最近调用
+      </h2>
+      {% if last_call %}
+      <div class="stack">
+        <div>
+          <span class="muted muted-sm">时间</span>
+          <div class="kv-strong">{{ last_call.time_display }}</div>
+        </div>
+        <div>
+          <span class="muted muted-sm">结果</span>
+          <div class="kv-strong">
+            {% if last_call.is_success %}
+            <span class="badge badge-active">{{ last_call.status_label }}</span>
+            {% else %}
+            <span class="badge badge-inactive">{{ last_call.status_label }}</span>
+            {% endif %}
+          </div>
+        </div>
+        {% if last_call.reason %}
+        <div>
+          <span class="muted muted-sm">原因</span>
+          <div class="kv-strong">{{ last_call.reason }}</div>
+        </div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="empty-stack empty-pad-lg">
+        <i data-lucide="history" class="empty-icon"></i>
+        <span class="muted muted-13">近 {{ last_call_days }} 天内暂无调用记录</span>
+      </div>
+      {% endif %}
+      <p class="muted muted-13">仅显示最近 {{ last_call_days }} 天内的调用记录</p>
+    </section>
+    {% endif %}
+
     {% if free_small_daily.enabled %}
     <section class="panel panel-mt">
       <h2 class="h2-sm h2-mb">
