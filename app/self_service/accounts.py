@@ -7,6 +7,7 @@ from ..database import Database, utc_now_iso
 from ..domain_errors import (
     SelfServiceAccountDeleted,
     SelfServiceAccountDisabled,
+    SelfServiceRegistrationClosed,
     UserGroupDisabled,
     UserGroupNotFound,
 )
@@ -56,11 +57,15 @@ def login_or_register_discord_user(
     *,
     default_group_id: int,
     profile: DiscordProfile,
+    allow_new_registration: bool,
 ) -> DiscordLoginResult:
     """登录或注册 Discord 自助账号。
 
     调用方必须已经完成配置要求的服务器/身份组验证：本函数把“能走到这里”视为验证通过，
     并据此恢复此前因验证失败而被停用的账号。
+
+    allow_new_registration 为 False 时，仅允许已建立 discord_user_links 的老用户继续登录，
+    新用户会直接抛出 SelfServiceRegistrationClosed，不会创建任何账号。
     """
     with db.transaction() as conn:
         row = _get_discord_link(conn, profile.user_id)
@@ -78,6 +83,9 @@ def login_or_register_discord_user(
                 )
             _sync_existing_discord_link(conn, row, profile)
             return DiscordLoginResult(user_id=int(row["user_id"]), api_key=None)
+
+        if not allow_new_registration:
+            raise SelfServiceRegistrationClosed()
 
         group = _get_enabled_group(conn, default_group_id)
         defaults = group_defaults(group)

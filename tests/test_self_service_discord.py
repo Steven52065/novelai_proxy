@@ -622,6 +622,7 @@ def test_discord_registration_rolls_back_user_and_quota_on_failure(tmp_path: Pat
                 global_name="Rollback",
                 avatar=None,
             ),
+            allow_new_registration=True,
         )
 
     assert _count_rows(db, "users") == 0
