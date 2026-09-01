@@ -42,6 +42,11 @@ class SelfServiceAccountDisabled(DomainError):
     default_message = "账号已被禁用"
 
 
+class SelfServiceRegistrationClosed(DomainError):
+    status_code = 403
+    default_message = "自助注册已关闭，仅允许已注册用户登录"
+
+
 class UpstreamNotFound(DomainError):
     status_code = 404
     default_message = "上游不存在"
