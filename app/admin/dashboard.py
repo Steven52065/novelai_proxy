@@ -19,6 +19,7 @@ from ..database import Database
 from ..logging_utils import logger
 from ..queue_errors import NoAvailableUpstream, QueueClosed, QueueFull, UpstreamExecutionTimeout
 from ..templating import templates
+from ..upstreams import NovelAIUpstreamRecord
 from ..zip_images import zip_images_to_data_urls
 from .auth import has_admin_session, require_admin_or_session, require_admin_page_session
 from .common import (
@@ -101,8 +102,8 @@ UPSTREAM_TEST_EXCEPTION_RULES = (
         exception_type=UpstreamProbeBusy,
         status_code=409,
         error_code="upstream_test_in_progress",
-        error_type="UpstreamProbeBusy",
-        message=lambda exc: str(exc),
+        error_type=_exception_class_name,
+        message=_exception_text,
     ),
     UpstreamTestExceptionRule(
         exception_type=APIError,
@@ -180,7 +181,7 @@ async def test_upstream(request: Request, upstream_id: str):
     upstream_enabled = record.enabled if record is not None else None
 
     try:
-        if proxy_queue.has_upstream_target(normalized_upstream_id):
+        if _queue_has_upstream_target(proxy_queue, normalized_upstream_id):
             payload = await proxy_queue.submit_upstream_probe(
                 upstream_id=normalized_upstream_id,
                 request_id=f"admin-probe-{uuid.uuid4().hex}",
@@ -230,19 +231,6 @@ async def test_upstream(request: Request, upstream_id: str):
         "upstream_enabled": upstream_enabled,
         "message": "上游测试成功",
     }
-
-
-async def _direct_upstream_probe(request: Request, *, record, upstream_id: str) -> bytes:
-    if not request.app.state.proxy_queue.accepting:
-        raise QueueClosed
-    if record is None:
-        raise NoAvailableUpstream(f"未知的上游 id：{upstream_id}")
-    return await request.app.state.direct_upstream_probe.run(
-        upstream_id=upstream_id,
-        client=request.app.state.upstream_runtime.build_probe_client(record),
-        handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
-        timeout_seconds=request.app.state.config.queue.upstream_execution_timeout_seconds,
-    )
 
 
 # websocket 使用独立 router，避免普通页面依赖误套到 WebSocket 握手。
@@ -462,6 +450,32 @@ def _admin_upstream_test_payload() -> dict:
         },
         "use_new_shared_trial": False,
     }
+
+
+def _queue_has_upstream_target(proxy_queue, upstream_id: str) -> bool:
+    """proxy_queue 在测试里会被替换成各种替身，按 app/upstreams.py 的同款方式鸭子类型探测；
+    替身没实现该方法时退回队列路径，保持改动前的行为。"""
+    has_target = getattr(proxy_queue, "has_upstream_target", None)
+    return has_target(upstream_id) if callable(has_target) else True
+
+
+async def _direct_upstream_probe(
+    request: Request,
+    *,
+    record: NovelAIUpstreamRecord | None,
+    upstream_id: str,
+) -> bytes:
+    """对不在调度队列里的上游（已禁用/自动禁用）执行队列外探测。"""
+    if record is None:
+        raise NoAvailableUpstream(f"未知的上游 id：{upstream_id}")
+    if not request.app.state.proxy_queue.accepting:
+        raise QueueClosed
+    return await request.app.state.direct_upstream_probe.run(
+        upstream_id=upstream_id,
+        client=request.app.state.upstream_runtime.build_probe_client(record),
+        handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
+        timeout_seconds=request.app.state.config.queue.upstream_execution_timeout_seconds,
+    )
 
 
 def _upstream_test_failure_response(
