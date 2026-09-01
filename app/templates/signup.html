@@ -22,6 +22,9 @@
       </div>
       <h1>自助注册</h1>
       <p class="login-subtitle">使用 Discord 登录后领取本项目 API Key</p>
+      {% if registration_closed %}
+      <p class="login-hint">当前已关闭新用户注册，仅限已注册用户登录</p>
+      {% endif %}
     </div>
 
     <a href="/auth/discord/start" class="btn-block-link">

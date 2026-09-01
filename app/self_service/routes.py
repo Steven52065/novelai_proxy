@@ -74,7 +74,11 @@ async def signup_page(
     config: DiscordSelfServiceConfig = Depends(get_discord_self_service_config),
 ):
     require_discord_enabled(config)
-    return templates.TemplateResponse(request, "signup.html", {"active": "signup"})
+    return templates.TemplateResponse(
+        request,
+        "signup.html",
+        {"active": "signup", "registration_closed": config.disable_new_registration},
+    )
 
 
 @router.get("/auth/discord/start")
