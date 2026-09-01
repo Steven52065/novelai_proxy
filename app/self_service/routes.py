@@ -184,6 +184,7 @@ async def discord_callback(
         quota_manager,
         default_group_id=int(config.default_group_id),
         profile=profile,
+        allow_new_registration=not config.disable_new_registration,
     )
     response = RedirectResponse("/account", status_code=303)
     _set_session_cookie(response, request, config.session_secret, login.user_id)
