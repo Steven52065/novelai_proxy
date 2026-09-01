@@ -187,9 +187,15 @@ class SelfServiceUpstreamsConfig(BaseModel):
     max_per_user: int = Field(default=5, ge=0)
 
 
+class SelfServiceAccountConfig(BaseModel):
+    # /account「最近调用」只回看最近多少天；0 表示隐藏该栏。
+    last_call_days: int = Field(default=7, ge=0, le=3650)
+
+
 class SelfServiceConfig(BaseModel):
     discord: DiscordSelfServiceConfig = Field(default_factory=DiscordSelfServiceConfig)
     upstreams: SelfServiceUpstreamsConfig = Field(default_factory=SelfServiceUpstreamsConfig)
+    account: SelfServiceAccountConfig = Field(default_factory=SelfServiceAccountConfig)
 
 
 class AppConfig(BaseModel):
