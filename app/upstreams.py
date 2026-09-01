@@ -401,10 +401,12 @@ class UpstreamRuntimeManager:
         return self.repository.get_settings()
 
     def build_probe_client(self, record: NovelAIUpstreamRecord) -> Any:
-        """管理端探测用客户端：优先复用运行态客户端，禁用的上游按 DB 记录临时构造。"""
-        existing = (getattr(self._app_state, "upstream_clients", {}) or {}).get(record.id)
-        if existing is not None:
-            return existing
+        """管理端队列外探测用的一次性客户端。
+
+        只在上游不是活跃调度目标（已禁用/自动禁用）时调用，因此这里始终新建，
+        绝不复用 upstream_clients 里的活客户端——那会让探测绕过队列节流，
+        与正在服务用户流量的请求撞在一起。
+        """
         return UpstreamClient(record.api_key)
 
     def client_provider_for(self, upstream_id: str) -> Callable[[], Any]:
