@@ -163,6 +163,11 @@ self_service:
     # 允许自助注册的身份组 ID 列表，拥有其中任意一个即可通过。必须是纯数字 Snowflake 字符串。
     # require_role 为 true 时必填。在 Discord 开启开发者模式后，右键身份组即可复制 ID。
     required_role_ids: []
+    # 是否禁止新用户自助注册。默认 false。
+    # 开启后已通过 Discord 注册过的老用户仍可正常登录看板（含名称同步与验证恢复），
+    # 但从未注册过的 Discord 用户在回调阶段会被拒绝，不会创建新账号。
+    # 适用于开放注册一段时间后停止扩容，但保留老用户访问的场景。
+    disable_new_registration: false
     # 本地 user_groups.id。启用 Discord 自助注册时必须指向一个存在且启用的用户组。
     default_group_id:
     # 自助登录 session 签名密钥。生产环境请使用高强度随机字符串，不能提交真实值。
