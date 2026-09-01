@@ -176,6 +176,8 @@ class DiscordSelfServiceConfig(BaseModel):
     required_guild_id: str = ""
     require_role: bool = False
     required_role_ids: list[str] = Field(default_factory=list)
+    # 开启后只允许已注册（已建立 discord_user_links）的用户继续登录，新用户不再自动建号。
+    disable_new_registration: bool = False
     default_group_id: int | None = Field(default=None, ge=1)
     session_secret: str = ""
 
