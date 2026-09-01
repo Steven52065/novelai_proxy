@@ -99,8 +99,10 @@ upstream_auto_disable:
   enabled: true
   # 默认 403，通常表示 API Key 或账号状态不可用。
   status_codes:
-    - 403
+    - 400
     - 401
+    - 402
+    - 403
 
 # SQLite 数据库配置。
 database:
