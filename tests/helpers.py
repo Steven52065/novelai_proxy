@@ -89,6 +89,26 @@ class BlockingFakeUpstream(FakeUpstream):
         return await self.generate_image_zip(payload)
 
 
+class CancelSwallowingUpstream(FakeUpstream):
+    """被取消后不立即退栈的 handler，复现 upstream_queue 注释里描述的僵尸情形。
+
+    用于验证队列外直连探测必须有硬性超时上限：调用方不能就地等待它退栈。
+    """
+
+    def __init__(self, release_event: threading.Event):
+        super().__init__()
+        self.release_event = release_event
+
+    async def generate_image_payload_zip(self, payload):
+        self.generate_started_at.append(time.monotonic())
+        self.last_generate_payload = payload
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            await asyncio.to_thread(self.release_event.wait)
+            raise
+
+
 class FailingThenSuccessfulUpstream(FakeUpstream):
     async def generate_image_payload_zip(self, payload):
         self.generate_started_at.append(time.monotonic())

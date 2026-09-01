@@ -12,6 +12,7 @@ from app.api_errors import APIError
 
 from helpers import (
     BlockingFakeUpstream,
+    CancelSwallowingUpstream,
     FakeImageHosting,
     FakeUpstream,
     PAYLOAD,
@@ -373,24 +374,64 @@ def test_admin_upstream_test_rejects_concurrent_probe_on_same_disabled_upstream(
                 "/admin/api/upstreams/opus-a/test",
                 auth=("admin", "admin123"),
             )
-            _wait_until(lambda: len(fake.generate_started_at) == 1)
+            try:
+                _wait_until(lambda: len(fake.generate_started_at) == 1)
 
-            second = pool.submit(
-                client.post,
-                "/admin/api/upstreams/opus-a/test",
-                auth=("admin", "admin123"),
-            )
-            second_resp = second.result(timeout=5)
-            assert second_resp.status_code == 409
-            second_body = second_resp.json()
-            assert second_body["error_code"] == "upstream_test_in_progress"
-            assert second_body["upstream_enabled"] is False
+                second = pool.submit(
+                    client.post,
+                    "/admin/api/upstreams/opus-a/test",
+                    auth=("admin", "admin123"),
+                )
+                second_resp = second.result(timeout=5)
+                assert second_resp.status_code == 409
+                second_body = second_resp.json()
+                assert second_body["error_code"] == "upstream_test_in_progress"
+                assert second_body["upstream_enabled"] is False
+            finally:
+                # 必须无条件放行：否则任一断言失败都会让第一个请求永远卡在
+                # release_event.wait()，ThreadPoolExecutor 退出时 shutdown(wait=True)
+                # 会把整个测试进程挂死，断言失败变成 CI 超时。
+                release_event.set()
 
-            release_event.set()
             first_resp = first.result(timeout=5)
             assert first_resp.status_code == 200
             assert first_resp.json()["ok"] is True
             assert first_resp.json()["upstream_enabled"] is False
+
+
+def test_admin_upstream_test_direct_probe_timeout_is_bounded_and_releases_guard(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "NOVELAI_PROXY_CONFIG",
+        str(write_test_config_with_upstreams(tmp_path, ["opus-a"], upstream_execution_timeout_seconds=0.3)),
+    )
+    from app.main import app
+
+    release_event = threading.Event()
+    with TestClient(app) as client:
+        client.patch("/admin/api/upstreams/opus-a", auth=("admin", "admin123"), json={"enabled": False})
+        assert app.state.upstream_clients == {}
+
+        fake = CancelSwallowingUpstream(release_event)
+        monkeypatch.setattr("app.upstreams.UpstreamClient", lambda api_key: fake)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                first = pool.submit(
+                    client.post,
+                    "/admin/api/upstreams/opus-a/test",
+                    auth=("admin", "admin123"),
+                )
+                # handler 取消后不退栈，探测仍必须按超时返回；就地等待退栈会让这里超时失败。
+                first_resp = first.result(timeout=5)
+                assert first_resp.status_code == 504
+                assert first_resp.json()["error_code"] == "upstream_timeout"
+
+                # 串行守卫必须已经释放，否则该上游会被僵尸 handler 永久锁成 409。
+                second_resp = client.post("/admin/api/upstreams/opus-a/test", auth=("admin", "admin123"))
+                assert second_resp.status_code == 504
+                assert second_resp.json()["error_code"] == "upstream_timeout"
+            finally:
+                release_event.set()
 
 
 def test_admin_upstream_test_marks_enabled_upstream_without_disabled_hint(tmp_path: Path, monkeypatch):
@@ -429,6 +470,8 @@ def test_admin_dashboard_includes_upstream_test_modal_and_fetch(tmp_path: Path, 
         assert "512x512 / 28 步 / 1 张" in script.text
         assert "/admin/api/upstreams/" in script.text
         assert "encodeURIComponent(activeUpstreamId)" in script.text
+        assert "upstream_enabled === false" in script.text
+        assert "已禁用（本次测试不改变启用状态）" in script.text
 
 
 def test_admin_dashboard_treats_arbitrary_upstream_ids_as_text(tmp_path: Path, monkeypatch):
