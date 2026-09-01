@@ -400,6 +400,13 @@ class UpstreamRuntimeManager:
     def get_settings(self) -> NovelAISettings:
         return self.repository.get_settings()
 
+    def build_probe_client(self, record: NovelAIUpstreamRecord) -> Any:
+        """管理端探测用客户端：优先复用运行态客户端，禁用的上游按 DB 记录临时构造。"""
+        existing = (getattr(self._app_state, "upstream_clients", {}) or {}).get(record.id)
+        if existing is not None:
+            return existing
+        return UpstreamClient(record.api_key)
+
     def client_provider_for(self, upstream_id: str) -> Callable[[], Any]:
         def provider() -> Any:
             # Keep runtime app.state lookup compatibility for tests and admin hot-swaps.
