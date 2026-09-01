@@ -317,6 +317,21 @@ class UsageLogRepository:
             (log_id,),
         )
 
+    def get_last_call_for_user(self, user_id: int, *, created_from: str) -> Row | None:
+        """取用户在窗口内最后一次调用，仅用于 /account 展示。"""
+        return self.db.query_one(
+            """
+            SELECT created_at, status, error_code, error_message
+            FROM usage_logs
+            WHERE user_id = ?
+              AND created_at >= ?
+              AND action NOT LIKE 'replay:%'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(user_id), created_from),
+        )
+
     def list_actions(self) -> list[str]:
         rows = self.db.query_all(
             """
