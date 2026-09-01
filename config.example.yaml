@@ -181,6 +181,11 @@ self_service:
     enabled: true
     # 每个用户最多可上传的 key 数量，0 表示禁止上传。
     max_per_user: 5
+  account:
+    # /account 页「最近调用」栏只回看最近多少天的调用记录，默认 7 天。
+    # 该窗口让查询走 usage_logs(user_id, created_at) 索引，避免全表扫描，
+    # 同时避免给用户展示过于陈旧的记录。设为 0 则完全隐藏该栏。
+    last_call_days: 7
 
 # 兼容旧配置的日志级别字段。
 # 如果没有配置下面的 logging.level，程序会使用该值初始化日志级别。
