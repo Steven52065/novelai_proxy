@@ -19,6 +19,7 @@ def test_self_service_config_defaults_to_disabled():
     assert config.self_service.discord.require_guild is True
     assert config.self_service.discord.require_role is False
     assert config.self_service.discord.required_role_ids == []
+    assert config.self_service.discord.disable_new_registration is False
     assert config.self_service.discord.default_group_id is None
     assert config.free_small_daily_limit.reset_hour_utc8 == 0
     assert config.image_hosting.local_format_conversion is False
@@ -34,6 +35,14 @@ def test_self_service_config_defaults_to_disabled():
     assert config.database.auto_vacuum.run_time_utc8 == "04:00"
     assert config.security.secure_cookies == "auto"
     assert config.security.trusted_proxy_ips == ["127.0.0.1", "::1"]
+
+
+def test_discord_self_service_disable_new_registration_parses_explicit_value():
+    config = AppConfig.model_validate(
+        {"self_service": {"discord": {"disable_new_registration": True}}}
+    )
+
+    assert config.self_service.discord.disable_new_registration is True
 
 
 def test_logging_level_accepts_warning():

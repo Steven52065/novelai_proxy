@@ -404,7 +404,7 @@ def test_account_shows_only_user_rate_limit_rules_with_session_auth(tmp_path: Pa
         assert "每个周期 60 次" in text
         assert "每个周期 500 次" in text
         assert "已停用" in text
-        assert "999" not in page.text
+        assert "999" not in text
         assert page.text.count("data-rate-limit-rule=") == 3
 
         rules = client.get(endpoint)
@@ -1358,6 +1358,82 @@ def test_account_disabled_before_upgrade_is_not_reactivated(tmp_path: Path, monk
         assert _verification_state(client, user_id) == (0, 0)
 
 
+def test_discord_registration_closed_rejects_new_user(tmp_path: Path, monkeypatch):
+    """关闭注册后，全新 Discord 用户回调阶段被拒绝且不建号。"""
+    config_path, _ = _write_self_service_config(tmp_path, disable_new_registration=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient()
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}")
+
+        assert resp.status_code == 403
+        assert resp.json()["message"] == "自助注册已关闭，仅允许已注册用户登录"
+        assert _count_rows(client.app.state.db, "users") == 0
+        assert _count_rows(client.app.state.db, "discord_user_links") == 0
+
+
+def test_discord_registration_closed_allows_existing_user_login(tmp_path: Path, monkeypatch):
+    """已注册老用户在关闭注册后仍可登录，不产生第二个用户。"""
+    config_path, _ = _write_self_service_config(tmp_path, disable_new_registration=False)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        first = _complete_discord_login(client, follow_redirects=False)
+        assert first.status_code == 303
+        assert _count_rows(client.app.state.db, "users") == 1
+
+        client.app.state.config.self_service.discord.disable_new_registration = True
+
+        second = _complete_discord_login(client, follow_redirects=False)
+        assert second.status_code == 303
+        assert second.headers["location"] == "/account"
+        assert client.get("/account").status_code == 200
+        assert _count_rows(client.app.state.db, "users") == 1
+        assert _count_rows(client.app.state.db, "discord_user_links") == 1
+
+
+def test_discord_registration_closed_still_recovers_verification_disabled_user(tmp_path: Path, monkeypatch):
+    """关闭注册不影响因验证失败停用账号的恢复。"""
+    config_path, _ = _write_self_service_config(tmp_path, require_role=True, disable_new_registration=False)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = int(client.app.state.db.query_one("SELECT id FROM users")["id"])
+        client.app.state.config.self_service.discord.disable_new_registration = True
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [OTHER_ROLE_ID]})
+        assert client.get(f"/auth/discord/callback?code=ok&state={state}").status_code == 403
+        assert _verification_state(client, user_id) == (0, 1)
+
+        state = _start_state(client)
+        client.app.state.discord_oauth_client = FakeDiscordClient(member={"roles": [REQUIRED_ROLE_ID]})
+        resp = client.get(f"/auth/discord/callback?code=ok&state={state}", follow_redirects=True)
+
+        assert resp.status_code == 200
+        assert _verification_state(client, user_id) == (1, 0)
+        assert _count_rows(client.app.state.db, "users") == 1
+
+
+def test_signup_page_shows_registration_closed_hint(tmp_path: Path, monkeypatch):
+    """开启关闭注册后 /signup 页面展示关闭提示。"""
+    config_path, _ = _write_self_service_config(tmp_path, disable_new_registration=True)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        page = client.get("/signup")
+
+        assert page.status_code == 200
+        assert "当前已关闭新用户注册，仅限已注册用户登录" in page.text
+
+
 def _write_self_service_config(
     tmp_path: Path,
     *,
@@ -1370,6 +1446,7 @@ def _write_self_service_config(
     require_guild: bool = True,
     require_role: bool = False,
     required_role_ids: list[str] | None = None,
+    disable_new_registration: bool = False,
 ) -> tuple[Path, int]:
     config_path = write_test_config(tmp_path)
     db = Database(str(tmp_path / "test.db"))
@@ -1399,6 +1476,7 @@ self_service:
     required_guild_id: "{REQUIRED_GUILD_ID}"
     require_role: {"true" if require_role else "false"}
     required_role_ids: [{formatted_role_ids}]
+    disable_new_registration: {"true" if disable_new_registration else "false"}
     default_group_id: {group_id}
     session_secret: "test-session-secret"
 """
