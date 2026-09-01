@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.config import AppConfig, configuration_security_warnings
+from app.config import AppConfig, SelfServiceAccountConfig, configuration_security_warnings
 
 
 def test_novelai_config_is_rejected():
@@ -122,3 +122,16 @@ def test_configuration_security_warnings_accept_strong_password():
     config = AppConfig.model_validate({"admin": {"password": "a-long-production-password"}})
 
     assert configuration_security_warnings(config, config_exists=True) == ()
+
+
+def test_self_service_account_last_call_days_default_and_validation():
+    assert SelfServiceAccountConfig().last_call_days == 7
+
+    config = AppConfig.model_validate({'self_service': {'account': {'last_call_days': 3}}})
+    assert config.self_service.account.last_call_days == 3
+
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({'self_service': {'account': {'last_call_days': -1}}})
+
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({'self_service': {'account': {'last_call_days': 3651}}})

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -9,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.self_service.accounts as accounts
+from app.admin.common import format_display_time
 from app.database import Database, utc_now_iso
 from app.quota_manager import QuotaManager
 from app.self_service.discord import DiscordMemberNotFound
@@ -1447,6 +1449,7 @@ def _write_self_service_config(
     require_role: bool = False,
     required_role_ids: list[str] | None = None,
     disable_new_registration: bool = False,
+    last_call_days: int = 7,
 ) -> tuple[Path, int]:
     config_path = write_test_config(tmp_path)
     db = Database(str(tmp_path / "test.db"))
@@ -1479,6 +1482,8 @@ self_service:
     disable_new_registration: {"true" if disable_new_registration else "false"}
     default_group_id: {group_id}
     session_secret: "test-session-secret"
+  account:
+    last_call_days: {last_call_days}
 """
         )
     return config_path, group_id
@@ -1543,3 +1548,307 @@ def _normalized_text(text: str) -> str:
 
 def _count_rows(db: Database, table: str) -> int:
     return int(db.query_one(f"SELECT COUNT(*) AS c FROM {table}")["c"])
+
+
+def _insert_usage_log(
+    db: Database,
+    *,
+    user_id: int,
+    request_id: str,
+    status: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    created_at: str | None = None,
+    action: str = "generate-image",
+) -> None:
+    db.execute(
+        """
+        INSERT INTO usage_logs (
+            request_id, attempt_number, user_id, action, estimated_anlas_cost,
+            status, error_code, error_message, created_at
+        )
+        VALUES (?, 0, ?, ?, 0, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            user_id,
+            action,
+            status,
+            error_code,
+            error_message,
+            created_at or utc_now_iso(),
+        ),
+    )
+
+
+def test_account_last_call_empty_state(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "最近调用" in text
+        assert "近 7 天内暂无调用记录" in text
+
+
+def test_account_last_call_shows_success_and_time(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        created_at = utc_now_iso()
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-success",
+            status="success",
+            created_at=created_at,
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "最近调用" in text
+        assert "成功" in text
+        assert format_display_time(created_at) in text
+
+
+def test_account_last_call_shows_whitelisted_429_message(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-429",
+            status="failed",
+            error_code="429",
+            error_message="Concurrent generation is locked",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "失败" in text
+        assert "Concurrent generation is locked" in text
+
+
+def test_account_last_call_redacts_500_internal_ips(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-500",
+            status="failed",
+            error_code="500",
+            error_message="read tcp 10.4.246.189:3000->10.1.97.32:36330: i/o timeout",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "上游服务异常" in text
+        assert "10.4.246.189" not in page.text
+
+
+def test_account_last_call_redacts_other_users_upstream_id(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-no-upstream",
+            status="failed",
+            error_code="no_available_upstream",
+            error_message="上游不可用：u12-main",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "当前没有可用的上游" in text
+        assert "u12-" not in page.text
+
+
+def test_account_last_call_redacts_ssl_error_details(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-ssl",
+            status="failed",
+            error_code="SSLError",
+            error_message="Failed to perform, curl: (35) TLS connect error...",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        assert "curl" not in page.text
+        assert "SSLError" not in page.text
+
+
+def test_account_last_call_folds_401_to_generic_message(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-401",
+            status="failed",
+            error_code="401",
+            error_message="Unauthorized",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "上游账号异常，请联系管理员" in text
+        assert "Unauthorized" not in page.text
+
+
+def test_account_last_call_counts_rejected_before_upstream(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-rejected",
+            status="rejected",
+            error_code="rate_limited",
+            error_message="限流：每分钟最多 3 次",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "已拒绝" in text
+        assert "限流：每分钟最多 3 次" in text
+
+
+def test_account_last_call_ignores_rows_outside_window(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        old_created_at = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-old",
+            status="success",
+            created_at=old_created_at,
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert "近 7 天内暂无调用记录" in text
+
+
+def test_account_last_call_hidden_when_days_is_zero(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path, last_call_days=0)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-hidden",
+            status="success",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        assert "最近调用" not in page.text
+
+
+def test_account_last_call_excludes_admin_replay_rows(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        earlier = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        later = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-normal",
+            status="success",
+            created_at=earlier,
+        )
+        _insert_usage_log(
+            client.app.state.db,
+            user_id=user_id,
+            request_id="req-replay",
+            status="failed",
+            error_code="500",
+            error_message="read tcp 10.4.246.189:3000->10.1.97.32:36330: i/o timeout",
+            created_at=later,
+            action="replay:generate-image",
+        )
+
+        page = client.get("/account")
+
+        assert page.status_code == 200
+        text = _normalized_text(page.text)
+        assert format_display_time(earlier) in text
+        assert format_display_time(later) not in text
+        assert "10.4.246.189" not in page.text
