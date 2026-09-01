@@ -63,6 +63,20 @@ class ConcurrentGenerationError(APIError):
     """Raised when the upstream rejects concurrent generation."""
 
 
+def as_error_text(value: Any) -> str:
+    """把上游 message 字段安全转成文本；None 与 list/dict 等非 str 也要能落日志。
+
+    usage_logs.mark_failed 会对 error_message 做 [:500] 切片，上游返回
+    {"message": null} 或非字符串结构时若不先归一化，会在结算阶段抛
+    TypeError / KeyError，导致日志行停在 running 非终态。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
 def api_error_status_code(exc: APIError) -> int:
     if isinstance(exc, DataSerializationError):
         return 502

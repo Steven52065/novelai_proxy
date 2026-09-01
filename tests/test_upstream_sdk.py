@@ -332,3 +332,34 @@ def test_upstream_short_non_json_error_body_is_kept_verbatim(monkeypatch):
         asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
 
     assert exc_info.value.message == "upstream exploded"
+
+
+@pytest.mark.parametrize(
+    "json_body,expected",
+    [
+        ({"statusCode": 429, "message": None}, "上游请求失败"),
+        ({"statusCode": 429, "message": ""}, "上游请求失败"),
+        ({"statusCode": 429, "message": {"nested": "detail"}}, "{'nested': 'detail'}"),
+        ({"statusCode": 429, "message": "Concurrent generation is locked"}, "Concurrent generation is locked"),
+    ],
+)
+def test_upstream_error_message_is_normalized_to_text(json_body, expected, monkeypatch):
+    """APIError.message 必须始终是字符串。
+
+    error.get("message", 默认值) 的默认值只在键缺失时生效，上游返回
+    {"message": null} 或非字符串结构时会把 None/dict 带进 APIError.message，
+    随后 usage_logs.mark_failed 的 error_message[:500] 会抛 TypeError/KeyError，
+    结算中断、日志行停在 running 非终态，并成为 /account「最近调用」的展示内容。
+    """
+    client, _session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=429, json_body=json_body, content_type="application/json"),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
+
+    assert exc_info.value.message == expected
+    assert isinstance(exc_info.value.message, str)
+    # 结算路径真正做的事：切片不能抛。
+    assert exc_info.value.message[:500] == expected

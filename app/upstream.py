@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from curl_cffi.requests import AsyncSession
 
-from .api_errors import APIError, AuthError, DataSerializationError
+from .api_errors import APIError, AuthError, DataSerializationError, as_error_text
 from .logging_utils import dump_model_payload
 from .novelai_endpoints import (
     AUGMENT_IMAGE_ENDPOINT,
@@ -195,8 +195,10 @@ def _response_error(response) -> dict[str, Any]:
 def _raise_response_error(response, request: dict[str, Any]) -> None:
     error = _response_error(response)
     exc_type = AuthError if response.status_code in {400, 401, 402} else APIError
+    # 不能用 error.get("message", 默认值)：默认值只在键缺失时生效，上游返回
+    # {"message": null} 或非字符串结构时仍会把 None/dict 带进 APIError.message。
     raise exc_type(
-        error.get("message", "上游请求失败"),
+        as_error_text(error.get("message")) or "上游请求失败",
         request=request,
         response=error,
         code=response.status_code,

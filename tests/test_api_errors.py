@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.api_errors import (
     APIError,
     AuthError,
@@ -7,6 +9,7 @@ from app.api_errors import (
     DataSerializationError,
     NovelAIProxyError,
     api_error_status_code,
+    as_error_text,
 )
 
 
@@ -46,3 +49,19 @@ def test_api_error_never_reports_a_non_error_status_code():
     assert api_error_status_code(APIError("failed", {}, {}, 400)) == 400
     assert api_error_status_code(APIError("failed", {}, {}, 429)) == 429
     assert api_error_status_code(APIError("failed", {}, {}, 500)) == 500
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, ""),
+        ("", ""),
+        ("  padded  ", "padded"),
+        ({"nested": 1}, "{'nested': 1}"),
+        ([1, 2], "[1, 2]"),
+        (500, "500"),
+    ],
+)
+def test_as_error_text_normalizes_any_upstream_message(value, expected):
+    assert as_error_text(value) == expected
+    assert isinstance(as_error_text(value), str)
