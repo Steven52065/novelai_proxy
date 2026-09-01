@@ -184,6 +184,15 @@ class RoutingProxyQueue:
 
         self._notify_change()
 
+    def has_upstream_target(self, upstream_id: str) -> bool:
+        """该上游当前是否是活跃调度目标；禁用/已删除的上游不是。"""
+        return upstream_id in self._targets and upstream_id in self._queues
+
+    @property
+    def accepting(self) -> bool:
+        """服务是否仍接受新请求（stop() 后为 False）。"""
+        return self._accepting
+
     async def wait_for_image_uploads(self) -> None:
         await asyncio.gather(*(queue.wait_for_image_uploads() for queue in self._queues.values()))
 
