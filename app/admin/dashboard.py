@@ -28,6 +28,7 @@ from .common import (
     row_to_dict,
     upstream_choices,
 )
+from .upstream_probe import UpstreamProbeBusy
 
 
 api_router = APIRouter(prefix="/admin/api", dependencies=[Depends(require_admin_or_session)])
@@ -95,6 +96,13 @@ UPSTREAM_TEST_EXCEPTION_RULES = (
         error_code="upstream_timeout",
         error_type=_exception_class_name,
         message=_exception_text,
+    ),
+    UpstreamTestExceptionRule(
+        exception_type=UpstreamProbeBusy,
+        status_code=409,
+        error_code="upstream_test_in_progress",
+        error_type="UpstreamProbeBusy",
+        message=lambda exc: str(exc),
     ),
     UpstreamTestExceptionRule(
         exception_type=APIError,
@@ -167,18 +175,26 @@ async def test_upstream(request: Request, upstream_id: str):
         )
 
     proxy_queue = request.app.state.proxy_queue
+    runtime = getattr(request.app.state, "upstream_runtime", None)
+    record = runtime.repository.get(normalized_upstream_id) if runtime is not None else None
+    upstream_enabled = record.enabled if record is not None else None
+
     try:
-        payload = await proxy_queue.submit_upstream_probe(
-            upstream_id=normalized_upstream_id,
-            request_id=f"admin-probe-{uuid.uuid4().hex}",
-            logging_config=request.app.state.config.logging,
-            handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
-        )
-    except (QueueFull, QueueClosed, NoAvailableUpstream, UpstreamExecutionTimeout, APIError) as exc:
+        if proxy_queue.has_upstream_target(normalized_upstream_id):
+            payload = await proxy_queue.submit_upstream_probe(
+                upstream_id=normalized_upstream_id,
+                request_id=f"admin-probe-{uuid.uuid4().hex}",
+                logging_config=request.app.state.config.logging,
+                handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
+            )
+        else:
+            payload = await _direct_upstream_probe(request, record=record, upstream_id=normalized_upstream_id)
+    except (QueueFull, QueueClosed, NoAvailableUpstream, UpstreamExecutionTimeout, UpstreamProbeBusy, APIError) as exc:
         return _upstream_test_exception_response(
             exc,
             upstream_id=normalized_upstream_id,
             started_at=started_at,
+            upstream_enabled=upstream_enabled,
         )
     except Exception as exc:
         logger.exception("admin upstream test failed upstream_id=%s", normalized_upstream_id)
@@ -189,6 +205,7 @@ async def test_upstream(request: Request, upstream_id: str):
             error_code=exc.__class__.__name__,
             error_type=exc.__class__.__name__,
             message=str(exc) or "上游测试失败",
+            upstream_enabled=upstream_enabled,
         )
 
     image_count, preview_image = _zip_image_preview(payload)
@@ -200,6 +217,7 @@ async def test_upstream(request: Request, upstream_id: str):
             error_code="invalid_upstream_response",
             error_type="InvalidUpstreamResponse",
             message="上游返回的 ZIP 中没有有效图片",
+            upstream_enabled=upstream_enabled,
         )
 
     return {
@@ -209,8 +227,22 @@ async def test_upstream(request: Request, upstream_id: str):
         "zip_bytes": len(payload),
         "image_count": image_count,
         "preview_image": preview_image,
+        "upstream_enabled": upstream_enabled,
         "message": "上游测试成功",
     }
+
+
+async def _direct_upstream_probe(request: Request, *, record, upstream_id: str) -> bytes:
+    if not request.app.state.proxy_queue.accepting:
+        raise QueueClosed
+    if record is None:
+        raise NoAvailableUpstream(f"未知的上游 id：{upstream_id}")
+    return await request.app.state.direct_upstream_probe.run(
+        upstream_id=upstream_id,
+        client=request.app.state.upstream_runtime.build_probe_client(record),
+        handler=lambda upstream: upstream.generate_image_payload_zip(_admin_upstream_test_payload()),
+        timeout_seconds=request.app.state.config.queue.upstream_execution_timeout_seconds,
+    )
 
 
 # websocket 使用独立 router，避免普通页面依赖误套到 WebSocket 握手。
@@ -440,17 +472,21 @@ def _upstream_test_failure_response(
     error_code: str,
     error_type: str,
     message: str,
+    upstream_enabled: bool | None = None,
 ) -> JSONResponse:
+    content: dict[str, object] = {
+        "ok": False,
+        "upstream_id": upstream_id,
+        "elapsed_ms": _elapsed_ms(started_at),
+        "error_code": error_code,
+        "error_type": error_type,
+        "message": message,
+    }
+    if upstream_enabled is not None:
+        content["upstream_enabled"] = upstream_enabled
     return JSONResponse(
         status_code=status_code,
-        content={
-            "ok": False,
-            "upstream_id": upstream_id,
-            "elapsed_ms": _elapsed_ms(started_at),
-            "error_code": error_code,
-            "error_type": error_type,
-            "message": message,
-        },
+        content=content,
     )
 
 
@@ -459,6 +495,7 @@ def _upstream_test_exception_response(
     *,
     upstream_id: str,
     started_at: float,
+    upstream_enabled: bool | None = None,
 ) -> JSONResponse:
     rule = _upstream_test_exception_rule(exc)
     if rule is None:
@@ -470,6 +507,7 @@ def _upstream_test_exception_response(
         error_code=str(_resolve_upstream_test_rule_value(rule.error_code, exc)),
         error_type=str(_resolve_upstream_test_rule_value(rule.error_type, exc)),
         message=str(_resolve_upstream_test_rule_value(rule.message, exc)),
+        upstream_enabled=upstream_enabled,
     )
 
 
