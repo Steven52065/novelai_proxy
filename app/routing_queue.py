@@ -11,9 +11,10 @@ from typing import Any, Awaitable, Callable, Literal
 from .api_errors import APIError
 
 from .config import LoggingConfig
+from .idle_free_small import IdleFreeSmallContext, IdleFreeSmallTracker
 from .logging_utils import logger
 from .quota_manager import QuotaManager
-from .queue_errors import NoAvailableUpstream, QueueClosed, QueueFull, Retry429Error, UpstreamItemRerouted, UserUnavailable
+from .queue_errors import IdleFreeSmallRejected, NoAvailableUpstream, QueueClosed, QueueFull, Retry429Error, UpstreamItemRerouted, UserUnavailable
 from .queue_models import AdaptiveUpstreamScore, ImageHostingServiceLike, QueueItem, UpstreamQueueTarget
 from .queue_snapshot import RoutingQueueSnapshot
 from .queue_snapshot_helpers import item_snapshot, without_sequence
@@ -59,6 +60,7 @@ class RoutingProxyQueue:
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
         on_upstream_api_error: Callable[[str, APIError], None] | None = None,
+        tracker: IdleFreeSmallTracker | None = None,
     ):
         self._quota_manager = quota_manager
         self._usage_logs = usage_logs
@@ -101,6 +103,7 @@ class RoutingProxyQueue:
         self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
         self._on_upstream_api_error = on_upstream_api_error
+        self._tracker = tracker
         self._is_user_available = is_user_available or (lambda _user_id: True)
         self._queues = {
             target.id: self._create_upstream_queue(target)
@@ -119,6 +122,8 @@ class RoutingProxyQueue:
 
     def start(self) -> None:
         self._started = True
+        if self._tracker is not None:
+            self._tracker.start()
         self._loop = asyncio.get_running_loop()
         if self._dispatch_worker is None or self._dispatch_worker.done():
             self._spawn_dispatcher()
@@ -180,6 +185,8 @@ class RoutingProxyQueue:
             self._reroute_pending_from_disabled_upstream(upstream_id)
             queue = self._queues.pop(upstream_id, None)
             if queue is not None:
+                if self._tracker is not None:
+                    self._tracker.detach(upstream_id, queue._tracker_token)
                 self._track_removed_queue_stop(queue)
 
         self._notify_change()
@@ -187,6 +194,14 @@ class RoutingProxyQueue:
     def has_upstream_target(self, upstream_id: str) -> bool:
         """该上游当前是否是活跃调度目标；禁用/已删除的上游不是。"""
         return upstream_id in self._targets and upstream_id in self._queues
+
+    def is_idle_free_available(
+        self,
+        allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
+    ) -> bool:
+        if self._tracker is None:
+            return False
+        return self._tracker.is_idle(allowed_upstreams)
 
     @property
     def accepting(self) -> bool:
@@ -272,6 +287,7 @@ class RoutingProxyQueue:
             image_hosting=self._image_hosting,
             on_change=self._on_change,
             on_api_error=self._on_upstream_api_error,
+            tracker=self._tracker,
         )
 
     def _track_removed_queue_stop(self, queue: ProxyQueue) -> None:
@@ -321,6 +337,7 @@ class RoutingProxyQueue:
         manage_quota: bool = True,
         allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
         accounting: RequestAccounting | None = None,
+        idle_free_small: IdleFreeSmallContext | None = None,
     ) -> asyncio.Future:
         if not self._accepting:
             raise QueueClosed
@@ -353,6 +370,7 @@ class RoutingProxyQueue:
                     handler=handler,
                     future=future,
                     allowed_upstreams=allowed_upstreams,
+                    idle_free_small=idle_free_small,
                 )
             )
         except asyncio.QueueFull as exc:
@@ -377,6 +395,7 @@ class RoutingProxyQueue:
         manage_quota: bool = True,
         allowed_upstreams: frozenset[str] | set[str] | list[str] | None = None,
         accounting: RequestAccounting | None = None,
+        idle_free_small: IdleFreeSmallContext | None = None,
     ) -> bytes:
         future = self.enqueue(
             request_id=request_id,
@@ -391,6 +410,7 @@ class RoutingProxyQueue:
             manage_quota=manage_quota,
             allowed_upstreams=allowed_upstreams,
             accounting=accounting,
+            idle_free_small=idle_free_small,
         )
         try:
             return await future
@@ -506,6 +526,9 @@ class RoutingProxyQueue:
         candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=True)
 
         if not candidates:
+            if item.idle_free_small is not None:
+                self._reject_idle_item_at_routing(item)
+                return
             self._finish_unavailable_dispatch(item, errors=errors, last_429_error=last_429_error)
             return
 
@@ -570,6 +593,10 @@ class RoutingProxyQueue:
             exc = completed.exception()
             if isinstance(exc, UpstreamItemRerouted):
                 return
+            if isinstance(exc, IdleFreeSmallRejected):
+                if not item.future.done():
+                    item.future.set_exception(exc)
+                return
         else:
             exc = None
         if not item.is_admin_probe:
@@ -597,6 +624,18 @@ class RoutingProxyQueue:
             )
             if not decision.should_retry:
                 self._finish_unavailable_dispatch(item, errors=[], last_429_error=retry_error)
+                return
+            if item.idle_free_small is not None and (
+                self._tracker is None or not self._tracker.is_idle(item.allowed_upstreams)
+            ):
+                item.accounting.settle_released()
+                if not item.future.done():
+                    item.future.set_exception(IdleFreeSmallRejected(item.idle_free_small))
+                logger.info(
+                    "idle free small retry rejected before next attempt request_id=%s user_id=%s",
+                    item.request_id,
+                    item.user_id,
+                )
                 return
             logger.info(
                 "proxy request 429 retry attempt=%s request_id=%s upstream_id=%s next_attempt_number=%s",
@@ -769,6 +808,22 @@ class RoutingProxyQueue:
         if errors:
             raise QueueFull from errors[-1]
         raise NoAvailableUpstream("当前没有可用的已启用上游")
+
+    def _reject_idle_item_at_routing(self, item: QueueItem) -> None:
+        context = item.idle_free_small
+        limit = context.daily_snapshot.limit if context is not None else 0
+        message = f"免费小图每日限额已用尽：每日最多 {limit} 次"
+        if item.attempt_number > 0 and not item.retry_attempt_logged:
+            item.accounting.settle_released()
+        else:
+            item.accounting.settle_rejected(
+                error_code="free_small_daily_limit_exceeded",
+                error_message=message,
+                log_level="INFO",
+                attempt_number=item.attempt_number,
+            )
+        if not item.future.done():
+            item.future.set_exception(IdleFreeSmallRejected(context))
 
     @staticmethod
     def _settle_routing_rejection(

@@ -8,8 +8,9 @@ from typing import Any, Callable
 
 from .api_errors import APIError, as_error_text
 
+from .idle_free_small import IdleFreeSmallTracker
 from .logging_utils import logger
-from .queue_errors import QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable
+from .queue_errors import IdleFreeSmallRejected, QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable
 from .queue_models import ImageHostingServiceLike, QueueItem
 from .queue_snapshot import ProxyQueueSnapshot
 from .queue_snapshot_helpers import item_snapshot
@@ -38,6 +39,7 @@ class ProxyQueue:
         image_hosting: ImageHostingServiceLike | None = None,
         on_change: Callable[[], None] | None = None,
         on_api_error: Callable[[str, APIError], None] | None = None,
+        tracker: IdleFreeSmallTracker | None = None,
     ):
         self.upstream_id = upstream_id
         self.usage_logs = usage_logs
@@ -67,6 +69,10 @@ class ProxyQueue:
         self._running_started_at: float | None = None
         self._on_change = on_change
         self._on_api_error = on_api_error
+        self._tracker = tracker
+        self._tracker_token: object = object()
+        if self._tracker is not None:
+            self._tracker.attach(self.upstream_id, self._tracker_token)
 
     @property
     def on_api_error(self) -> Callable[[str, APIError], None] | None:
@@ -184,34 +190,82 @@ class ProxyQueue:
     async def _run(self) -> None:
         while True:
             item = await self.queue.get()
-            self._running_item = item
-            self._running_started_at = time.monotonic()
-            self._notify_change()
+            started = False
             try:
+                if item.idle_free_small is not None:
+                    queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
+                    if self._cancel_if_caller_done(item, queued_ms, after_interval=False):
+                        continue
+                    if self._reject_if_user_unavailable(item):
+                        continue
+                started = self._try_begin_running(item)
+                if not started:
+                    self._reject_idle_item(item)
+                    continue
+                self._notify_change()
                 await self._process_item(item)
             except asyncio.CancelledError:
-                # worker 被取消（stop / 移除上游）时正在处理的 attempt 要么已被
-                # _process_item 料理，要么在这里取消掉，避免调用方永久挂起。
+                if item.idle_free_small is not None and not item.accounting.settled:
+                    item.accounting.settle_released()
                 if not item.future.done():
                     item.future.cancel()
                 raise
-            except Exception:
-                # _process_item 已经对成功/失败处理各自兜底，这里只可能是
-                # 兜底代码本身出错；吞掉并继续，绝不能让 worker 退出。
+            except Exception as exc:
                 logger.exception(
                     "proxy queue item processing crashed request_id=%s upstream_id=%s",
                     item.request_id,
                     self.upstream_id,
                 )
+                if not item.future.done():
+                    item.future.set_exception(exc)
             finally:
-                self._running_item = None
-                self._running_started_at = None
+                if started:
+                    self._running_item = None
+                    self._running_started_at = None
+                    if self._tracker is not None:
+                        self._tracker.record_finished(self._tracker_token)
                 try:
                     self.queue.task_done()
                 except ValueError:
                     logger.exception("proxy queue task_done accounting error upstream_id=%s", self.upstream_id)
                 self._notify_change()
                 await asyncio.sleep(0)
+
+    def _try_begin_running(self, item: QueueItem) -> bool:
+        if self._tracker is None:
+            self._running_item = item
+            self._running_started_at = time.monotonic()
+            return True
+        with self._tracker.lock:
+            if item.idle_free_small is not None:
+                if self._tracker.active_workers.get(self.upstream_id) is not self._tracker_token:
+                    return False
+                if not self._tracker._is_idle_locked(item.allowed_upstreams, self._tracker.clock()):
+                    return False
+            self._running_item = item
+            self._running_started_at = time.monotonic()
+            self._tracker.record_started(self._tracker_token, self.upstream_id)
+            return True
+
+    def _reject_idle_item(self, item: QueueItem) -> None:
+        context = item.idle_free_small
+        limit = context.daily_snapshot.limit if context is not None else 0
+        message = f"免费小图每日限额已用尽：每日最多 {limit} 次"
+        item.accounting.settle_rejected(
+            error_code="free_small_daily_limit_exceeded",
+            error_message=message,
+            log_level="INFO",
+            attempt_number=item.attempt_number,
+        )
+        if not item.future.done():
+            item.future.set_exception(IdleFreeSmallRejected(context))
+        logger.info(
+            "idle free small request rejected by worker admission request_id=%s user_id=%s upstream_id=%s attempt_number=%s",
+            item.request_id,
+            item.user_id,
+            self.upstream_id,
+            item.attempt_number,
+        )
 
     async def _process_item(self, item: QueueItem) -> None:
         queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)

@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Protocol
 from .api_errors import APIError
 
 from .config import LoggingConfig
+from .idle_free_small import IdleFreeSmallContext
 from .request_accounting import RequestAccounting
 
 
@@ -42,6 +43,7 @@ class QueueItem:
     retry_attempt_logged: bool = field(default=False, compare=False)
     last_429_error: APIError | None = field(default=None, compare=False)
     is_admin_probe: bool = field(default=False, compare=False)
+    idle_free_small: IdleFreeSmallContext | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

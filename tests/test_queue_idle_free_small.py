@@ -1,0 +1,220 @@
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from pathlib import Path
+
+import pytest
+
+from app.config import LoggingConfig
+from app.database import Database, utc_now_iso
+from app.free_small_daily_limit import FreeSmallDailyLimitManager
+from app.idle_free_small import IdleFreeSmallContext, IdleFreeSmallTracker
+from app.idle_free_small_daily_limit import IdleFreeSmallDailyLimitManager
+from app.queue_errors import IdleFreeSmallRejected
+from app.quota_manager import QuotaManager
+from app.request_accounting import RequestAccounting
+from app.routing_queue import RoutingProxyQueue
+from app.queue_models import UpstreamQueueTarget
+from app.usage_logs import UsageLogCreate, UsageLogRepository
+
+
+class ImmediateUpstream:
+    def __init__(self):
+        self.calls = 0
+
+    async def generate_image_payload_zip(self, payload):
+        self.calls += 1
+        return b"idle-image"
+
+
+class BlockingUpstream:
+    def __init__(self):
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate_image_payload_zip(self, payload):
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return b"blocked-image"
+
+
+def test_idle_free_small_request_succeeds_when_tracker_is_idle(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = ImmediateUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        try:
+            payload = await asyncio.wait_for(
+                queue.enqueue(
+                    request_id="idle-success",
+                    user_id=context["user_id"],
+                    tier="normal",
+                    action="generate",
+                    logging_config=LoggingConfig(),
+                    estimated_cost=0,
+                    handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                    process_zip_response=False,
+                    accounting=_accounting(context, "idle-success"),
+                    idle_free_small=context["context"],
+                ),
+                timeout=1,
+            )
+            assert payload == b"idle-image"
+            assert upstream.calls == 1
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert snapshot.used == 1
+            assert snapshot.reserved == 0
+            log = context["usage_logs"].get_by_request_id("idle-success")
+            assert log["status"] == "success"
+        finally:
+            await queue.stop()
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def test_idle_free_small_request_rejected_when_worker_was_recently_busy(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=30)
+        upstream = BlockingUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        try:
+            normal_future = queue.enqueue(
+                request_id="normal-block",
+                user_id=context["user_id"],
+                tier="normal",
+                action="generate",
+                logging_config=LoggingConfig(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                process_zip_response=False,
+                manage_quota=False,
+                accounting=RequestAccounting(
+                    quota_manager=context["quota"],
+                    usage_logs=context["usage_logs"],
+                    request_id="normal-block",
+                    user_id=context["user_id"],
+                    estimated_cost=0,
+                    manage_quota=False,
+                ),
+            )
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+
+            idle_future = queue.enqueue(
+                request_id="idle-rejected",
+                user_id=context["user_id"],
+                tier="normal",
+                action="generate",
+                logging_config=LoggingConfig(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                process_zip_response=False,
+                accounting=_accounting(context, "idle-rejected"),
+                idle_free_small=context["context"],
+            )
+            upstream.release.set()
+            assert await asyncio.wait_for(normal_future, timeout=1) == b"blocked-image"
+            with pytest.raises(IdleFreeSmallRejected):
+                await asyncio.wait_for(idle_future, timeout=1)
+
+            assert upstream.calls == 1
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert snapshot.used == 0
+            assert snapshot.reserved == 0
+            log = context["usage_logs"].get_by_request_id("idle-rejected")
+            assert log["status"] == "rejected"
+            assert log["error_code"] == "free_small_daily_limit_exceeded"
+        finally:
+            upstream.release.set()
+            await queue.stop()
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def _proxy_queue(context: dict, upstream, *, tracker: IdleFreeSmallTracker) -> RoutingProxyQueue:
+    return RoutingProxyQueue(
+        targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
+        quota_manager=context["quota"],
+        usage_logs=context["usage_logs"],
+        max_queue_size=2,
+        upstream_interval_min_seconds=0,
+        upstream_interval_max_seconds=0,
+        upstream_error_extra_delay_seconds=0,
+        tracker=tracker,
+    )
+
+
+def _idle_context(tmp_path: Path, *, min_idle_seconds: float) -> dict:
+    db = Database(str(tmp_path / "idle-queue.db"))
+    db.init_schema()
+    quota = QuotaManager(db)
+    usage_logs = UsageLogRepository(db)
+    normal = FreeSmallDailyLimitManager(db)
+    idle = IdleFreeSmallDailyLimitManager(db)
+    user_id = _create_user(db)
+    clock_values = [0.0]
+    tracker = IdleFreeSmallTracker(
+        occupancy_threshold_percent=50,
+        min_idle_seconds=min_idle_seconds,
+        clock=lambda: clock_values[0],
+    )
+    tracker.start()
+    reservation = idle.try_reserve(user_id)
+    usage_logs.insert_queued(
+        UsageLogCreate(
+            request_id="idle-success",
+            user_id=user_id,
+            action="generate",
+            estimated_anlas_cost=0,
+        )
+    )
+    usage_logs.insert_queued(
+        UsageLogCreate(
+            request_id="idle-rejected",
+            user_id=user_id,
+            action="generate",
+            estimated_anlas_cost=0,
+        )
+    )
+    snapshot = normal.get_snapshot(user_id)
+    return {
+        "db": db,
+        "quota": quota,
+        "usage_logs": usage_logs,
+        "idle": idle,
+        "reservation": reservation,
+        "context": IdleFreeSmallContext(daily_snapshot=snapshot, requested=1),
+        "tracker": tracker,
+        "user_id": user_id,
+        "clock": clock_values,
+    }
+
+
+def _accounting(context: dict, request_id: str) -> RequestAccounting:
+    return RequestAccounting(
+        quota_manager=context["quota"],
+        usage_logs=context["usage_logs"],
+        request_id=request_id,
+        user_id=context["user_id"],
+        estimated_cost=0,
+        idle_free_small_daily_limit_manager=context["idle"],
+        idle_free_small_reservation=context["reservation"],
+    )
+
+
+def _create_user(db: Database) -> int:
+    cursor = db.execute(
+        "INSERT INTO users ("
+        " api_key_hash, name, is_active, free_small_daily_limit_enabled,"
+        " free_small_daily_limit, idle_free_small_multiplier, created_at"
+        ") VALUES (?, ?, 1, 1, 1, 1, ?)",
+        (f"queue-idle-{uuid.uuid4().hex}", "queue-idle-user", utc_now_iso()),
+    )
+    return int(cursor.lastrowid)
