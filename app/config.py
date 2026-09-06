@@ -169,6 +169,20 @@ class FreeSmallDailyLimitConfig(BaseModel):
     reset_hour_utc8: int = Field(default=0, ge=0, le=23)
 
 
+class IdleFreeSmallConfig(BaseModel):
+    occupancy_threshold_percent: float = Field(
+        default=50,
+        ge=0,
+        le=100,
+        allow_inf_nan=False,
+    )
+    min_idle_seconds: float = Field(
+        default=30,
+        ge=0,
+        allow_inf_nan=False,
+    )
+
+
 class DiscordSelfServiceConfig(BaseModel):
     enabled: bool = False
     client_id: str = ""
@@ -212,6 +226,7 @@ class AppConfig(BaseModel):
     image_format: ImageFormatConfig = Field(default_factory=ImageFormatConfig)
     image_hosting: ImageHostingConfig = Field(default_factory=ImageHostingConfig)
     free_small_daily_limit: FreeSmallDailyLimitConfig = Field(default_factory=FreeSmallDailyLimitConfig)
+    idle_free_small: IdleFreeSmallConfig = Field(default_factory=IdleFreeSmallConfig)
     self_service: SelfServiceConfig = Field(default_factory=SelfServiceConfig)
     cors: CorsConfig = Field(default_factory=CorsConfig)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

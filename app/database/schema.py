@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS user_groups (
     default_free_small_only INTEGER NOT NULL DEFAULT 1,
     free_small_daily_limit_enabled INTEGER NOT NULL DEFAULT 0,
     free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
+    idle_free_small_multiplier REAL NOT NULL DEFAULT 0,
     default_allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
     default_allowed_upstreams TEXT,
     default_image_format_policy TEXT NOT NULL DEFAULT 'follow_global',
@@ -110,6 +111,7 @@ CREATE TABLE IF NOT EXISTS users (
     free_small_only INTEGER NOT NULL DEFAULT 0,
     free_small_daily_limit_enabled INTEGER NOT NULL DEFAULT 0,
     free_small_daily_limit INTEGER NOT NULL DEFAULT 0,
+    idle_free_small_multiplier REAL NOT NULL DEFAULT 0,
     allowed_endpoints TEXT NOT NULL DEFAULT 'generate-image',
     allowed_upstreams TEXT,
     image_format_policy TEXT NOT NULL DEFAULT 'follow_global',
@@ -159,6 +161,16 @@ CREATE TABLE IF NOT EXISTS discord_user_links (
 );
 
 CREATE TABLE IF NOT EXISTS free_small_daily_usage (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    window_start TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    reserved INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, window_start)
+);
+
+CREATE TABLE IF NOT EXISTS idle_free_small_daily_usage (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     window_start TEXT NOT NULL,
     used INTEGER NOT NULL DEFAULT 0,
@@ -275,6 +287,7 @@ USERS_COLUMNS = (
     ("free_small_only", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0"),
+    ("idle_free_small_multiplier", "REAL NOT NULL DEFAULT 0"),
     ("allowed_endpoints", "TEXT NOT NULL DEFAULT 'generate-image'"),
     ("allowed_upstreams", "TEXT"),
     ("image_format_policy", "TEXT NOT NULL DEFAULT 'follow_global'"),
@@ -285,6 +298,7 @@ USERS_COLUMNS = (
 USER_GROUPS_COLUMNS = (
     ("free_small_daily_limit_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ("free_small_daily_limit", "INTEGER NOT NULL DEFAULT 0"),
+    ("idle_free_small_multiplier", "REAL NOT NULL DEFAULT 0"),
     ("default_image_format_policy", "TEXT NOT NULL DEFAULT 'follow_global'"),
 )
 

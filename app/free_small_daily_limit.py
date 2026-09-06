@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from sqlite3 import Connection
 
+from .daily_windows import (
+    coerce_datetime as _coerce_datetime,
+    current_window as _current_window,
+    retry_after_seconds as _retry_after_seconds,
+)
 from .database import Database, utc_now_iso
-from .timezones import DISPLAY_TIMEZONE as UTC8
 
 
 @dataclass(frozen=True)
@@ -247,24 +250,3 @@ def _snapshot(
         reset_at=reset_at,
     )
 
-
-def _coerce_datetime(value: datetime | None) -> datetime:
-    if value is None:
-        return datetime.now(timezone.utc)
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _current_window(now: datetime, reset_hour_utc8: int) -> tuple[str, datetime]:
-    local_now = now.astimezone(UTC8)
-    window_start = local_now.replace(hour=reset_hour_utc8, minute=0, second=0, microsecond=0)
-    if local_now < window_start:
-        window_start -= timedelta(days=1)
-    reset_at = window_start + timedelta(days=1)
-    return window_start.isoformat(), reset_at
-
-
-def _retry_after_seconds(now: datetime, reset_at: datetime) -> int:
-    seconds = (reset_at.astimezone(timezone.utc) - now.astimezone(timezone.utc)).total_seconds()
-    return max(0, int(math.ceil(seconds)))

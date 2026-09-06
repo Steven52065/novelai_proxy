@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.config import (
     AppConfig,
+    IdleFreeSmallConfig,
     SelfServiceAccountConfig,
     UpstreamAutoDisableConfig,
     configuration_security_warnings,
@@ -124,6 +125,35 @@ def test_configuration_security_warnings_keep_weak_config_compatible():
         "configuration file is missing; built-in defaults are active",
         "admin password uses a known development default",
     )
+
+
+def test_idle_free_small_config_defaults_and_validation():
+    config = AppConfig()
+    assert config.idle_free_small.occupancy_threshold_percent == 50
+    assert config.idle_free_small.min_idle_seconds == 30
+
+    assert IdleFreeSmallConfig(occupancy_threshold_percent=0, min_idle_seconds=0).occupancy_threshold_percent == 0
+    assert IdleFreeSmallConfig(occupancy_threshold_percent=100).min_idle_seconds == 30
+
+    with pytest.raises(ValidationError):
+        IdleFreeSmallConfig(occupancy_threshold_percent=-0.1)
+    with pytest.raises(ValidationError):
+        IdleFreeSmallConfig(occupancy_threshold_percent=100.1)
+    with pytest.raises(ValidationError):
+        IdleFreeSmallConfig(occupancy_threshold_percent=float('nan'))
+    with pytest.raises(ValidationError):
+        IdleFreeSmallConfig(occupancy_threshold_percent=float('inf'))
+    with pytest.raises(ValidationError):
+        IdleFreeSmallConfig(min_idle_seconds=-1)
+    with pytest.raises(ValidationError):
+        IdleFreeSmallConfig(min_idle_seconds=float('inf'))
+
+
+def test_idle_free_small_config_example_matches_code_defaults():
+    example_path = Path(__file__).resolve().parent.parent / 'config.example.yaml'
+    example = yaml.safe_load(example_path.read_text(encoding='utf-8'))
+    assert example['idle_free_small']['occupancy_threshold_percent'] == IdleFreeSmallConfig().occupancy_threshold_percent
+    assert example['idle_free_small']['min_idle_seconds'] == IdleFreeSmallConfig().min_idle_seconds
 
 
 def test_configuration_security_warnings_accept_strong_password():

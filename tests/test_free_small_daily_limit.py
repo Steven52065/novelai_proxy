@@ -93,6 +93,40 @@ def test_init_schema_migrates_group_daily_limit_into_members(tmp_path: Path):
     reopened.close()
 
 
+def test_old_db_gets_idle_columns_default_zero_without_touching_data(tmp_path: Path):
+    db_path = str(tmp_path / 'old-idle.db')
+    db = Database(db_path)
+    db.init_schema()
+    user_id = _create_user(db, enabled=True, limit=2)
+    group_id = _create_group(db, enabled=True, limit=3)
+    db.execute('ALTER TABLE users DROP COLUMN idle_free_small_multiplier')
+    db.execute('ALTER TABLE user_groups DROP COLUMN idle_free_small_multiplier')
+    db.execute('DROP TABLE idle_free_small_daily_usage')
+    db.close()
+
+    reopened = Database(db_path)
+    reopened.init_schema()
+    user_columns = {row['name'] for row in reopened.query_all('PRAGMA table_info(users)')}
+    group_columns = {row['name'] for row in reopened.query_all('PRAGMA table_info(user_groups)')}
+    assert 'idle_free_small_multiplier' in user_columns
+    assert 'idle_free_small_multiplier' in group_columns
+    row = reopened.query_one(
+        'SELECT free_small_daily_limit_enabled, free_small_daily_limit, idle_free_small_multiplier FROM users WHERE id = ?',
+        (user_id,),
+    )
+    assert (int(row['free_small_daily_limit_enabled']), int(row['free_small_daily_limit']), float(row['idle_free_small_multiplier'])) == (1, 2, 0.0)
+    group_row = reopened.query_one(
+        'SELECT free_small_daily_limit_enabled, free_small_daily_limit, idle_free_small_multiplier FROM user_groups WHERE id = ?',
+        (group_id,),
+    )
+    assert (int(group_row['free_small_daily_limit_enabled']), int(group_row['free_small_daily_limit']), float(group_row['idle_free_small_multiplier'])) == (1, 3, 0.0)
+    reopened.init_schema()
+    row = reopened.query_one('SELECT name, free_small_daily_limit FROM users WHERE id = ?', (user_id,))
+    assert row['name'] == 'daily-user'
+    assert int(row['free_small_daily_limit']) == 2
+    reopened.close()
+
+
 def test_custom_utc8_reset_hour_changes_window_and_retry_after(tmp_path: Path):
     db = _daily_limit_db(tmp_path)
     user_id = _create_user(db, enabled=True, limit=1)
