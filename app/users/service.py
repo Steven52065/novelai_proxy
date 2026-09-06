@@ -21,6 +21,7 @@ class CreateUserInput:
     free_small_only: bool = False
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = 0
+    idle_free_small_multiplier: float = 0.0
     allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     allowed_upstreams: list[str] = field(default_factory=list)
     image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
@@ -40,6 +41,7 @@ class UpdateUserInput:
     free_small_only: bool | None = None
     free_small_daily_limit_enabled: bool | None = None
     free_small_daily_limit: int | None = None
+    idle_free_small_multiplier: float | None = None
     allowed_endpoints: list[str] | None = None
     allowed_upstreams: list[str] | None = None
     image_format_policy: ImageFormatPolicy | None = None
@@ -106,9 +108,10 @@ def insert_user_record(
         INSERT INTO users (
             api_key_hash, name, tier, is_active, free_small_only,
             free_small_daily_limit_enabled, free_small_daily_limit,
+            idle_free_small_multiplier,
             allowed_endpoints, allowed_upstreams, image_format_policy, group_id, created_at
         )
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             hash_api_key(api_key),
@@ -117,6 +120,7 @@ def insert_user_record(
             1 if data.free_small_only else 0,
             1 if data.free_small_daily_limit_enabled else 0,
             data.free_small_daily_limit,
+            data.idle_free_small_multiplier,
             AllowedEndpoints.of(data.allowed_endpoints).serialize(),
             AllowedUpstreams.of(data.allowed_upstreams).serialize(),
             normalize_image_format_policy(data.image_format_policy),
@@ -175,6 +179,9 @@ def update_user(db: Database, quota_manager: QuotaManager, user_id: int, data: U
     if data.free_small_daily_limit is not None:
         fields.append("free_small_daily_limit = ?")
         params.append(data.free_small_daily_limit)
+    if data.idle_free_small_multiplier is not None:
+        fields.append("idle_free_small_multiplier = ?")
+        params.append(data.idle_free_small_multiplier)
     if data.allowed_endpoints is not None:
         fields.append("allowed_endpoints = ?")
         params.append(AllowedEndpoints.of(data.allowed_endpoints).serialize())

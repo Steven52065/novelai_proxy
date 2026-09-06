@@ -1763,3 +1763,135 @@ def _create_group(client: TestClient, **overrides) -> int:
     response = client.post("/admin/api/user-groups", auth=("admin", "admin123"), json=payload)
     assert response.status_code == 200
     return response.json()["group_id"]
+
+def test_admin_idle_multiplier_create_update_and_inheritance(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="idle-group",
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=10,
+            idle_free_small_multiplier=0.5,
+        )
+        explicit = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "idle-user",
+                "group_id": group_id,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 10,
+                "idle_free_small_multiplier": 0.3,
+            },
+        )
+        assert explicit.status_code == 200
+        inherited = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "idle-inherited",
+                "group_id": group_id,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 10,
+            },
+        )
+        assert inherited.status_code == 200
+        explicit_id = explicit.json()["user_id"]
+        inherited_id = inherited.json()["user_id"]
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        by_id = {row["id"]: row for row in users}
+        assert by_id[explicit_id]["idle_free_small_multiplier"] == 0.3
+        assert by_id[inherited_id]["idle_free_small_multiplier"] == 0.5
+
+        update = client.patch(
+            f"/admin/api/users/{explicit_id}",
+            auth=("admin", "admin123"),
+            json={"idle_free_small_multiplier": 0},
+        )
+        assert update.status_code == 200
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        by_id = {row["id"]: row for row in users}
+        assert by_id[explicit_id]["idle_free_small_multiplier"] == 0
+
+
+def test_admin_idle_multiplier_group_propagation_preview_and_sync(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client,
+            name="propagate-group",
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=10,
+            idle_free_small_multiplier=0.2,
+        )
+        follower = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "follower",
+                "group_id": group_id,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 10,
+            },
+        ).json()["user_id"]
+        customized = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "customized",
+                "group_id": group_id,
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 10,
+                "idle_free_small_multiplier": 1.0,
+            },
+        ).json()["user_id"]
+
+        preview = client.post(
+            f"/admin/api/user-groups/{group_id}/propagation-preview",
+            auth=("admin", "admin123"),
+            json={"idle_free_small_multiplier": 0.6, "propagate": "unmodified"},
+        )
+        assert preview.status_code == 200
+        fields = {item["field"]: item for item in preview.json()["fields"]}
+        assert fields["idle_free_small_multiplier"]["new"] == "0.6 倍"
+
+        summary = client.patch(
+            f"/admin/api/user-groups/{group_id}",
+            auth=("admin", "admin123"),
+            json={"idle_free_small_multiplier": 0.6, "propagate": "unmodified"},
+        )
+        assert summary.status_code == 200
+        rows = {int(row["id"]): float(row["idle_free_small_multiplier"]) for row in client.app.state.db.query_all(
+            "SELECT id, idle_free_small_multiplier FROM users WHERE group_id = ?", (group_id,)
+        )}
+        assert rows[follower] == 0.6
+        assert rows[customized] == 1.0
+
+        sync = client.post(
+            f"/admin/api/user-groups/{group_id}/sync-members",
+            auth=("admin", "admin123"),
+            json={"fields": ["idle_free_small_multiplier"]},
+        )
+        assert sync.status_code == 200
+        assert sync.json()["updated_users"] == 2
+
+
+def test_admin_rejects_invalid_idle_multiplier(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+    with TestClient(app) as client:
+        bad_user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "bad-idle-user", "idle_free_small_multiplier": -1},
+        )
+        assert bad_user.status_code == 400
+        bad_group = client.post(
+            "/admin/api/user-groups",
+            auth=("admin", "admin123"),
+            json={"name": "bad-idle-group", "idle_free_small_multiplier": -1},
+        )
+        assert bad_group.status_code == 400

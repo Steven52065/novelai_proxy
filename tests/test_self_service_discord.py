@@ -1444,6 +1444,7 @@ def _write_self_service_config(
     default_reset_day: int = 2,
     free_small_daily_limit_enabled: bool = False,
     free_small_daily_limit: int = 0,
+    idle_free_small_multiplier: float = 0,
     default_image_format_policy: str = "follow_global",
     require_guild: bool = True,
     require_role: bool = False,
@@ -1461,6 +1462,7 @@ def _write_self_service_config(
         default_reset_day=default_reset_day,
         free_small_daily_limit_enabled=free_small_daily_limit_enabled,
         free_small_daily_limit=free_small_daily_limit,
+        idle_free_small_multiplier=idle_free_small_multiplier,
         default_image_format_policy=default_image_format_policy,
     )
     db.close()
@@ -1497,6 +1499,7 @@ def _create_default_group(
     default_reset_day: int = 2,
     free_small_daily_limit_enabled: bool = False,
     free_small_daily_limit: int = 0,
+    idle_free_small_multiplier: float = 0,
     default_image_format_policy: str = "follow_global",
 ) -> int:
     cursor = db.execute(
@@ -1504,14 +1507,16 @@ def _create_default_group(
         INSERT INTO user_groups (
             name, is_active, default_tier, default_free_small_only,
             free_small_daily_limit_enabled, free_small_daily_limit,
+            idle_free_small_multiplier,
             default_allowed_endpoints, default_image_format_policy, default_anlas_total,
             default_reset_period, default_reset_day, created_at
         )
-        VALUES ('discord-default', 1, 'vip', 0, ?, ?, 'generate-image', ?, ?, ?, ?, ?)
+        VALUES ('discord-default', 1, 'vip', 0, ?, ?, ?, 'generate-image', ?, ?, ?, ?, ?)
         """,
         (
             1 if free_small_daily_limit_enabled else 0,
             free_small_daily_limit,
+            idle_free_small_multiplier,
             default_image_format_policy,
             default_anlas_total,
             default_reset_period,
@@ -1976,3 +1981,25 @@ def test_account_last_call_in_progress_is_not_styled_as_error(status, label, tmp
         assert label in _normalized_text(page.text)
         assert f'<span class="badge badge-normal">{label}</span>' in page.text
         assert f'<span class="badge badge-inactive">{label}</span>' not in page.text
+
+
+def test_self_service_registration_inherits_idle_free_small_multiplier(tmp_path: Path, monkeypatch):
+    config_path, _ = _write_self_service_config(
+        tmp_path,
+        free_small_daily_limit_enabled=True,
+        free_small_daily_limit=4,
+        idle_free_small_multiplier=0.5,
+    )
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        _complete_discord_login(client)
+        user_id = client.app.state.db.query_one("SELECT id FROM users")["id"]
+        row = client.app.state.db.query_one(
+            "SELECT free_small_daily_limit_enabled, free_small_daily_limit, idle_free_small_multiplier FROM users WHERE id = ?",
+            (user_id,),
+        )
+        assert int(row["free_small_daily_limit_enabled"]) == 1
+        assert int(row["free_small_daily_limit"]) == 4
+        assert float(row["idle_free_small_multiplier"]) == 0.5

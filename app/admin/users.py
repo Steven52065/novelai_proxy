@@ -65,6 +65,7 @@ class CreateUserRequest(BaseModel):
     free_small_only: bool = False
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = Field(default=0, ge=0)
+    idle_free_small_multiplier: float = Field(default=0, ge=0, allow_inf_nan=False)
     allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     allowed_upstreams: list[str] = Field(default_factory=list)
     image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
@@ -82,6 +83,7 @@ class UpdateUserRequest(BaseModel):
     free_small_only: bool | None = None
     free_small_daily_limit_enabled: bool | None = None
     free_small_daily_limit: int | None = Field(default=None, ge=0)
+    idle_free_small_multiplier: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     allowed_endpoints: list[str] | None = None
     allowed_upstreams: list[str] | None = None
     image_format_policy: ImageFormatPolicy | None = None
@@ -108,6 +110,7 @@ async def list_users(request: Request):
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
+               u.idle_free_small_multiplier,
                u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
@@ -327,6 +330,7 @@ async def users_page(request: Request):
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
+               u.idle_free_small_multiplier,
                u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, u.created_at,
                NULL AS api_key,
                COALESCE(q.total, 0) AS anlas_total,
@@ -396,6 +400,7 @@ async def create_user_form(
     free_small_only: str | None = Form(None),
     free_small_daily_limit_enabled: str | None = Form(None),
     free_small_daily_limit: int = Form(0),
+    idle_free_small_multiplier: float = Form(0),
     allowed_endpoints: list[str] | None = Form(None),
     allowed_upstreams: list[str] | None = Form(None),
     image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
@@ -416,6 +421,7 @@ async def create_user_form(
             free_small_only=free_small_only == "on",
             free_small_daily_limit_enabled=free_small_daily_limit_enabled == "on",
             free_small_daily_limit=free_small_daily_limit,
+            idle_free_small_multiplier=idle_free_small_multiplier,
             allowed_endpoints=allowed_endpoints or [],
             allowed_upstreams=allowed_upstreams or [],
             image_format_policy=normalize_image_format_policy_or_400(image_format_policy),
@@ -455,6 +461,7 @@ async def user_edit_page(user_id: int, request: Request):
         SELECT u.id, u.name, u.group_id, g.name AS group_name, g.is_active AS group_is_active,
                u.tier, u.is_active, u.disabled_by_discord_verification, u.free_small_only,
                u.free_small_daily_limit_enabled, u.free_small_daily_limit,
+               u.idle_free_small_multiplier,
                u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy, NULL AS api_key,
                q.total AS anlas_total, q.used AS anlas_used, q.reserved AS anlas_reserved,
                q.reset_period, q.reset_day
@@ -526,6 +533,7 @@ async def update_user_form(
     free_small_only: str | None = Form(None),
     free_small_daily_limit_enabled: str | None = Form(None),
     free_small_daily_limit: int = Form(0),
+    idle_free_small_multiplier: float | None = Form(None),
     allowed_endpoints: list[str] | None = Form(None),
     allowed_upstreams: list[str] | None = Form(None),
     image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
@@ -554,6 +562,8 @@ async def update_user_form(
     else:
         if parsed_group_id != current_group_id:
             payload_data["group_id"] = parsed_group_id
+        if idle_free_small_multiplier is not None:
+            payload_data["idle_free_small_multiplier"] = idle_free_small_multiplier
         payload_data.update(
             {
                 "tier": tier,
@@ -643,6 +653,7 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
 
     free_small_daily_limit_enabled = bool(value("free_small_daily_limit_enabled"))
     free_small_daily_limit = int(value("free_small_daily_limit"))
+    idle_free_small_multiplier = float(value("idle_free_small_multiplier"))
     validate_free_small_daily_limit(free_small_daily_limit_enabled, free_small_daily_limit)
     reset_period = str(value("reset_period"))
     reset_day = normalize_reset_day_or_400(reset_period, value("reset_day"))
@@ -657,6 +668,7 @@ def _build_create_user_input(db: Database, payload: CreateUserRequest) -> Create
         free_small_only=bool(value("free_small_only")),
         free_small_daily_limit_enabled=free_small_daily_limit_enabled,
         free_small_daily_limit=free_small_daily_limit,
+        idle_free_small_multiplier=idle_free_small_multiplier,
         allowed_endpoints=list(value("allowed_endpoints")),
         allowed_upstreams=list(value("allowed_upstreams")),
         image_format_policy=normalize_image_format_policy_or_400(value("image_format_policy")),
@@ -692,6 +704,7 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
 
     free_small_daily_limit_enabled = optional_value("free_small_daily_limit_enabled")
     free_small_daily_limit = optional_value("free_small_daily_limit")
+    idle_free_small_multiplier = optional_value("idle_free_small_multiplier")
     _validate_update_free_small_daily_limit(db, user_id, free_small_daily_limit_enabled, free_small_daily_limit)
     allowed_endpoints = optional_value("allowed_endpoints")
     allowed_upstreams = optional_value("allowed_upstreams")
@@ -714,6 +727,7 @@ def _build_update_user_input(db: Database, user_id: int, payload: UpdateUserRequ
             bool(free_small_daily_limit_enabled) if free_small_daily_limit_enabled is not None else None
         ),
         free_small_daily_limit=int(free_small_daily_limit) if free_small_daily_limit is not None else None,
+        idle_free_small_multiplier=float(idle_free_small_multiplier) if idle_free_small_multiplier is not None else None,
         allowed_endpoints=list(allowed_endpoints) if allowed_endpoints is not None else None,
         allowed_upstreams=list(allowed_upstreams) if allowed_upstreams is not None else None,
         image_format_policy=(

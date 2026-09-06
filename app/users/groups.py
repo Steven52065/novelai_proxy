@@ -38,6 +38,7 @@ class UserGroupInput:
     default_free_small_only: bool = True
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = 0
+    idle_free_small_multiplier: float = 0.0
     default_allowed_endpoints: list[str] = field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     default_allowed_upstreams: list[str] = field(default_factory=list)
     default_image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
@@ -54,6 +55,7 @@ class UserGroupUpdateInput:
     default_free_small_only: bool | None = None
     free_small_daily_limit_enabled: bool | None = None
     free_small_daily_limit: int | None = None
+    idle_free_small_multiplier: float | None = None
     default_allowed_endpoints: list[str] | None = None
     default_allowed_upstreams: list[str] | None = None
     default_image_format_policy: ImageFormatPolicy | None = None
@@ -105,6 +107,11 @@ def _display_daily_limit(value: object) -> str:
     return f"启用（每日 {limit} 张）" if enabled else "关闭"
 
 
+def _display_idle_multiplier(value: object) -> str:
+    multiplier = float(value or 0)
+    return "0（关闭）" if multiplier == 0 else f"{multiplier:g} 倍"
+
+
 def _display_allowed_upstreams(value: object) -> str:
     return str(value) if value else "全部上游"
 
@@ -154,6 +161,19 @@ MEMBER_FIELD_SPECS = (
             "free_small_daily_limit": int(value[1]),
         },
         display_value=_display_daily_limit,
+    ),
+    MemberFieldSpec(
+        name="idle_free_small_multiplier",
+        label="空闲免费小图倍率",
+        group_value=lambda row: float(row["idle_free_small_multiplier"] or 0),
+        merged_value=lambda current, data: (
+            float(data.idle_free_small_multiplier)
+            if data.idle_free_small_multiplier is not None
+            else current
+        ),
+        user_value=lambda row: float(row["idle_free_small_multiplier"] or 0),
+        user_columns=lambda value: {"idle_free_small_multiplier": float(value)},
+        display_value=_display_idle_multiplier,
     ),
     MemberFieldSpec(
         name="member_rate_limit_rules",
@@ -236,10 +256,11 @@ def create_group(db: Database, data: UserGroupInput) -> int:
         INSERT INTO user_groups (
             name, is_active, default_tier, default_free_small_only,
             free_small_daily_limit_enabled, free_small_daily_limit,
+            idle_free_small_multiplier,
             default_allowed_endpoints, default_allowed_upstreams, default_image_format_policy, default_anlas_total,
             default_reset_period, default_reset_day, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data.name,
@@ -248,6 +269,7 @@ def create_group(db: Database, data: UserGroupInput) -> int:
             1 if data.default_free_small_only else 0,
             1 if data.free_small_daily_limit_enabled else 0,
             data.free_small_daily_limit,
+            data.idle_free_small_multiplier,
             AllowedEndpoints.of(data.default_allowed_endpoints).serialize(),
             AllowedUpstreams.of(data.default_allowed_upstreams).serialize(),
             normalize_image_format_policy(data.default_image_format_policy),
@@ -283,6 +305,9 @@ def update_group(db: Database, group_id: int, data: UserGroupUpdateInput) -> boo
     if data.free_small_daily_limit is not None:
         fields.append("free_small_daily_limit = ?")
         params.append(data.free_small_daily_limit)
+    if data.idle_free_small_multiplier is not None:
+        fields.append("idle_free_small_multiplier = ?")
+        params.append(data.idle_free_small_multiplier)
     if data.default_allowed_endpoints is not None:
         fields.append("default_allowed_endpoints = ?")
         params.append(AllowedEndpoints.of(data.default_allowed_endpoints).serialize())
@@ -410,6 +435,7 @@ def group_defaults(row: sqlite3.Row) -> dict[str, object]:
         "free_small_only": bool(row["default_free_small_only"]),
         "free_small_daily_limit_enabled": bool(row["free_small_daily_limit_enabled"]),
         "free_small_daily_limit": int(row["free_small_daily_limit"] or 0),
+        "idle_free_small_multiplier": float(row["idle_free_small_multiplier"] or 0),
         "allowed_endpoints": AllowedEndpoints.parse(row["default_allowed_endpoints"]).as_list(),
         "allowed_upstreams": AllowedUpstreams.parse(row["default_allowed_upstreams"]).as_list(),
         "image_format_policy": normalize_image_format_policy(row["default_image_format_policy"]),
@@ -426,6 +452,7 @@ def apply_group_defaults(row: sqlite3.Row) -> UpdateUserInput:
         free_small_only=bool(defaults["free_small_only"]),
         free_small_daily_limit_enabled=bool(defaults["free_small_daily_limit_enabled"]),
         free_small_daily_limit=int(defaults["free_small_daily_limit"]),
+        idle_free_small_multiplier=float(defaults["idle_free_small_multiplier"]),
         allowed_endpoints=list(defaults["allowed_endpoints"]),
         allowed_upstreams=list(defaults["allowed_upstreams"]),
         image_format_policy=normalize_image_format_policy(defaults["image_format_policy"]),
@@ -564,7 +591,7 @@ def _load_group_members_with_values(db: Database, group_id: int) -> list[tuple[i
     rows = db.query_all(
         """
         SELECT u.id, u.tier, u.free_small_only,
-               u.free_small_daily_limit_enabled, u.free_small_daily_limit,
+               u.free_small_daily_limit_enabled, u.free_small_daily_limit, u.idle_free_small_multiplier,
                u.allowed_endpoints, u.allowed_upstreams, u.image_format_policy,
                q.total AS anlas_total, q.reset_period AS reset_period, q.reset_day AS reset_day
         FROM users u

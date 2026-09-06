@@ -62,6 +62,7 @@ class CreateUserGroupRequest(BaseModel):
     default_free_small_only: bool = True
     free_small_daily_limit_enabled: bool = False
     free_small_daily_limit: int = Field(default=0, ge=0)
+    idle_free_small_multiplier: float = Field(default=0, ge=0, allow_inf_nan=False)
     default_allowed_endpoints: list[str] = Field(default_factory=lambda: [DEFAULT_ALLOWED_ENDPOINTS])
     default_allowed_upstreams: list[str] = Field(default_factory=list)
     default_image_format_policy: ImageFormatPolicy = DEFAULT_IMAGE_FORMAT_POLICY
@@ -83,6 +84,7 @@ class UpdateUserGroupRequest(BaseModel):
     default_free_small_only: bool | None = None
     free_small_daily_limit_enabled: bool | None = None
     free_small_daily_limit: int | None = Field(default=None, ge=0)
+    idle_free_small_multiplier: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     default_allowed_endpoints: list[str] | None = None
     default_allowed_upstreams: list[str] | None = None
     default_image_format_policy: ImageFormatPolicy | None = None
@@ -103,6 +105,7 @@ class SyncGroupMembersRequest(BaseModel):
             "tier",
             "free_small_only",
             "free_small_daily_limit",
+            "idle_free_small_multiplier",
             "member_rate_limit_rules",
             "allowed_endpoints",
             "allowed_upstreams",
@@ -140,6 +143,7 @@ async def create_user_group(payload: CreateUserGroupRequest, request: Request):
             default_free_small_only=payload.default_free_small_only,
             free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
             free_small_daily_limit=payload.free_small_daily_limit,
+            idle_free_small_multiplier=payload.idle_free_small_multiplier,
             default_allowed_endpoints=payload.default_allowed_endpoints,
             default_allowed_upstreams=payload.default_allowed_upstreams,
             default_image_format_policy=payload.default_image_format_policy,
@@ -205,6 +209,7 @@ def _build_group_update_input(
         default_free_small_only=payload.default_free_small_only,
         free_small_daily_limit_enabled=payload.free_small_daily_limit_enabled,
         free_small_daily_limit=payload.free_small_daily_limit,
+        idle_free_small_multiplier=payload.idle_free_small_multiplier,
         default_allowed_endpoints=payload.default_allowed_endpoints,
         default_allowed_upstreams=payload.default_allowed_upstreams,
         default_image_format_policy=payload.default_image_format_policy,
@@ -298,6 +303,7 @@ async def create_user_group_form(
     default_free_small_only: str | None = Form(None),
     free_small_daily_limit_enabled: str | None = Form(None),
     free_small_daily_limit: int = Form(0),
+    idle_free_small_multiplier: float = Form(0),
     default_allowed_endpoints: list[str] | None = Form(None),
     default_allowed_upstreams: list[str] | None = Form(None),
     default_image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
@@ -313,6 +319,7 @@ async def create_user_group_form(
             default_free_small_only=default_free_small_only == "on",
             free_small_daily_limit_enabled=free_small_daily_limit_enabled == "on",
             free_small_daily_limit=free_small_daily_limit,
+            idle_free_small_multiplier=idle_free_small_multiplier,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
             default_image_format_policy=normalize_image_format_policy_or_400(default_image_format_policy),
@@ -383,6 +390,7 @@ async def update_user_group_form(
     default_free_small_only: str | None = Form(None),
     free_small_daily_limit_enabled: str | None = Form(None),
     free_small_daily_limit: int = Form(0),
+    idle_free_small_multiplier: float | None = Form(None),
     default_allowed_endpoints: list[str] | None = Form(None),
     default_allowed_upstreams: list[str] | None = Form(None),
     default_image_format_policy: str = Form(DEFAULT_IMAGE_FORMAT_POLICY),
@@ -412,6 +420,7 @@ async def update_user_group_form(
             default_free_small_only=default_free_small_only == "on",
             free_small_daily_limit_enabled=free_small_daily_limit_enabled == "on",
             free_small_daily_limit=free_small_daily_limit,
+            idle_free_small_multiplier=idle_free_small_multiplier,
             default_allowed_endpoints=default_allowed_endpoints or [],
             default_allowed_upstreams=default_allowed_upstreams or [],
             default_image_format_policy=normalize_image_format_policy_or_400(default_image_format_policy),

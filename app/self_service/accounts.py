@@ -100,6 +100,7 @@ def login_or_register_discord_user(
                 free_small_only=bool(defaults["free_small_only"]),
                 free_small_daily_limit_enabled=bool(defaults["free_small_daily_limit_enabled"]),
                 free_small_daily_limit=int(defaults["free_small_daily_limit"]),
+                idle_free_small_multiplier=float(defaults["idle_free_small_multiplier"]),
                 allowed_endpoints=list(defaults["allowed_endpoints"]),
                 allowed_upstreams=list(defaults["allowed_upstreams"]),
                 image_format_policy=str(defaults["image_format_policy"]),
