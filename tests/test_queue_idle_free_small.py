@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.api_errors import APIError
 from app.config import LoggingConfig
 from app.database import Database, utc_now_iso
 from app.free_small_daily_limit import FreeSmallDailyLimitManager
@@ -27,6 +28,20 @@ class ImmediateUpstream:
     async def generate_image_payload_zip(self, payload):
         self.calls += 1
         return b"idle-image"
+
+
+class Retry429OnceUpstream:
+    def __init__(self):
+        self.calls = 0
+
+    async def generate_image_payload_zip(self, payload):
+        self.calls += 1
+        raise APIError(
+            "Too many requests",
+            request=payload,
+            response={"message": "Too many requests"},
+            code="429",
+        )
 
 
 class BlockingUpstream:
@@ -138,6 +153,80 @@ def test_idle_free_small_request_rejected_when_worker_was_recently_busy(tmp_path
     asyncio.run(run_test())
 
 
+def test_idle_free_small_cancel_before_http_releases_reservation(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = ImmediateUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        try:
+            future = queue.enqueue(
+                request_id="idle-cancel",
+                user_id=context["user_id"],
+                tier="normal",
+                action="generate",
+                logging_config=LoggingConfig(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                process_zip_response=False,
+                accounting=_accounting(context, "idle-cancel"),
+                idle_free_small=context["context"],
+            )
+            future.cancel()
+            deadline = 0
+            while deadline < 100 and context["idle"].get_snapshot(context["user_id"]).reserved != 0:
+                await asyncio.sleep(0.01)
+                deadline += 1
+            assert upstream.calls == 0
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert snapshot.reserved == 0
+            assert snapshot.used == 0
+        finally:
+            await queue.stop()
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def test_idle_free_small_retry_rejected_when_tracker_is_not_idle(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=30)
+        upstream = Retry429OnceUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        context["clock"][0] = 30.0
+        try:
+            with pytest.raises(IdleFreeSmallRejected):
+                await asyncio.wait_for(
+                    queue.enqueue(
+                        request_id="idle-retry",
+                        user_id=context["user_id"],
+                        tier="normal",
+                        action="generate",
+                        logging_config=LoggingConfig(),
+                        estimated_cost=0,
+                        handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                        process_zip_response=False,
+                        accounting=_accounting(context, "idle-retry"),
+                        idle_free_small=context["context"],
+                    ),
+                    timeout=1,
+                )
+            assert upstream.calls == 1
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert snapshot.used == 0
+            assert snapshot.reserved == 0
+            log = context["usage_logs"].get_by_request_id("idle-retry")
+            assert log["status"] == "failed"
+            assert log["error_code"] == "429"
+            assert log["attempt_number"] == 0
+        finally:
+            await queue.stop()
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
 def _proxy_queue(context: dict, upstream, *, tracker: IdleFreeSmallTracker) -> RoutingProxyQueue:
     return RoutingProxyQueue(
         targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],
@@ -178,6 +267,22 @@ def _idle_context(tmp_path: Path, *, min_idle_seconds: float) -> dict:
     usage_logs.insert_queued(
         UsageLogCreate(
             request_id="idle-rejected",
+            user_id=user_id,
+            action="generate",
+            estimated_anlas_cost=0,
+        )
+    )
+    usage_logs.insert_queued(
+        UsageLogCreate(
+            request_id="idle-cancel",
+            user_id=user_id,
+            action="generate",
+            estimated_anlas_cost=0,
+        )
+    )
+    usage_logs.insert_queued(
+        UsageLogCreate(
+            request_id="idle-retry",
             user_id=user_id,
             action="generate",
             estimated_anlas_cost=0,
