@@ -135,6 +135,12 @@
       </div>
 
       <label>
+        空闲免费小图倍率
+        <input name="idle_free_small_multiplier" type="number" min="0" step="any" value="0">
+        <span class="muted muted-sm">0 关闭；每日额外次数为基准限额乘倍率后向下取整</span>
+      </label>
+
+      <label>
         图片输出格式
         <select name="image_format_policy">
           {% for choice in image_format_policy_choices %}
@@ -296,6 +302,15 @@
             <div class="muted muted-sm badge-mt">
               可用 {{ daily.available }} 张
             </div>
+            {% endif %}
+            {% set idle = user.idle_free_small_daily %}
+            {% if idle.enabled %}
+            <span class="badge badge-daily badge-ml">空闲免费 {{ idle.used }}/{{ idle.limit }}</span>
+            <div class="muted muted-sm badge-mt">
+              空闲可用 {{ idle.available }} 张
+            </div>
+            {% elif user.idle_free_small_multiplier|float > 0 %}
+            <span class="badge badge-muted badge-ml">空闲倍率 {{ user.idle_free_small_multiplier or 0 }}（不生效）</span>
             {% endif %}
             <div class="badge-cluster">
               {% for label in user.allowed_endpoint_labels %}

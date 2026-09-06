@@ -123,7 +123,9 @@ async def list_users(request: Request):
         ORDER BY u.id DESC
         """
     )
-    return {"users": [user_row_to_dict(row) for row in rows]}
+    users = [user_row_to_dict(row) for row in rows]
+    _attach_idle_free_small_snapshots(request, users)
+    return {"users": users}
 
 
 @api_router.get("/users/search")
@@ -349,6 +351,7 @@ async def users_page(request: Request):
     )
     users = [user_row_to_dict(row) for row in rows]
     _attach_free_small_daily_snapshots(request, users)
+    _attach_idle_free_small_snapshots(request, users)
     user_list_query = urlencode(
         {
             "q": query,
@@ -493,6 +496,7 @@ async def user_edit_page(user_id: int, request: Request):
     ]
     user_data = user_row_to_dict(user)
     user_data["free_small_daily"] = request.app.state.free_small_daily_limit_manager.get_snapshot(user_id)
+    user_data["idle_free_small_daily"] = request.app.state.idle_free_small_daily_limit_manager.get_snapshot(user_id)
     response = templates.TemplateResponse(
         request,
         "user_edit.html",
@@ -802,6 +806,16 @@ def _groups_for_select(db: Database, active_only: bool) -> list[dict]:
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _attach_idle_free_small_snapshots(request: Request, users: list[dict]) -> None:
+    if not users:
+        return
+    manager = request.app.state.idle_free_small_daily_limit_manager
+    user_ids = [int(user["id"]) for user in users]
+    snapshots = manager.get_snapshots(user_ids)
+    for user in users:
+        user["idle_free_small_daily"] = snapshots[int(user["id"])]
 
 
 def _attach_free_small_daily_snapshots(request: Request, users: list[dict]) -> None:

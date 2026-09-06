@@ -290,6 +290,7 @@ async def user_groups_page(request: Request):
             "endpoint_choices": ALLOWED_ENDPOINT_CHOICES,
             "upstream_choices": upstream_choices(request),
             "image_format_policy_choices": IMAGE_FORMAT_POLICY_CHOICES,
+            "idle_free_small_settings": request.app.state.config.idle_free_small,
         },
     )
 

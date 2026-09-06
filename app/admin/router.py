@@ -10,6 +10,7 @@ from .database import api_router as database_api_router
 from .database import web_router as database_web_router
 from .groups import api_router as groups_api_router
 from .groups import web_router as groups_web_router
+from .idle_free_small import api_router as idle_free_small_api_router
 from .logs import api_router as logs_api_router
 from .logs import web_router as logs_web_router
 from .notifications import api_router as notifications_api_router
@@ -25,6 +26,7 @@ router = APIRouter(tags=["admin"])
 for child_router in (
     users_api_router,
     groups_api_router,
+    idle_free_small_api_router,
     logs_api_router,
     dashboard_api_router,
     database_api_router,

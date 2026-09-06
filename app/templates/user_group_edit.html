@@ -109,6 +109,12 @@
         </div>
 
         <label>
+          空闲免费小图倍率
+          <input name="idle_free_small_multiplier" type="number" min="0" step="any" value="{{ group.idle_free_small_multiplier or 0 }}">
+          <span class="muted muted-sm">0 关闭；每日额外次数为基准限额乘倍率后向下取整{% if not group.free_small_daily_limit_enabled %}；当前原日限额关闭，倍率暂不生效{% endif %}</span>
+        </label>
+
+        <label>
           默认图片输出格式
           <select name="default_image_format_policy">
             {% for choice in image_format_policy_choices %}
@@ -260,6 +266,10 @@
           <label class="check check-muted">
             <input name="fields" type="checkbox" value="free_small_daily_limit">
             免费小图单日限制
+          </label>
+          <label class="check check-muted">
+            <input name="fields" type="checkbox" value="idle_free_small_multiplier">
+            空闲免费小图倍率
           </label>
           <label class="check check-muted">
             <input name="fields" type="checkbox" value="member_rate_limit_rules">
@@ -633,6 +643,15 @@
       return Number.isNaN(value) ? 0 : value;
     }
 
+    function idleMultiplierValue() {
+      const raw = form.elements["idle_free_small_multiplier"].value.trim();
+      const value = raw === "" ? 0 : Number(raw);
+      if (!Number.isFinite(value) || value < 0) {
+        return null;
+      }
+      return value;
+    }
+
     function buildPayload() {
       return {
         name: form.elements["name"].value,
@@ -641,6 +660,7 @@
         default_free_small_only: form.elements["default_free_small_only"].checked,
         free_small_daily_limit_enabled: form.elements["free_small_daily_limit_enabled"].checked,
         free_small_daily_limit: intValue("free_small_daily_limit"),
+        idle_free_small_multiplier: idleMultiplierValue(),
         default_allowed_endpoints: checkedValues("default_allowed_endpoints"),
         default_allowed_upstreams: checkedValues("default_allowed_upstreams"),
         default_image_format_policy: form.elements["default_image_format_policy"].value,
@@ -688,6 +708,11 @@
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      const idleMultiplier = idleMultiplierValue();
+      if (idleMultiplier === null) {
+        showToast("空闲免费小图倍率必须是非负有限数字", "error");
+        return;
+      }
       fetch("/admin/api/user-groups/{{ group.id }}/propagation-preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -92,6 +92,22 @@
     </section>
     {% endif %}
 
+    {% set idle = user.idle_free_small_daily %}
+    {% if idle.enabled or idle.used or idle.reserved %}
+    <section class="panel panel-flush">
+      <h2 class="h2-sm h2-mb">
+        <i data-lucide="clock" class="h2-icon h2-icon-cyan"></i>
+        空闲免费小图次数
+      </h2>
+      <div class="metrics metrics-flush">
+        <div><span>已用</span><strong>{{ idle.used }}</strong></div>
+        <div><span>锁定</span><strong>{{ idle.reserved }}</strong></div>
+        <div><span>上限</span><strong>{{ idle.limit }}</strong></div>
+        <div><span>可用</span><strong>{{ idle.available }}</strong></div>
+      </div>
+    </section>
+    {% endif %}
+
     <!-- Quota Visual Card -->
     {% if (user.anlas_total or 0) > 0 %}
     <section class="panel panel-flush">
@@ -256,6 +272,12 @@
             <input name="free_small_daily_limit" type="number" min="0" value="{{ user.free_small_daily_limit or 0 }}">
           </label>
         </div>
+
+        <label>
+          空闲免费小图倍率
+          <input name="idle_free_small_multiplier" type="number" min="0" step="any" value="{{ user.idle_free_small_multiplier or 0 }}">
+          <span class="muted muted-sm">0 关闭；每日额外次数为基准限额乘倍率后向下取整{% if not user.free_small_daily_limit_enabled %}；当前原日限额关闭，倍率暂不生效{% endif %}</span>
+        </label>
 
         <label>
           图片输出格式

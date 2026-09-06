@@ -1895,3 +1895,68 @@ def test_admin_rejects_invalid_idle_multiplier(tmp_path: Path, monkeypatch):
             json={"name": "bad-idle-group", "idle_free_small_multiplier": -1},
         )
         assert bad_group.status_code == 400
+
+
+def test_admin_idle_free_small_settings_endpoint_and_user_list_payload(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        settings = client.get("/admin/api/idle-free-small-settings", auth=("admin", "admin123"))
+        assert settings.status_code == 200
+        assert settings.json() == {"occupancy_threshold_percent": 50, "min_idle_seconds": 30}
+
+        created = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={
+                "name": "idle-list-user",
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 4,
+                "idle_free_small_multiplier": 0.5,
+            },
+        )
+        assert created.status_code == 200
+        user_id = created.json()["user_id"]
+        client.app.state.idle_free_small_daily_limit_manager.try_reserve(user_id)
+
+        users = client.get("/admin/api/users", auth=("admin", "admin123")).json()["users"]
+        row = next(user for user in users if user["id"] == user_id)
+        assert row["idle_free_small_multiplier"] == 0.5
+        idle = row["idle_free_small_daily"]
+        assert idle["enabled"] is True
+        assert idle["limit"] == 2
+        assert idle["used"] == 0
+        assert idle["reserved"] == 1
+        assert idle["available"] == 1
+
+
+def test_admin_idle_free_small_ui_renders_readonly_settings_and_fields(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+
+        group_page = client.get("/admin/user-groups")
+        assert group_page.status_code == 200
+        assert "空闲免费小图倍率" in group_page.text
+        assert "修改配置文件后重启生效" in group_page.text
+
+        group_response = client.post(
+            "/admin/api/user-groups",
+            auth=("admin", "admin123"),
+            json={
+                "name": "ui-group",
+                "free_small_daily_limit_enabled": True,
+                "free_small_daily_limit": 10,
+                "idle_free_small_multiplier": 0.5,
+            },
+        )
+        group_id = group_response.json()["group_id"]
+        detail = client.get(f"/admin/user-groups/{group_id}")
+        assert detail.status_code == 200
+        assert "空闲免费小图倍率" in detail.text
+        assert "idle_free_small_multiplier" in detail.text
