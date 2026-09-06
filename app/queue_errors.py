@@ -38,3 +38,11 @@ class Retry429Error(Exception):
 
 class UpstreamItemRerouted(Exception):
     """Internal sentinel for a per-upstream attempt moved back to dispatch."""
+
+
+class IdleFreeSmallRejected(Exception):
+    '''本地空闲兜底门槛拒绝，仅用于层间传递，不映射新的外部错误码。'''
+
+    def __init__(self, context=None):
+        self.context = context
+        super().__init__('idle free small rejected')
