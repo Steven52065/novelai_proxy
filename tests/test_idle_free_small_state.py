@@ -125,3 +125,30 @@ def test_attach_and_detach_record_only_real_state_changes():
     clock[0] = 2.0
     tracker.detach("a", token)
     assert [len(event.enabled_ids) for event in tracker.events] == [0, 1, 0]
+
+
+def test_natural_concurrency_follows_strict_threshold():
+    tracker, clock = _tracker(threshold=50, seconds=30)
+    tokens = [object() for _ in range(4)]
+    for upstream_id, token in zip(("a", "b", "c", "d"), tokens):
+        tracker.attach(upstream_id, token)
+    tracker.start()
+    tracker.record_started(tokens[0], "a")
+    tracker.record_started(tokens[1], "b")
+    clock[0] = 30.0
+    assert tracker.is_idle() is False
+    tracker.record_finished(tokens[1])
+    clock[0] = 60.0
+    assert tracker.is_idle() is True
+
+    threshold_sixty, clock_sixty = _tracker(threshold=60, seconds=30)
+    tokens_sixty = [object() for _ in range(4)]
+    for upstream_id, token in zip(("a", "b", "c", "d"), tokens_sixty):
+        threshold_sixty.attach(upstream_id, token)
+    threshold_sixty.start()
+    threshold_sixty.record_started(tokens_sixty[0], "a")
+    threshold_sixty.record_started(tokens_sixty[1], "b")
+    clock_sixty[0] = 30.0
+    assert threshold_sixty.is_idle() is True
+    threshold_sixty.record_started(tokens_sixty[2], "c")
+    assert threshold_sixty.is_idle() is False

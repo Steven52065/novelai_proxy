@@ -153,3 +153,55 @@ def _create_user(client: TestClient, **overrides):
     response = client.post("/admin/api/users", auth=("admin", "admin123"), json=payload)
     assert response.status_code == 200
     return response.json()
+
+
+def test_idle_fallback_triggers_when_normal_reserved_plus_used_exhausted(tmp_path: Path, monkeypatch):
+    config_path = _write_idle_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        user = _create_user(
+            client,
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=1,
+            idle_free_small_multiplier=1,
+        )
+        client.app.state.free_small_daily_limit_manager.reserve(user["user_id"], 1)
+        api_key = user["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        response = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        assert response.status_code == 201
+        normal = client.app.state.free_small_daily_limit_manager.get_snapshot(user["user_id"])
+        idle = client.app.state.idle_free_small_daily_limit_manager.get_snapshot(user["user_id"])
+        assert normal.used == 0
+        assert normal.reserved == 1
+        assert idle.used == 1
+        assert idle.reserved == 0
+
+
+def test_idle_fallback_disabled_when_multiplier_zero(tmp_path: Path, monkeypatch):
+    config_path = _write_idle_config(tmp_path)
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        user = _create_user(
+            client,
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=1,
+            idle_free_small_multiplier=0,
+        )
+        api_key = user["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        assert client.post("/ai/generate-image", headers=headers, json=PAYLOAD).status_code == 201
+        second = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        assert second.status_code == 429
+        idle = client.app.state.idle_free_small_daily_limit_manager.get_snapshot(user["user_id"])
+        assert idle.enabled is False
+        assert idle.used == 0
+        assert idle.reserved == 0

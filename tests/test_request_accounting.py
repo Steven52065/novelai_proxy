@@ -426,3 +426,38 @@ def test_both_reservation_pools_are_rejected():
             idle_free_small_daily_limit_manager=RecordingIdle([]),
             idle_free_small_reservation=_idle_reservation(),
         )
+
+
+def test_idle_retry_success_confirms_only_once_after_reattempt():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=RecordingQuota(calls),
+        usage_logs=RecordingUsageLogs(calls),
+        request_id="req-idle-retry",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=RecordingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    accounting.record_retry_failure(
+        queued_ms=10,
+        error_code="429",
+        error_message="Too many requests",
+        attempt_number=0,
+    )
+    accounting.record_retry_attempt(attempt_number=1, upstream_id="opus-a")
+    accounting.settle_success(
+        queued_ms=20,
+        final_cost=7,
+        output_files=[],
+        is_retry_success=True,
+        attempt_number=1,
+    )
+    assert [call[0] for call in calls] == [
+        "log.mark_failed",
+        "log.insert_retry_attempt",
+        "quota.confirm",
+        "idle.confirm",
+        "log.mark_success",
+    ]
+    assert calls.count(("idle.confirm", accounting.idle_free_small_reservation)) == 1
