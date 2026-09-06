@@ -30,6 +30,8 @@ from .database import Database, validate_discord_self_service_config
 from .database_maintenance import auto_vacuum_loop
 from .domain_errors import DomainError
 from .free_small_daily_limit import FreeSmallDailyLimitManager
+from .idle_free_small import IdleFreeSmallTracker
+from .idle_free_small_daily_limit import IdleFreeSmallDailyLimitManager
 from .image_hosts import ImageHostingService
 from .logging_utils import RequestLoggingMiddleware, configure_logging, json_dumps, logger
 from .payload_archive import PayloadArchiveService
@@ -62,12 +64,19 @@ async def lifespan(app: FastAPI):
         db,
         reset_hour_utc8=config.free_small_daily_limit.reset_hour_utc8,
     )
+    idle_free_small_daily_limit_manager = IdleFreeSmallDailyLimitManager(
+        db,
+        reset_hour_utc8=config.free_small_daily_limit.reset_hour_utc8,
+    )
     reclaimed_anlas_rows = quota_manager.reclaim_orphan_reserved()
     reclaimed_free_small_rows = free_small_daily_limit_manager.reclaim_orphan_reserved()
+    reclaimed_idle_free_small_rows = idle_free_small_daily_limit_manager.reclaim_orphan_reserved()
     if reclaimed_anlas_rows:
         logger.warning("reclaimed orphan anlas reservations rows=%s", reclaimed_anlas_rows)
     if reclaimed_free_small_rows:
         logger.warning("reclaimed orphan free-small daily reservations rows=%s", reclaimed_free_small_rows)
+    if reclaimed_idle_free_small_rows:
+        logger.warning("reclaimed orphan idle free-small reservations rows=%s", reclaimed_idle_free_small_rows)
     usage_logs = UsageLogRepository(
         db,
         on_change=dashboard_events.notify_nowait,
@@ -90,6 +99,10 @@ async def lifespan(app: FastAPI):
             config.self_service.upstreams.max_per_user,
         )
     default_upstream_id = app.state.default_upstream_id
+    idle_free_small_tracker = IdleFreeSmallTracker(
+        occupancy_threshold_percent=config.idle_free_small.occupancy_threshold_percent,
+        min_idle_seconds=config.idle_free_small.min_idle_seconds,
+    )
     proxy_queue = RoutingProxyQueue(
         targets=upstream_runtime.queue_targets(),
         quota_manager=quota_manager,
@@ -111,6 +124,7 @@ async def lifespan(app: FastAPI):
         image_hosting=ImageHostingService(config.image_hosting),
         on_change=dashboard_events.notify_nowait,
         on_upstream_api_error=upstream_auto_disable.handle_api_error,
+        tracker=idle_free_small_tracker,
     )
 
     app.state.config = config
@@ -118,6 +132,8 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     app.state.quota_manager = quota_manager
     app.state.free_small_daily_limit_manager = free_small_daily_limit_manager
+    app.state.idle_free_small_daily_limit_manager = idle_free_small_daily_limit_manager
+    app.state.idle_free_small_tracker = idle_free_small_tracker
     app.state.usage_logs = usage_logs
     app.state.admin_notifications = admin_notifications
     app.state.payload_archive_service = payload_archive_service
@@ -137,6 +153,7 @@ async def lifespan(app: FastAPI):
         rate_limiter=app.state.rate_limiter,
         quota_manager=quota_manager,
         free_small_daily_limit_manager=free_small_daily_limit_manager,
+        idle_free_small_daily_limit_manager=idle_free_small_daily_limit_manager,
         proxy_queue=proxy_queue,
         usage_logs=usage_logs,
         logging_config=config.logging,

@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from ..api_errors import APIError, api_error_status_code
 from ..auth import UserContext
+from ..daily_windows import seconds_until
 from ..config import LoggingConfig
 from ..free_small_daily_limit import (
     FreeSmallDailyLimitExceeded,
     FreeSmallDailyLimitManager,
     FreeSmallDailyReservation,
 )
+from ..idle_free_small import IdleFreeSmallContext
+from ..idle_free_small_daily_limit import IdleFreeSmallDailyLimitManager, IdleFreeSmallReservation
 from ..logging_utils import json_dumps, logger
 from ..queue_errors import (
+    IdleFreeSmallRejected,
     NoAvailableUpstream,
     QueueClosed,
     QueueFull,
@@ -66,6 +71,8 @@ class ProxyTaskResult:
 class PreQueueCheck:
     rejected: ProxyTaskResult | None = None
     free_small_daily_reservation: FreeSmallDailyReservation | None = None
+    idle_free_small_reservation: IdleFreeSmallReservation | None = None
+    idle_free_small_context: IdleFreeSmallContext | None = None
 
 
 RuleValue = int | str | Callable[[BaseException], int | str]
@@ -89,6 +96,33 @@ def _api_error_response_status(exc: BaseException) -> int:
     if isinstance(exc, APIError):
         return api_error_status_code(exc)
     return 502
+
+
+def _daily_limit_result_from_context(request_id: str, context: IdleFreeSmallContext | None) -> ProxyTaskResult:
+    if context is None:
+        return ProxyTaskResult(
+            status_code=429,
+            content={"message": "免费小图每日限额已用尽", "retry_after": 0},
+            request_id=request_id,
+        )
+    snapshot = context.daily_snapshot
+    retry_after = seconds_until(snapshot.reset_at, datetime.now(timezone.utc))
+    message = f"免费小图每日限额已用尽：每日最多 {snapshot.limit} 次"
+    return ProxyTaskResult(
+        status_code=429,
+        content={
+            "message": message,
+            "retry_after": retry_after,
+            "limit_scope": snapshot.scope,
+            "limit": snapshot.limit,
+            "used": snapshot.used,
+            "reserved": snapshot.reserved,
+            "requested": context.requested,
+            "remaining": max(snapshot.limit - snapshot.used - snapshot.reserved, 0),
+        },
+        headers={"Retry-After": str(retry_after)},
+        request_id=request_id,
+    )
 
 
 QUEUE_FULL_RULE = QueueExceptionRule(
@@ -165,6 +199,7 @@ class ProxyRequestService:
         rate_limiter: RateLimiter,
         quota_manager: QuotaManager,
         free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
+        idle_free_small_daily_limit_manager: IdleFreeSmallDailyLimitManager | None = None,
         proxy_queue: RoutingProxyQueue,
         usage_logs: UsageLogRepository,
         logging_config: LoggingConfig,
@@ -172,6 +207,7 @@ class ProxyRequestService:
         self.rate_limiter = rate_limiter
         self.quota_manager = quota_manager
         self.free_small_daily_limit_manager = free_small_daily_limit_manager
+        self.idle_free_small_daily_limit_manager = idle_free_small_daily_limit_manager
         self.proxy_queue = proxy_queue
         self.usage_logs = usage_logs
         self.logging_config = logging_config
@@ -212,6 +248,8 @@ class ProxyRequestService:
             estimated_cost=task.estimated_cost,
             free_small_daily_limit_manager=self.free_small_daily_limit_manager,
             free_small_daily_reservation=pre_queue.free_small_daily_reservation,
+            idle_free_small_daily_limit_manager=self.idle_free_small_daily_limit_manager,
+            idle_free_small_reservation=pre_queue.idle_free_small_reservation,
         )
 
         try:
@@ -245,6 +283,7 @@ class ProxyRequestService:
                 process_zip_response=task.process_zip_response,
                 allowed_upstreams=task.user.allowed_upstreams,
                 accounting=accounting,
+                idle_free_small=pre_queue.idle_free_small_context,
             )
         except (QueueClosed, QueueFull) as exc:
             return self._queue_exception_result(request_id, task, accounting, exc, ENQUEUE_EXCEPTION_RULES)
@@ -254,6 +293,8 @@ class ProxyRequestService:
         except asyncio.CancelledError:
             queue_future.cancel()
             raise
+        except IdleFreeSmallRejected as exc:
+            return self._idle_free_small_rejection_result(request_id, exc.context)
         except (QueueFull, NoAvailableUpstream, UserUnavailable, APIError, UpstreamExecutionTimeout) as exc:
             return self._queue_exception_result(request_id, task, accounting, exc, QUEUE_RESULT_EXCEPTION_RULES)
         except Exception as exc:
@@ -357,8 +398,12 @@ class ProxyRequestService:
                 log_level="INFO",
             )
 
+        quota_now = datetime.now(timezone.utc)
+        free_small_daily_reservation = None
+        idle_free_small_reservation = None
+        idle_free_small_context = None
         try:
-            free_small_daily_reservation = self._reserve_free_small_daily_limit(request_id, task)
+            free_small_daily_reservation = self._reserve_free_small_daily_limit(request_id, task, now=quota_now)
         except FreeSmallDailyLimitExceeded as exc:
             snapshot = exc.snapshot
             logger.info(
@@ -369,29 +414,23 @@ class ProxyRequestService:
                 snapshot.limit,
                 exc.requested,
             )
-            return self._pre_queue_rejection(
+            if not self._idle_free_small_eligible(task):
+                return self._free_small_daily_exceeded_rejection(request_id, task, exc)
+            if self.idle_free_small_daily_limit_manager is None or not self.proxy_queue.is_idle_free_available(task.user.allowed_upstreams):
+                return self._free_small_daily_exceeded_rejection(request_id, task, exc)
+            idle_free_small_reservation = self.idle_free_small_daily_limit_manager.try_reserve(task.user.id, now=quota_now)
+            if idle_free_small_reservation is None:
+                return self._free_small_daily_exceeded_rejection(request_id, task, exc)
+            idle_free_small_context = IdleFreeSmallContext(daily_snapshot=snapshot, requested=exc.requested)
+            logger.info(
+                "idle free small fallback reserved request_id=%s user_id=%s limit=%s requested=%s",
                 request_id,
-                task,
-                status_code=429,
-                content={
-                    "message": str(exc),
-                    "retry_after": exc.retry_after,
-                    "limit_scope": snapshot.scope,
-                    "limit": snapshot.limit,
-                    "used": snapshot.used,
-                    "reserved": snapshot.reserved,
-                    "requested": exc.requested,
-                    "remaining": exc.remaining,
-                },
-                headers={"Retry-After": str(exc.retry_after)},
-                estimated_cost=0,
-                error_code="free_small_daily_limit_exceeded",
-                error_message=str(exc),
-                log_level="INFO",
+                task.user.id,
+                idle_free_small_reservation.limit,
+                exc.requested,
             )
-
         if task.estimated_cost < 0:
-            RequestAccounting.release_free_small_daily_reservation(self.free_small_daily_limit_manager, free_small_daily_reservation)
+            self._release_prequeue_reservations(free_small_daily_reservation, idle_free_small_reservation)
             logger.error("proxy request has unsupported cost request_id=%s estimated_cost=%s", request_id, task.estimated_cost)
             return self._pre_queue_rejection(
                 request_id,
@@ -402,11 +441,10 @@ class ProxyRequestService:
                 error_message="请求超出支持的计费范围",
                 log_level="ERROR",
             )
-
         try:
             self.quota_manager.reserve(task.user.id, task.estimated_cost)
         except InsufficientQuota as exc:
-            RequestAccounting.release_free_small_daily_reservation(self.free_small_daily_limit_manager, free_small_daily_reservation)
+            self._release_prequeue_reservations(free_small_daily_reservation, idle_free_small_reservation)
             logger.info(
                 "proxy request rejected for quota request_id=%s user_id=%s need=%s have=%s",
                 request_id,
@@ -423,8 +461,11 @@ class ProxyRequestService:
                 error_message=str(exc),
                 log_level="INFO",
             )
-
-        return PreQueueCheck(free_small_daily_reservation=free_small_daily_reservation)
+        return PreQueueCheck(
+            free_small_daily_reservation=free_small_daily_reservation,
+            idle_free_small_reservation=idle_free_small_reservation,
+            idle_free_small_context=idle_free_small_context,
+        )
 
     def _pre_queue_rejection(
         self,
@@ -456,17 +497,76 @@ class ProxyRequestService:
             )
         )
 
+    def _idle_free_small_eligible(self, task: ProxyTaskRequest) -> bool:
+        return (
+            task.action == "generate"
+            and task.estimated_cost == 0
+            and task.free_small_only_allowed is True
+            and task.free_small_daily_count == 1
+        )
+
+    def _free_small_daily_exceeded_rejection(
+        self,
+        request_id: str,
+        task: ProxyTaskRequest,
+        exc: FreeSmallDailyLimitExceeded,
+    ) -> PreQueueCheck:
+        snapshot = exc.snapshot
+        return self._pre_queue_rejection(
+            request_id,
+            task,
+            status_code=429,
+            content={
+                "message": str(exc),
+                "retry_after": exc.retry_after,
+                "limit_scope": snapshot.scope,
+                "limit": snapshot.limit,
+                "used": snapshot.used,
+                "reserved": snapshot.reserved,
+                "requested": exc.requested,
+                "remaining": exc.remaining,
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+            estimated_cost=0,
+            error_code="free_small_daily_limit_exceeded",
+            error_message=str(exc),
+            log_level="INFO",
+        )
+
+    def _release_prequeue_reservations(
+        self,
+        free_small_daily_reservation: FreeSmallDailyReservation | None,
+        idle_free_small_reservation: IdleFreeSmallReservation | None,
+    ) -> None:
+        RequestAccounting.release_free_small_daily_reservation(
+            self.free_small_daily_limit_manager,
+            free_small_daily_reservation,
+        )
+        RequestAccounting.release_idle_free_small_reservation(
+            self.idle_free_small_daily_limit_manager,
+            idle_free_small_reservation,
+        )
+
+    def _idle_free_small_rejection_result(
+        self,
+        request_id: str,
+        context: IdleFreeSmallContext | None,
+    ) -> ProxyTaskResult:
+        return _daily_limit_result_from_context(request_id, context)
+
     def _reserve_free_small_daily_limit(
         self,
         request_id: str,
         task: ProxyTaskRequest,
+        *,
+        now: datetime | None = None,
     ) -> FreeSmallDailyReservation | None:
         if self.free_small_daily_limit_manager is None:
             return None
         count = int(task.free_small_daily_count or 0)
         if count <= 0:
             return None
-        reservation = self.free_small_daily_limit_manager.reserve(task.user.id, count)
+        reservation = self.free_small_daily_limit_manager.reserve(task.user.id, count, now=now)
         if reservation is not None:
             logger.info(
                 "free small daily limit reserved request_id=%s user_id=%s count=%s scope=%s limit=%s",
