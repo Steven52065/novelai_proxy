@@ -10,7 +10,7 @@ from .api_errors import APIError, as_error_text
 
 from .idle_free_small import IdleFreeSmallTracker
 from .logging_utils import logger
-from .queue_errors import IdleFreeSmallRejected, QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable
+from .queue_errors import IdleFreeSmallRejected, QueueClosed, QueueFull, Retry429Error, UpstreamExecutionTimeout, UserUnavailable
 from .queue_models import ImageHostingServiceLike, QueueItem
 from .queue_snapshot import ProxyQueueSnapshot
 from .queue_snapshot_helpers import item_snapshot
@@ -112,6 +112,8 @@ class ProxyQueue:
 
     async def stop(self, *, drain: bool = True) -> None:
         self._stopping = True
+        if not drain:
+            self._fail_pending_items_on_force_stop()
         if self._worker is None:
             return
         if drain:
@@ -131,6 +133,19 @@ class ProxyQueue:
     async def wait_for_image_uploads(self) -> None:
         if self._image_upload_tasks:
             await asyncio.gather(*self._image_upload_tasks)
+
+    def _fail_pending_items_on_force_stop(self) -> None:
+        pending = self.extract_pending_items()
+        for item in pending:
+            item.accounting.settle_released()
+            if not item.future.done():
+                item.future.set_exception(QueueClosed("服务器正在关闭"))
+        if pending:
+            logger.info(
+                "proxy queue force stop released pending items upstream_id=%s count=%s",
+                self.upstream_id,
+                len(pending),
+            )
 
     def qsize(self) -> int:
         return self.queue.qsize()

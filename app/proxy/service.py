@@ -134,20 +134,23 @@ QUEUE_FULL_RULE = QueueExceptionRule(
     settle_log_level="ERROR",
 )
 
+SERVER_SHUTTING_DOWN_RULE = QueueExceptionRule(
+    exception_type=QueueClosed,
+    status_code=503,
+    response_message="服务器正在关闭，请稍后重试",
+    settle_error_code="server_shutting_down",
+    settle_error_message="服务器正在关闭，请稍后重试",
+    settle_log_level="INFO",
+)
+
 ENQUEUE_EXCEPTION_RULES = (
-    QueueExceptionRule(
-        exception_type=QueueClosed,
-        status_code=503,
-        response_message="服务器正在关闭，请稍后重试",
-        settle_error_code="server_shutting_down",
-        settle_error_message="服务器正在关闭，请稍后重试",
-        settle_log_level="INFO",
-    ),
+    SERVER_SHUTTING_DOWN_RULE,
     QUEUE_FULL_RULE,
 )
 
 QUEUE_RESULT_EXCEPTION_RULES = (
     QUEUE_FULL_RULE,
+    SERVER_SHUTTING_DOWN_RULE,
     QueueExceptionRule(
         exception_type=NoAvailableUpstream,
         status_code=503,
@@ -295,7 +298,7 @@ class ProxyRequestService:
             raise
         except IdleFreeSmallRejected as exc:
             return self._idle_free_small_rejection_result(request_id, exc.context)
-        except (QueueFull, NoAvailableUpstream, UserUnavailable, APIError, UpstreamExecutionTimeout) as exc:
+        except (QueueClosed, QueueFull, NoAvailableUpstream, UserUnavailable, APIError, UpstreamExecutionTimeout) as exc:
             return self._queue_exception_result(request_id, task, accounting, exc, QUEUE_RESULT_EXCEPTION_RULES)
         except Exception as exc:
             logger.exception("proxy request failed request_id=%s", request_id)

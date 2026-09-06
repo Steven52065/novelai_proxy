@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.database import Database, utc_now_iso
+from app.free_small_daily_limit import FreeSmallDailyLimitManager
 from app.idle_free_small_daily_limit import (
     IdleFreeSmallDailyLimitManager,
     calculate_idle_limit,
@@ -151,6 +152,29 @@ def test_idle_limit_batch_snapshots_and_orphan_reclaim(tmp_path: Path):
     assert manager.reclaim_orphan_reserved() == 2
     assert manager.get_snapshot(user_id, now=now).reserved == 0
     assert manager.get_snapshot(other_id, now=now).reserved == 0
+    db.close()
+
+
+def test_config_adjustment_keeps_used_and_normal_reset_keeps_idle_count(tmp_path: Path):
+    db = _db(tmp_path)
+    user_id = _create_user(db, enabled=True, limit=10, multiplier=1)
+    manager = IdleFreeSmallDailyLimitManager(db)
+    normal = FreeSmallDailyLimitManager(db)
+    now = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
+    reservation = manager.try_reserve(user_id, now=now)
+    manager.confirm(reservation)
+
+    db.execute("UPDATE users SET idle_free_small_multiplier = 0 WHERE id = ?", (user_id,))
+    assert manager.try_reserve(user_id, now=now) is None
+    snapshot = manager.get_snapshot(user_id, now=now)
+    assert snapshot.enabled is False
+    assert snapshot.used == 1
+
+    normal.reset_usage(user_id, now=now)
+    idle_snapshot = manager.get_snapshot(user_id, now=now)
+    normal_snapshot = normal.get_snapshot(user_id, now=now)
+    assert idle_snapshot.used == 1
+    assert normal_snapshot.used == 0
     db.close()
 
 

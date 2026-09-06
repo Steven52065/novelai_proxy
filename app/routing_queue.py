@@ -146,6 +146,8 @@ class RoutingProxyQueue:
 
     async def stop(self, *, drain: bool = True) -> None:
         self._accepting = False
+        if not drain:
+            self._fail_dispatch_pending_on_force_stop()
         if drain:
             await self._wait_for_active_futures()
         if self._dispatch_worker is not None:
@@ -190,6 +192,15 @@ class RoutingProxyQueue:
                 self._track_removed_queue_stop(queue)
 
         self._notify_change()
+
+    def _fail_dispatch_pending_on_force_stop(self) -> None:
+        pending = self._dispatch_queue.remove_matching(lambda _item: True)
+        for item in pending:
+            item.accounting.settle_released()
+            if not item.future.done():
+                item.future.set_exception(QueueClosed("服务器正在关闭"))
+        if pending:
+            logger.info("routing queue force stop released dispatch pending count=%s", len(pending))
 
     def has_upstream_target(self, upstream_id: str) -> bool:
         """该上游当前是否是活跃调度目标；禁用/已删除的上游不是。"""
