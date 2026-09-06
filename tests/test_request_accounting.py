@@ -278,3 +278,151 @@ def test_daily_reservation_errors_are_swallowed():
     accounting.settle_success(queued_ms=1, final_cost=7, output_files=[])
 
     assert [call[0] for call in calls] == ["quota.confirm", "log.mark_success"]
+
+
+class RecordingIdle:
+    def __init__(self, calls: list | None = None):
+        self.calls = calls if calls is not None else []
+
+    def confirm(self, reservation) -> None:
+        self.calls.append(("idle.confirm", reservation))
+
+    def release(self, reservation) -> None:
+        self.calls.append(("idle.release", reservation))
+
+
+class FailingIdle(RecordingIdle):
+    def confirm(self, reservation) -> None:
+        raise RuntimeError("idle confirm failed")
+
+    def release(self, reservation) -> None:
+        raise RuntimeError("idle release failed")
+
+
+class FailingQuota:
+    def confirm(self, user_id: int, cost: int) -> None:
+        raise RuntimeError("quota confirm failed")
+
+    def release(self, user_id: int, cost: int) -> None:
+        raise RuntimeError("quota release failed")
+
+
+def _idle_reservation():
+    from app.idle_free_small_daily_limit import IdleFreeSmallReservation
+    return IdleFreeSmallReservation(
+        user_id=42,
+        window_start="2026-06-08T00:00:00+08:00",
+        count=1,
+        limit=2,
+        reset_at="2026-06-09T00:00:00+08:00",
+    )
+
+
+def test_settle_success_confirms_idle_reservation():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=RecordingQuota(calls),
+        usage_logs=RecordingUsageLogs(calls),
+        request_id="req-idle",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=RecordingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    accounting.settle_success(queued_ms=10, final_cost=7, output_files=[])
+    assert [call[0] for call in calls] == ["quota.confirm", "idle.confirm", "log.mark_success"]
+
+
+def test_settle_released_releases_idle_reservation():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=RecordingQuota(calls),
+        usage_logs=RecordingUsageLogs(calls),
+        request_id="req-idle",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=RecordingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    accounting.settle_released()
+    assert [call[0] for call in calls] == ["quota.release", "idle.release"]
+
+
+def test_repeated_settlement_confirms_or_releases_idle_only_once():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=RecordingQuota(calls),
+        usage_logs=RecordingUsageLogs(calls),
+        request_id="req-idle",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=RecordingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    accounting.settle_success(queued_ms=1, final_cost=7, output_files=[])
+    first_calls = list(calls)
+    accounting.settle_success(queued_ms=1, final_cost=7, output_files=[])
+    accounting.settle_released()
+    assert calls == first_calls
+
+
+def test_idle_settlement_runs_even_when_other_resource_settlement_fails():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=FailingQuota(),
+        usage_logs=RecordingUsageLogs(calls),
+        request_id="req-idle",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=RecordingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    with pytest.raises(RuntimeError, match="quota confirm failed"):
+        accounting.settle_success(queued_ms=1, final_cost=7, output_files=[])
+    assert calls == [("idle.confirm", accounting.idle_free_small_reservation)]
+
+
+def test_idle_reservation_errors_are_swallowed():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=RecordingQuota(calls),
+        usage_logs=RecordingUsageLogs(calls),
+        request_id="req-idle",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=FailingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    accounting.settle_success(queued_ms=1, final_cost=7, output_files=[])
+    assert [call[0] for call in calls] == ["quota.confirm", "log.mark_success"]
+
+
+def test_record_retry_attempt_failure_releases_idle_reservation():
+    calls: list = []
+    accounting = RequestAccounting(
+        quota_manager=RecordingQuota(calls),
+        usage_logs=FailingRetryInsertUsageLogs(calls),
+        request_id="req-idle",
+        user_id=42,
+        estimated_cost=7,
+        idle_free_small_daily_limit_manager=RecordingIdle(calls),
+        idle_free_small_reservation=_idle_reservation(),
+    )
+    with pytest.raises(RuntimeError, match="retry log insert failed"):
+        accounting.record_retry_attempt(attempt_number=1, upstream_id="opus-a")
+    assert [call[0] for call in calls] == ["quota.release", "idle.release"]
+
+
+def test_both_reservation_pools_are_rejected():
+    with pytest.raises(ValueError, match="cannot reserve both"):
+        RequestAccounting(
+            quota_manager=RecordingQuota([]),
+            usage_logs=RecordingUsageLogs([]),
+            request_id="req-both",
+            user_id=42,
+            estimated_cost=0,
+            free_small_daily_limit_manager=RecordingDaily([]),
+            free_small_daily_reservation=_reservation(),
+            idle_free_small_daily_limit_manager=RecordingIdle([]),
+            idle_free_small_reservation=_idle_reservation(),
+        )

@@ -6,6 +6,7 @@ from typing import Any
 from starlette.requests import Request
 
 from .free_small_daily_limit import FreeSmallDailyLimitManager, FreeSmallDailyReservation
+from .idle_free_small_daily_limit import IdleFreeSmallDailyLimitManager, IdleFreeSmallReservation
 from .logging_utils import logger
 
 
@@ -55,6 +56,8 @@ class RequestAccounting:
         manage_quota: bool = True,
         free_small_daily_limit_manager: FreeSmallDailyLimitManager | None = None,
         free_small_daily_reservation: FreeSmallDailyReservation | None = None,
+        idle_free_small_daily_limit_manager: IdleFreeSmallDailyLimitManager | None = None,
+        idle_free_small_reservation: IdleFreeSmallReservation | None = None,
     ):
         self.quota_manager = quota_manager
         self.usage_logs = usage_logs
@@ -64,6 +67,10 @@ class RequestAccounting:
         self.manage_quota = manage_quota
         self.free_small_daily_limit_manager = free_small_daily_limit_manager
         self.free_small_daily_reservation = free_small_daily_reservation
+        self.idle_free_small_daily_limit_manager = idle_free_small_daily_limit_manager
+        self.idle_free_small_reservation = idle_free_small_reservation
+        if free_small_daily_reservation is not None and idle_free_small_reservation is not None:
+            raise ValueError("a request cannot reserve both daily limit pools")
         self._reservation_settled = False
         self._log_finalized = False
 
@@ -83,9 +90,12 @@ class RequestAccounting:
     ) -> None:
         """成功结算：确认额度与每日预约，并把日志行标记为 success。"""
         if self._try_settle_reservation():
-            if self.manage_quota:
-                self.quota_manager.confirm(self.user_id, self.estimated_cost)
-            self._confirm_free_small_daily_reservation()
+            try:
+                if self.manage_quota:
+                    self.quota_manager.confirm(self.user_id, self.estimated_cost)
+                self._confirm_free_small_daily_reservation()
+            finally:
+                self._confirm_idle_free_small_reservation()
         if self._try_finalize_log():
             self.usage_logs.mark_success(
                 self.request_id,
@@ -144,9 +154,12 @@ class RequestAccounting:
         重试超过最大次数、重试重新入队失败、入队日志插入失败等。
         """
         if self._try_settle_reservation():
-            if self.manage_quota:
-                self.quota_manager.release(self.user_id, self.estimated_cost)
-            self._release_free_small_daily_reservation()
+            try:
+                if self.manage_quota:
+                    self.quota_manager.release(self.user_id, self.estimated_cost)
+                self._release_free_small_daily_reservation()
+            finally:
+                self._release_idle_free_small_reservation()
 
     def record_retry_failure(
         self,
@@ -218,6 +231,34 @@ class RequestAccounting:
             manager.release(reservation)
         except Exception:
             logger.exception("failed to release free small daily reservation user_id=%s", reservation.user_id)
+
+    def _release_idle_free_small_reservation(self) -> None:
+        self.release_idle_free_small_reservation(
+            self.idle_free_small_daily_limit_manager,
+            self.idle_free_small_reservation,
+        )
+
+    def _confirm_idle_free_small_reservation(self) -> None:
+        manager = self.idle_free_small_daily_limit_manager
+        reservation = self.idle_free_small_reservation
+        if manager is None or reservation is None:
+            return
+        try:
+            manager.confirm(reservation)
+        except Exception:
+            logger.exception("failed to confirm idle free small reservation user_id=%s", reservation.user_id)
+
+    @staticmethod
+    def release_idle_free_small_reservation(
+        manager: IdleFreeSmallDailyLimitManager | None,
+        reservation: IdleFreeSmallReservation | None,
+    ) -> None:
+        if manager is None or reservation is None:
+            return
+        try:
+            manager.release(reservation)
+        except Exception:
+            logger.exception("failed to release idle free small reservation user_id=%s", reservation.user_id)
 
     def _confirm_free_small_daily_reservation(self) -> None:
         manager = self.free_small_daily_limit_manager
