@@ -249,4 +249,3 @@ def _snapshot(
         window_start=window_start,
         reset_at=reset_at,
     )
-
