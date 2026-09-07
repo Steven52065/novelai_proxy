@@ -1969,6 +1969,98 @@ def test_admin_rejects_invalid_idle_multiplier(tmp_path: Path, monkeypatch):
         assert bad_group.status_code == 400
 
 
+@pytest.mark.parametrize("resource", ["users", "user-groups"])
+@pytest.mark.parametrize("editing", [False, True], ids=["create", "update"])
+@pytest.mark.parametrize("value", ["-0.5", "nan", "inf", "-inf", "1e309", "invalid"])
+def test_admin_forms_reject_invalid_idle_multiplier_without_changes(
+    tmp_path: Path, monkeypatch, resource, editing, value,
+):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        group_id = _create_group(client, name="existing-idle-group", idle_free_small_multiplier=0.5)
+        user_id = client.post(
+            "/admin/api/users", auth=("admin", "admin123"),
+            json={"name": "existing-idle-user", "group_id": group_id},
+        ).json()["user_id"]
+        db = client.app.state.db
+
+        def stored_settings():
+            return {
+                table: [tuple(row) for row in db.query_all(
+                    f"SELECT id, name, idle_free_small_multiplier FROM {table} ORDER BY id"
+                )]
+                for table in ("users", "user_groups")
+            }
+
+        before = stored_settings()
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+        endpoint = f"/admin/{resource}"
+        if editing:
+            endpoint += f"/{user_id if resource == 'users' else group_id}"
+        response = client.post(
+            endpoint,
+            data={
+                "name": "invalid-idle-change",
+                "idle_free_small_multiplier": value,
+                "propagate_scope": "all",
+                "allowed_endpoints" if resource == "users" else "default_allowed_endpoints": "generate-image",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["message"] == "无效的请求"
+        error = next(item for item in body["details"] if item["loc"][-1] == "idle_free_small_multiplier")
+        # 错误响应保留原始文本，不把 NaN/Infinity 浮点值交给 JSON 序列化。
+        assert error["input"] == value
+        assert stored_settings() == before
+
+
+@pytest.mark.parametrize("resource", ["users", "user-groups"])
+@pytest.mark.parametrize("editing", [False, True], ids=["create", "update"])
+@pytest.mark.parametrize("form_value", ["0.25", "0", "", None], ids=["fraction", "zero", "empty", "omitted"])
+def test_admin_multiplier_forms_preserve_valid_and_empty_values(
+    tmp_path: Path, monkeypatch, resource, editing, form_value,
+):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(client, name="valid-idle-group", idle_free_small_multiplier=0.5)
+        user_id = client.post(
+            "/admin/api/users", auth=("admin", "admin123"),
+            json={"name": "valid-idle-user", "group_id": group_id},
+        ).json()["user_id"]
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+        endpoint = f"/admin/{resource}"
+        if editing:
+            endpoint += f"/{user_id if resource == 'users' else group_id}"
+        form_data = {
+            "name": "saved-idle-settings",
+            "propagate_scope": "none",
+            "allowed_endpoints" if resource == "users" else "default_allowed_endpoints": "generate-image",
+        }
+        if form_value is not None:
+            form_data["idle_free_small_multiplier"] = form_value
+        response = client.post(endpoint, data=form_data, follow_redirects=False)
+
+        assert response.status_code == 303
+        table = "users" if resource == "users" else "user_groups"
+        saved = client.app.state.db.query_one(
+            f"SELECT idle_free_small_multiplier FROM {table} WHERE name = ?",
+            ("saved-idle-settings",),
+        )
+        expected = 0.5 if editing and form_value is None else float(form_value or 0)
+        assert saved["idle_free_small_multiplier"] == expected
+
+
 def test_admin_idle_free_small_settings_endpoint_and_user_list_payload(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
     from app.main import app
