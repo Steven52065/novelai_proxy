@@ -176,14 +176,19 @@ class RequestAccounting:
         由后续的 settle_released / settle_failure 统一释放。
         """
         if self._try_finalize_log():
-            self.usage_logs.mark_failed(
-                self.request_id,
-                queued_ms=queued_ms,
-                error_code=error_code,
-                error_message=error_message,
-                upstream_ms=upstream_ms,
-                attempt_number=attempt_number,
-            )
+            try:
+                self.usage_logs.mark_failed(
+                    self.request_id,
+                    queued_ms=queued_ms,
+                    error_code=error_code,
+                    error_message=error_message,
+                    upstream_ms=upstream_ms,
+                    attempt_number=attempt_number,
+                )
+            except Exception:
+                # 写入失败会终止重试，允许外层失败结算再尝试补写当前日志。
+                self._log_finalized = False
+                raise
 
     def record_retry_attempt(self, *, attempt_number: int, upstream_id: str | None) -> None:
         """为新一次重试尝试插入新的日志行（状态为 running）。

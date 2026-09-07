@@ -554,13 +554,12 @@ class RoutingProxyQueue:
                     continue
                 self._dispatch_to_upstream(item)
             except Exception as exc:
-                if not item.future.done():
-                    item.future.set_exception(exc)
-                else:
+                if item.future.done():
                     logger.exception(
                         "dispatcher item handling failed after future completion request_id=%s",
                         item.request_id,
                     )
+                self._finish_internal_error(item, exc)
             finally:
                 self._dispatch_running_item = None
                 try:
@@ -568,6 +567,22 @@ class RoutingProxyQueue:
                 except ValueError:
                     logger.exception("dispatch queue task_done accounting error")
                 self._notify_change()
+
+    @staticmethod
+    def _finish_internal_error(item: QueueItem, exc: Exception) -> None:
+        try:
+            if not item.accounting.settled:
+                item.accounting.settle_failure(
+                    queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
+                    error_code=exc.__class__.__name__,
+                    error_message=str(exc),
+                    attempt_number=item.attempt_number,
+                )
+        except Exception:
+            logger.exception("failed to settle internal queue error request_id=%s", item.request_id)
+        finally:
+            if not item.future.done():
+                item.future.set_exception(exc)
 
     def _dispatch_to_upstream(
         self,
@@ -635,8 +650,7 @@ class RoutingProxyQueue:
                 item.request_id,
                 upstream_id,
             )
-            if not item.future.done():
-                item.future.set_exception(exc)
+            self._finish_internal_error(item, exc)
 
     def _handle_upstream_completion_inner(
         self,
@@ -712,8 +726,7 @@ class RoutingProxyQueue:
                     item.request_id,
                     decision.next_attempt_number,
                 )
-                if not item.future.done():
-                    item.future.set_exception(retry_exc)
+                self._finish_internal_error(item, retry_exc)
             return
 
         if item.future.done():

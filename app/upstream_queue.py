@@ -347,6 +347,8 @@ class ProxyQueue:
                     item.request_id,
                     self.upstream_id,
                 )
+                # 交给 worker 外层释放尚未结算的资源，并继续向调用方传递原异常。
+                raise exc
             finally:
                 # 记账/日志写入自身出错时也必须让调用方拿到结果，否则请求悬挂。
                 if not item.future.done():
