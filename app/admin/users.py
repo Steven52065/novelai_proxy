@@ -566,6 +566,11 @@ async def update_user_form(
     else:
         if parsed_group_id != current_group_id:
             payload_data["group_id"] = parsed_group_id
+        if idle_free_small_multiplier is None:
+            # FastAPI 将空字符串和缺失字段都解析为 None；清空表示关闭，省略仍不更新。
+            submitted_form = await request.form()
+            if submitted_form.get("idle_free_small_multiplier") == "":
+                idle_free_small_multiplier = 0.0
         if idle_free_small_multiplier is not None:
             payload_data["idle_free_small_multiplier"] = idle_free_small_multiplier
         payload_data.update(
