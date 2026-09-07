@@ -404,6 +404,11 @@ async def update_user_group_form(
     member_rule_active: list[str] | None = Form(None),
     propagate_scope: str = Form("unmodified"),
 ):
+    if idle_free_small_multiplier is None:
+        # FastAPI 将空字符串和缺失字段都解析为 None；清空表示关闭，省略仍不更新。
+        submitted_form = await request.form()
+        if submitted_form.get("idle_free_small_multiplier") == "":
+            idle_free_small_multiplier = 0.0
     if propagate_scope not in {"unmodified", "all", "none"}:
         propagate_scope = "unmodified"
     member_rules = _parse_member_rate_limit_rules_form(

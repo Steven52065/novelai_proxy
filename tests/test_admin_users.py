@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.database import utc_now_iso
@@ -1877,6 +1878,77 @@ def test_admin_idle_multiplier_group_propagation_preview_and_sync(tmp_path: Path
         )
         assert sync.status_code == 200
         assert sync.json()["updated_users"] == 2
+
+
+@pytest.mark.parametrize("propagate_scope", ["unmodified", "all", "none"])
+@pytest.mark.parametrize(
+    "form_value,expected_multiplier",
+    [("", 0.0), ("0", 0.0), ("0.25", 0.25), (None, 0.5)],
+    ids=["empty", "zero", "fraction", "omitted"],
+)
+def test_admin_group_multiplier_form_matches_preview(
+    tmp_path: Path, monkeypatch, propagate_scope, form_value, expected_multiplier,
+):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        group_id = _create_group(
+            client, name="web-idle-group", free_small_daily_limit_enabled=True,
+            free_small_daily_limit=10, idle_free_small_multiplier=0.5,
+        )
+        follower = client.post(
+            "/admin/api/users", auth=("admin", "admin123"),
+            json={"name": "follower", "group_id": group_id},
+        ).json()["user_id"]
+        customized = client.post(
+            "/admin/api/users", auth=("admin", "admin123"),
+            json={"name": "customized", "group_id": group_id, "idle_free_small_multiplier": 1.0},
+        ).json()["user_id"]
+        login = client.post("/admin/login", data={"username": "admin", "password": "admin123"})
+        assert login.status_code == 200
+        client.headers.update(csrf_headers(client))
+
+        preview_payload = {} if form_value is None else {"idle_free_small_multiplier": expected_multiplier}
+        preview = client.post(
+            f"/admin/api/user-groups/{group_id}/propagation-preview", json=preview_payload,
+        )
+        assert preview.status_code == 200
+        fields = {field["field"]: field for field in preview.json()["fields"]}
+        if form_value is None:
+            assert fields == {}
+        else:
+            field = fields["idle_free_small_multiplier"]
+            assert field["old"] == "0.5 倍"
+            assert field["new"] == ("0（关闭）" if expected_multiplier == 0 else "0.25 倍")
+            assert field["unmodified_count"] == 1
+
+        form_data = {
+            "name": "web-idle-group",
+            "is_active": "on",
+            "default_tier": "normal",
+            "default_free_small_only": "on",
+            "default_allowed_endpoints": "generate-image",
+            "default_image_format_policy": "follow_global",
+            "default_anlas_total": "0",
+            "default_reset_period": "month",
+            "default_reset_day": "1",
+            "free_small_daily_limit_enabled": "on",
+            "free_small_daily_limit": "10",
+            "propagate_scope": propagate_scope,
+        }
+        if form_value is not None:
+            form_data["idle_free_small_multiplier"] = form_value
+        saved = client.post(f"/admin/user-groups/{group_id}", data=form_data, follow_redirects=False)
+        assert saved.status_code == 303
+
+        group = client.get(f"/admin/api/user-groups/{group_id}").json()["group"]
+        assert group["idle_free_small_multiplier"] == expected_multiplier
+        users = client.get("/admin/api/users").json()["users"]
+        multipliers = {user["id"]: user["idle_free_small_multiplier"] for user in users}
+        assert multipliers[follower] == (expected_multiplier if propagate_scope != "none" else 0.5)
+        customized_expected = expected_multiplier if propagate_scope == "all" and form_value is not None else 1.0
+        assert multipliers[customized] == customized_expected
 
 
 def test_admin_rejects_invalid_idle_multiplier(tmp_path: Path, monkeypatch):

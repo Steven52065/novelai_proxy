@@ -713,6 +713,8 @@
         showToast("空闲免费小图倍率必须是非负有限数字", "error");
         return;
       }
+      // 让预览和后续原生表单提交使用相同的倍率值。
+      form.elements["idle_free_small_multiplier"].value = String(idleMultiplier);
       fetch("/admin/api/user-groups/{{ group.id }}/propagation-preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
