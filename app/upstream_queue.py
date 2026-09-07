@@ -231,8 +231,24 @@ class ProxyQueue:
                     item.request_id,
                     self.upstream_id,
                 )
-                if not item.future.done():
-                    item.future.set_exception(exc)
+                try:
+                    if not item.accounting.settled:
+                        code, message = self._error_details(exc)
+                        item.accounting.settle_failure(
+                            queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
+                            error_code=code,
+                            error_message=message,
+                            attempt_number=item.attempt_number,
+                        )
+                except Exception:
+                    logger.exception(
+                        "failed to settle crashed queue item request_id=%s upstream_id=%s",
+                        item.request_id,
+                        self.upstream_id,
+                    )
+                finally:
+                    if not item.future.done():
+                        item.future.set_exception(exc)
             finally:
                 if started:
                     self._running_item = None

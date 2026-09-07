@@ -464,6 +464,9 @@ class ProxyRequestService:
                 error_message=str(exc),
                 log_level="INFO",
             )
+        except BaseException:
+            self._release_prequeue_reservations(free_small_daily_reservation, idle_free_small_reservation)
+            raise
         return PreQueueCheck(
             free_small_daily_reservation=free_small_daily_reservation,
             idle_free_small_reservation=idle_free_small_reservation,

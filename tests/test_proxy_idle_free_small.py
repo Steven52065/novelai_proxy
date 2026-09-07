@@ -5,7 +5,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from sqlite3 import OperationalError
 
+import pytest
 from fastapi.testclient import TestClient
 
 from helpers import PAYLOAD, BlockingFakeUpstream, FakeUpstream, write_test_config
@@ -205,3 +207,43 @@ def test_idle_fallback_disabled_when_multiplier_zero(tmp_path: Path, monkeypatch
         assert idle.enabled is False
         assert idle.used == 0
         assert idle.reserved == 0
+
+
+@pytest.mark.parametrize("use_idle_pool", [False, True])
+def test_quota_read_error_releases_daily_reservation_before_queue(tmp_path: Path, monkeypatch, use_idle_pool):
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(_write_idle_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        upstream = FakeUpstream()
+        app.state.upstream = upstream
+        user = _create_user(
+            client,
+            free_small_daily_limit_enabled=True,
+            free_small_daily_limit=1,
+            idle_free_small_multiplier=1,
+        )
+        user_id = user["user_id"]
+        normal = app.state.free_small_daily_limit_manager
+        idle = app.state.idle_free_small_daily_limit_manager
+        if use_idle_pool:
+            normal.confirm(normal.reserve(user_id, 1))
+
+        def fail_quota_read(_user_id, _cost):
+            raise OperationalError("quota read failed")
+
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+        with monkeypatch.context() as patch:
+            patch.setattr(app.state.quota_manager, "reserve", fail_quota_read)
+            response = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        assert response.status_code == 500
+        assert not upstream.generate_started_at
+        assert normal.get_snapshot(user_id).reserved == 0
+        assert idle.get_snapshot(user_id).reserved == 0
+        assert idle.get_snapshot(user_id).used == 0
+        assert app.state.db.query_one("SELECT COUNT(*) AS count FROM usage_logs WHERE user_id = ?", (user_id,))["count"] == 0
+
+        assert client.post("/ai/generate-image", headers=headers, json=PAYLOAD).status_code == 201
+        assert normal.get_snapshot(user_id).used == 1
+        assert idle.get_snapshot(user_id).used == int(use_idle_pool)
+        assert idle.get_snapshot(user_id).reserved == 0

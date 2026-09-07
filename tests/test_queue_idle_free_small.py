@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
+from sqlite3 import OperationalError
 
 import pytest
 
@@ -222,6 +223,68 @@ def test_idle_free_small_retry_rejected_when_tracker_is_not_idle(tmp_path: Path)
             assert log["attempt_number"] == 0
         finally:
             await queue.stop()
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("log_write_fails", [False, True])
+def test_idle_worker_precheck_error_releases_reservation_and_keeps_worker_alive(tmp_path: Path, monkeypatch, log_write_fails):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = ImmediateUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        worker = queue._queues["opus-a"]
+        queue.start()
+
+        def fail_user_read(_user_id):
+            raise OperationalError("user read failed")
+
+        def fail_log_write(*_args, **_kwargs):
+            raise OperationalError("log write failed")
+
+        def enqueue(request_id):
+            return queue.enqueue(
+                request_id=request_id,
+                user_id=context["user_id"],
+                tier="normal",
+                action="generate",
+                logging_config=LoggingConfig(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                process_zip_response=False,
+                accounting=_accounting(context, request_id),
+                idle_free_small=context["context"],
+            )
+
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(worker, "_is_user_available", fail_user_read)
+                if log_write_fails:
+                    patch.setattr(context["usage_logs"], "mark_failed", fail_log_write)
+                future = enqueue("idle-success")
+                with pytest.raises(OperationalError, match="user read failed"):
+                    await asyncio.wait_for(future, timeout=1)
+                await asyncio.wait_for(worker.queue.join(), timeout=1)
+
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (0, 0)
+            assert upstream.calls == 0
+            assert future.done()
+            assert not context["tracker"].running_sources
+            if not log_write_fails:
+                log = context["usage_logs"].get_by_request_id("idle-success")
+                assert log["status"] == "failed"
+                assert log["error_code"] == "OperationalError"
+
+            context["reservation"] = context["idle"].try_reserve(context["user_id"])
+            assert context["reservation"] is not None
+            assert await asyncio.wait_for(enqueue("idle-rejected"), timeout=1) == b"idle-image"
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (1, 0)
+            assert context["usage_logs"].get_by_request_id("idle-rejected")["status"] == "success"
+        finally:
+            await asyncio.wait_for(queue.stop(), timeout=1)
             context["db"].close()
 
     asyncio.run(run_test())
