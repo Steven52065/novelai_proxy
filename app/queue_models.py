@@ -44,6 +44,10 @@ class QueueItem:
     last_429_error: APIError | None = field(default=None, compare=False)
     is_admin_probe: bool = field(default=False, compare=False)
     idle_free_small: IdleFreeSmallContext | None = field(default=None, compare=False)
+    # 当前 worker 尝试的完成状态；重试或重路由复制上下文时重新初始化。
+    completed_payload: bytes | None = field(default=None, init=False, compare=False, repr=False)
+    queued_ms: int = field(default=0, init=False, compare=False)
+    upstream_ms: int | None = field(default=None, init=False, compare=False)
 
 
 @dataclass(frozen=True)

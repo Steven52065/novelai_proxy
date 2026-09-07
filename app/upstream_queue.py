@@ -234,7 +234,17 @@ class ProxyQueue:
                     await self._process_item(item)
             except asyncio.CancelledError:
                 try:
-                    if not item.accounting.settled:
+                    if item.completed_payload is not None:
+                        # 上游已成功时，归档被中断也必须确认消耗，不能释放预留。
+                        item.accounting.settle_success(
+                            queued_ms=item.queued_ms,
+                            final_cost=item.estimated_cost,
+                            output_files=[],
+                            upstream_ms=item.upstream_ms,
+                            is_retry_success=item.has_retried_429,
+                            attempt_number=item.attempt_number,
+                        )
+                    elif not item.accounting.settled:
                         item.accounting.settle_failure(
                             queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
                             error_code="server_shutting_down" if self._stopping else "worker_cancelled",
@@ -245,7 +255,10 @@ class ProxyQueue:
                     logger.exception("failed to settle cancelled worker item request_id=%s", item.request_id)
                 finally:
                     if not item.future.done():
-                        item.future.cancel()
+                        if item.completed_payload is not None:
+                            item.future.set_result(item.completed_payload)
+                        else:
+                            item.future.cancel()
                 raise
             except Exception as exc:
                 logger.exception(
@@ -322,6 +335,7 @@ class ProxyQueue:
 
     async def _process_item(self, item: QueueItem) -> None:
         queued_ms = int((time.monotonic() - item.enqueued_at) * 1000)
+        item.queued_ms = queued_ms
         upstream_ms: int | None = None
         try:
             if self._cancel_if_caller_done(item, queued_ms, after_interval=False):
@@ -429,8 +443,10 @@ class ProxyQueue:
         upstream_started_at = time.monotonic()
         try:
             payload = await self._execute_handler_with_timeout(item)
+            item.completed_payload = payload
         finally:
             upstream_ms = int((time.monotonic() - upstream_started_at) * 1000)
+            item.upstream_ms = upstream_ms
         return payload, upstream_ms
 
     async def _handle_item_exception(
@@ -574,8 +590,12 @@ class ProxyQueue:
                 timeout=self.upstream_execution_timeout_seconds,
             )
         except asyncio.CancelledError:
-            handler_task.cancel()
-            handler_task.add_done_callback(self._consume_timed_out_handler_result)
+            if handler_task.done() and not handler_task.cancelled() and handler_task.exception() is None:
+                # handler 已返回而 wait 尚未恢复时也保留成功结果，但仍向外传递取消。
+                item.completed_payload = handler_task.result()
+            else:
+                handler_task.cancel()
+                handler_task.add_done_callback(self._consume_timed_out_handler_result)
             raise
         if handler_task in done:
             return handler_task.result()
