@@ -375,6 +375,93 @@ def test_reenabled_upstream_rejects_idle_work_until_old_worker_finishes(tmp_path
 
 
 @pytest.mark.parametrize("tier", ["normal", "vip"])
+@pytest.mark.parametrize("force_stop", [False, True])
+def test_reenabled_upstream_serializes_all_workers_in_an_idle_pool(tmp_path: Path, tier, force_stop):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=30)
+        upstream = BlockingUpstream()
+        other = ImmediateUpstream()
+        target_a = UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)
+        target_b = UpstreamQueueTarget(id="opus-b", client_provider=lambda: other)
+        target_c = UpstreamQueueTarget(id="opus-c", client_provider=lambda: other)
+        queue = RoutingProxyQueue(
+            targets=[target_a, target_b, target_c],
+            quota_manager=context["quota"],
+            usage_logs=context["usage_logs"],
+            max_queue_size=5,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+            tracker=context["tracker"],
+        )
+        queue.start()
+        futures = []
+        workers = []
+
+        def enqueue_normal(request_id):
+            context["usage_logs"].insert_queued(
+                UsageLogCreate(request_id=request_id, user_id=context["user_id"], action="generate", estimated_anlas_cost=0)
+            )
+            return queue.enqueue(
+                request_id=request_id, user_id=context["user_id"], tier=tier, action="generate",
+                logging_config=LoggingConfig(), estimated_cost=0, process_zip_response=False, manage_quota=False,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+            )
+
+        try:
+            futures.append(enqueue_normal("old-generation"))
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            workers.append(queue._queues["opus-a"])
+            context["clock"][0] = 31
+            assert queue.is_idle_free_available()
+
+            # 保持轮询选中 A；B/C 让 1/3 占用仍满足空闲准入，不能靠阈值阻止同账号并发。
+            for generation, targets in enumerate(([target_b, target_a, target_c], [target_b, target_c, target_a]), start=1):
+                queue.sync_targets([target_b, target_c])
+                queue.sync_targets(targets)
+                if generation == 1:
+                    futures.append(_enqueue_idle(queue, context, tier=tier))
+                else:
+                    futures.append(enqueue_normal("newest-generation"))
+                worker = queue._queues["opus-a"]
+                workers.append(worker)
+                await wait_until_async(lambda: worker.running_item is not None)
+                # 另一个上游仍可执行，也让已经派发的 handler 有机会运行。
+                assert await asyncio.wait_for(
+                    queue.submit_upstream_probe(
+                        upstream_id="opus-b", request_id=f"other-{generation}", logging_config=LoggingConfig(),
+                        handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                    ),
+                    timeout=1,
+                ) == b"idle-image"
+                assert upstream.calls == 1
+                assert all(not future.done() for future in futures)
+
+            if force_stop:
+                await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+                assert all(future.cancelled() for future in futures)
+            else:
+                upstream.release.set()
+                assert await asyncio.wait_for(asyncio.gather(*futures), timeout=1) == [b"blocked-image"] * 3
+                assert upstream.calls == 3
+                await asyncio.wait_for(queue.stop(), timeout=1)
+
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (0 if force_stop else 1, 0)
+            assert not queue._active_futures
+            assert not context["tracker"].running_sources
+            for worker in workers:
+                await asyncio.wait_for(worker.queue.join(), timeout=1)
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            await asyncio.gather(*futures, return_exceptions=True)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("tier", ["normal", "vip"])
 @pytest.mark.parametrize("completion_yields", [0, 2])
 def test_force_stop_blocks_429_retry_and_finishes_all_futures(tmp_path: Path, monkeypatch, tier, completion_yields):
     async def run_test():

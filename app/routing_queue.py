@@ -107,6 +107,7 @@ class RoutingProxyQueue:
         self._on_upstream_api_error = on_upstream_api_error
         self._tracker = tracker
         self._is_user_available = is_user_available or (lambda _user_id: True)
+        self._upstream_execution_locks: dict[str, asyncio.Lock] = {}
         self._queues = {
             target.id: self._create_upstream_queue(target)
             for target in enabled_targets
@@ -336,6 +337,7 @@ class RoutingProxyQueue:
             on_change=self._on_change,
             on_api_error=self._on_upstream_api_error,
             tracker=self._tracker,
+            execution_lock=self._upstream_execution_locks.setdefault(target.id, asyncio.Lock()),
         )
 
     def _track_removed_queue_stop(self, queue: ProxyQueue) -> None:

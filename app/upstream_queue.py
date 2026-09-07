@@ -40,6 +40,7 @@ class ProxyQueue:
         on_change: Callable[[], None] | None = None,
         on_api_error: Callable[[str, APIError], None] | None = None,
         tracker: IdleFreeSmallTracker | None = None,
+        execution_lock: asyncio.Lock | None = None,
     ):
         self.upstream_id = upstream_id
         self.usage_logs = usage_logs
@@ -64,6 +65,8 @@ class ProxyQueue:
         self._apply_error_extra_delay_next = False
         self._worker: asyncio.Task | None = None
         self._stopping = False
+        # 同一上游停用再启用时，旧 worker 仍可能在排空；所有代际共享执行锁。
+        self._execution_lock = execution_lock if execution_lock is not None else asyncio.Lock()
         self._image_upload_tasks: set[asyncio.Task] = set()
         self._running_item: QueueItem | None = None
         self._running_started_at: float | None = None
@@ -227,7 +230,8 @@ class ProxyQueue:
                     self._reject_idle_item(item)
                     continue
                 self._notify_change()
-                await self._process_item(item)
+                async with self._execution_lock:
+                    await self._process_item(item)
             except asyncio.CancelledError:
                 try:
                     if not item.accounting.settled:
