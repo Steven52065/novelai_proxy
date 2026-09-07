@@ -290,6 +290,79 @@ def test_idle_worker_precheck_error_releases_reservation_and_keeps_worker_alive(
     asyncio.run(run_test())
 
 
+def test_reenabled_upstream_rejects_idle_work_until_old_worker_finishes(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=30)
+        upstream = BlockingUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        context["usage_logs"].insert_queued(
+            UsageLogCreate(request_id="old-worker", user_id=context["user_id"], action="generate", estimated_anlas_cost=0)
+        )
+        queue.start()
+
+        def enqueue_idle(request_id):
+            return queue.enqueue(
+                request_id=request_id,
+                user_id=context["user_id"],
+                tier="normal",
+                action="generate",
+                logging_config=LoggingConfig(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                process_zip_response=False,
+                accounting=_accounting(context, request_id),
+                idle_free_small=context["context"],
+            )
+
+        try:
+            normal_future = queue.enqueue(
+                request_id="old-worker",
+                user_id=context["user_id"],
+                tier="normal",
+                action="generate",
+                logging_config=LoggingConfig(),
+                estimated_cost=0,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+                process_zip_response=False,
+                manage_quota=False,
+            )
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            old_worker = queue._queues["opus-a"]
+            context["clock"][0] = 1
+            queue.sync_targets([])
+            queue.sync_targets([UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)])
+            context["clock"][0] = 31
+
+            assert not queue.is_idle_free_available()
+            rejected = enqueue_idle("idle-success")
+            with pytest.raises(IdleFreeSmallRejected):
+                await asyncio.wait_for(rejected, timeout=1)
+            assert old_worker.running_item is not None
+            assert upstream.calls == 1
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (0, 0)
+            assert context["usage_logs"].get_by_request_id("idle-success")["status"] == "rejected"
+
+            upstream.release.set()
+            assert await asyncio.wait_for(normal_future, timeout=1) == b"blocked-image"
+            assert old_worker._tracker_token not in context["tracker"].running_sources
+            assert not queue.is_idle_free_available()
+            context["clock"][0] = 61
+            assert queue.is_idle_free_available()
+            context["reservation"] = context["idle"].try_reserve(context["user_id"])
+            assert context["reservation"] is not None
+            assert await asyncio.wait_for(enqueue_idle("idle-rejected"), timeout=1) == b"blocked-image"
+            assert upstream.calls == 2
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (1, 0)
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(), timeout=1)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
 def _proxy_queue(context: dict, upstream, *, tracker: IdleFreeSmallTracker) -> RoutingProxyQueue:
     return RoutingProxyQueue(
         targets=[UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream)],

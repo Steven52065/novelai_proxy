@@ -116,6 +116,33 @@ def test_old_worker_finish_does_not_clear_new_worker_with_same_id():
     assert old not in tracker.running_sources
 
 
+def test_reenabled_upstream_keeps_detached_worker_busy_until_it_finishes():
+    tracker, clock = _tracker(seconds=30)
+    old, new, other = object(), object(), object()
+    tracker.attach("a", old)
+    tracker.attach("b", other)
+    tracker.start()
+    tracker.record_started(old, "a")
+    clock[0] = 5
+    tracker.detach("a", old)
+
+    clock[0] = 35
+    assert tracker.is_idle() is True
+    assert tracker.running_sources[old] == "a"
+    tracker.attach("a", new)
+    clock[0] = 65
+    assert tracker.is_idle() is False
+    assert tracker.is_idle(["a"]) is False
+    assert tracker.is_idle(["b"]) is True
+
+    tracker.record_finished(old)
+    assert old not in tracker.running_sources
+    clock[0] = 94.9
+    assert tracker.is_idle(["a"]) is False
+    clock[0] = 95
+    assert tracker.is_idle(["a"]) is True
+
+
 def test_attach_and_detach_record_only_real_state_changes():
     tracker, clock = _tracker(seconds=30)
     token = object()

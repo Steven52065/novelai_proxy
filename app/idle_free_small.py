@@ -62,7 +62,8 @@ class IdleFreeSmallTracker:
             if self.active_workers.get(upstream_id) is not worker_token:
                 return
             del self.active_workers[upstream_id]
-            self.running_sources.pop(worker_token, None)
+            # 旧 worker 可能仍在排空；同 ID 重新启用时也必须计入这次占用。
+            # 停用期间由 enabled_ids 排除，真正结束后再按 token 清理。
             if self.started_at is not None:
                 self._record_state_locked()
 
