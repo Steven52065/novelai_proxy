@@ -8,13 +8,14 @@ from sqlite3 import OperationalError
 
 import pytest
 
+from conftest import wait_until_async
 from app.api_errors import APIError
 from app.config import LoggingConfig
 from app.database import Database, utc_now_iso
 from app.free_small_daily_limit import FreeSmallDailyLimitManager
 from app.idle_free_small import IdleFreeSmallContext, IdleFreeSmallTracker
 from app.idle_free_small_daily_limit import IdleFreeSmallDailyLimitManager
-from app.queue_errors import IdleFreeSmallRejected
+from app.queue_errors import IdleFreeSmallRejected, QueueClosed, Retry429Error
 from app.quota_manager import QuotaManager
 from app.request_accounting import RequestAccounting
 from app.routing_queue import RoutingProxyQueue
@@ -56,6 +57,16 @@ class BlockingUpstream:
         self.started.set()
         await self.release.wait()
         return b"blocked-image"
+
+
+class Blocking429OnceUpstream(BlockingUpstream):
+    async def generate_image_payload_zip(self, payload):
+        self.calls += 1
+        self.started.set()
+        if self.calls == 1:
+            await self.release.wait()
+            raise APIError("Too many requests", code="429", request=payload, response={})
+        return b"retry-success"
 
 
 def test_idle_free_small_request_succeeds_when_tracker_is_idle(tmp_path: Path):
@@ -361,6 +372,243 @@ def test_reenabled_upstream_rejects_idle_work_until_old_worker_finishes(tmp_path
             context["db"].close()
 
     asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("tier", ["normal", "vip"])
+@pytest.mark.parametrize("completion_yields", [0, 2])
+def test_force_stop_blocks_429_retry_and_finishes_all_futures(tmp_path: Path, monkeypatch, tier, completion_yields):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = Blocking429OnceUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        completion = queue._handle_upstream_completion
+        retry_during_stop = []
+
+        def record_completion(completed, **kwargs):
+            if not completed.cancelled() and isinstance(completed.exception(), Retry429Error):
+                retry_during_stop.append(not queue.accepting)
+            return completion(completed, **kwargs)
+
+        monkeypatch.setattr(queue, "_handle_upstream_completion", record_completion)
+        queue.start()
+        future = _enqueue_idle(queue, context, tier=tier)
+        try:
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            upstream.release.set()
+            for _ in range(completion_yields):
+                await asyncio.sleep(0)
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+
+            assert retry_during_stop == [True]
+            assert future.done()
+            assert isinstance(future.exception(), QueueClosed)
+            assert upstream.calls == 1
+            assert queue._dispatch_queue.qsize() == 0
+            assert queue._queues["opus-a"].qsize() == 0
+            assert not queue._active_futures
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (0, 0)
+            rows = context["db"].query_all(
+                "SELECT attempt_number, status, error_code FROM usage_logs WHERE request_id = ?", ("idle-success",)
+            )
+            assert [tuple(row) for row in rows] == [(0, "failed", "429")]
+            await asyncio.wait_for(queue._dispatch_queue.join(), timeout=1)
+            await asyncio.wait_for(queue._queues["opus-a"].queue.join(), timeout=1)
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            await asyncio.gather(future, return_exceptions=True)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("tier", ["normal", "vip"])
+def test_graceful_stop_allows_accepted_idle_request_to_retry(tmp_path: Path, tier):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = Blocking429OnceUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        future = _enqueue_idle(queue, context, tier=tier)
+        stop_task = None
+        try:
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            stop_task = asyncio.create_task(queue.stop())
+            await wait_until_async(lambda: not queue.accepting)
+            assert not stop_task.done()
+            upstream.release.set()
+            assert await asyncio.wait_for(future, timeout=1) == b"retry-success"
+            await asyncio.wait_for(stop_task, timeout=1)
+            assert upstream.calls == 2
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (1, 0)
+            rows = context["db"].query_all(
+                "SELECT attempt_number, status FROM usage_logs WHERE request_id = ? ORDER BY attempt_number", ("idle-success",)
+            )
+            assert [tuple(row) for row in rows] == [(0, "failed"), (1, "success")]
+        finally:
+            upstream.release.set()
+            if stop_task is not None:
+                await asyncio.wait_for(stop_task, timeout=1)
+            else:
+                await asyncio.wait_for(queue.stop(), timeout=1)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("phase", ["dispatch", "serial", "running"])
+def test_force_stop_releases_idle_reservations_at_each_queue_stage(tmp_path: Path, phase):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = BlockingUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        normal_future = None
+        if phase != "dispatch":
+            queue.start()
+        if phase == "serial":
+            normal_future = queue.enqueue(
+                request_id="running-normal", user_id=context["user_id"], tier="normal", action="generate",
+                logging_config=LoggingConfig(), estimated_cost=0, process_zip_response=False, manage_quota=False,
+                handler=lambda upstream: upstream.generate_image_payload_zip({}),
+            )
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+        future = _enqueue_idle(queue, context)
+        try:
+            if phase == "serial":
+                await wait_until_async(lambda: queue._queues["opus-a"].qsize() == 1)
+            elif phase == "running":
+                await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            assert future.done()
+            if phase == "running":
+                assert future.cancelled()
+            else:
+                assert isinstance(future.exception(), QueueClosed)
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (0, 0)
+            log = context["usage_logs"].get_by_request_id("idle-success")
+            assert log["status"] == ("failed" if phase == "running" else "rejected")
+            assert log["error_code"] == "server_shutting_down"
+            assert not queue._active_futures
+            assert not context["tracker"].running_sources
+            await asyncio.wait_for(queue._dispatch_queue.join(), timeout=1)
+            await asyncio.wait_for(queue._queues["opus-a"].queue.join(), timeout=1)
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            await asyncio.gather(future, return_exceptions=True)
+            if normal_future is not None:
+                await asyncio.gather(normal_future, return_exceptions=True)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def test_force_stop_cancels_removed_worker_that_was_draining(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = BlockingUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        future = _enqueue_idle(queue, context)
+        try:
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            worker = queue._queues["opus-a"]
+            queue.sync_targets([])
+            await asyncio.sleep(0)
+            assert worker.running_item is not None
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+
+            assert future.cancelled()
+            assert worker._worker.done()
+            assert not upstream.release.is_set()
+            assert not queue._removed_queues
+            assert not context["tracker"].running_sources
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (0, 0)
+            await asyncio.wait_for(worker.queue.join(), timeout=1)
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            await asyncio.gather(future, return_exceptions=True)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def test_force_stop_also_releases_running_paid_request(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        context["idle"].release(context["reservation"])
+        context["quota"].create_or_update(context["user_id"], total=100)
+        context["quota"].reserve(context["user_id"], 7)
+        context["usage_logs"].insert_queued(
+            UsageLogCreate(request_id="paid-stop", user_id=context["user_id"], action="generate", estimated_anlas_cost=7)
+        )
+        upstream = BlockingUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        future = queue.enqueue(
+            request_id="paid-stop", user_id=context["user_id"], tier="normal", action="generate",
+            logging_config=LoggingConfig(), estimated_cost=7, process_zip_response=False,
+            handler=lambda upstream: upstream.generate_image_payload_zip({}),
+        )
+        try:
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            assert future.cancelled()
+            quota = context["quota"].get_snapshot(context["user_id"])
+            assert (quota.used, quota.reserved) == (0, 0)
+            log = context["usage_logs"].get_by_request_id("paid-stop")
+            assert log["status"] == "failed"
+            assert log["error_code"] == "server_shutting_down"
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def test_caller_cancel_after_http_still_confirms_successful_idle_request(tmp_path: Path):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream = BlockingUpstream()
+        queue = _proxy_queue(context, upstream, tracker=context["tracker"])
+        queue.start()
+        future = _enqueue_idle(queue, context)
+        try:
+            await asyncio.wait_for(upstream.started.wait(), timeout=1)
+            future.cancel()
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(), timeout=1)
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (1, 0)
+            assert context["usage_logs"].get_by_request_id("idle-success")["status"] == "success"
+            assert upstream.calls == 1
+        finally:
+            upstream.release.set()
+            await asyncio.wait_for(queue.stop(drain=False), timeout=1)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
+def _enqueue_idle(queue, context, request_id="idle-success", *, tier="normal"):
+    return queue.enqueue(
+        request_id=request_id,
+        user_id=context["user_id"],
+        tier=tier,
+        action="generate",
+        logging_config=LoggingConfig(),
+        estimated_cost=0,
+        handler=lambda upstream: upstream.generate_image_payload_zip({}),
+        process_zip_response=False,
+        accounting=_accounting(context, request_id),
+        idle_free_small=context["context"],
+    )
 
 
 def _proxy_queue(context: dict, upstream, *, tracker: IdleFreeSmallTracker) -> RoutingProxyQueue:

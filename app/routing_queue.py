@@ -98,8 +98,10 @@ class RoutingProxyQueue:
         self._dispatch_running_item: QueueItem | None = None
         self._removed_queue_stop_tasks: set[asyncio.Task] = set()
         self._removed_queue_stop_futures: set[concurrent.futures.Future] = set()
+        self._removed_queues: set[ProxyQueue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._accepting = True
+        self._force_stopping = False
         self._active_futures: set[asyncio.Future] = set()
         self._on_change = on_change
         self._on_upstream_api_error = on_upstream_api_error
@@ -147,7 +149,7 @@ class RoutingProxyQueue:
     async def stop(self, *, drain: bool = True) -> None:
         self._accepting = False
         if not drain:
-            self._fail_dispatch_pending_on_force_stop()
+            self._force_stopping = True
         if drain:
             await self._wait_for_active_futures()
         if self._dispatch_worker is not None:
@@ -157,15 +159,34 @@ class RoutingProxyQueue:
             except asyncio.CancelledError:
                 pass
         stop_tasks = [queue.stop(drain=drain) for queue in self._queues.values()]
-        if self._removed_queue_stop_tasks:
-            stop_tasks.extend(asyncio.shield(task) for task in tuple(self._removed_queue_stop_tasks))
-        if self._removed_queue_stop_futures:
-            stop_tasks.extend(asyncio.wrap_future(future) for future in tuple(self._removed_queue_stop_futures))
+        if not drain:
+            # 已移除上游原本在正常排空；强制关闭也必须终止这些旧 worker。
+            removed_queues = tuple(self._removed_queues)
+            removed_stops = tuple(self._removed_queue_stop_tasks)
+            removed_futures = tuple(self._removed_queue_stop_futures)
+            for pending_stop in (*removed_stops, *removed_futures):
+                pending_stop.cancel()
+            await asyncio.gather(
+                *removed_stops,
+                *(asyncio.wrap_future(future) for future in removed_futures),
+                return_exceptions=True,
+            )
+            stop_tasks.extend(queue.stop(drain=False) for queue in removed_queues)
+        else:
+            if self._removed_queue_stop_tasks:
+                stop_tasks.extend(asyncio.shield(task) for task in tuple(self._removed_queue_stop_tasks))
+            if self._removed_queue_stop_futures:
+                stop_tasks.extend(asyncio.wrap_future(future) for future in tuple(self._removed_queue_stop_futures))
         if stop_tasks:
             await asyncio.gather(*stop_tasks)
+        if not drain:
+            self._fail_dispatch_pending_on_force_stop()
+            await self._wait_for_active_futures()
         self._started = False
 
     def sync_targets(self, targets: list[UpstreamQueueTarget]) -> None:
+        if self._force_stopping:
+            return
         previous_target_order = list(self._target_order)
         enabled_targets = [target for target in targets if target.id]
         new_target_ids = [target.id for target in enabled_targets]
@@ -196,11 +217,27 @@ class RoutingProxyQueue:
     def _fail_dispatch_pending_on_force_stop(self) -> None:
         pending = self._dispatch_queue.remove_matching(lambda _item: True)
         for item in pending:
-            item.accounting.settle_released()
-            if not item.future.done():
-                item.future.set_exception(QueueClosed("服务器正在关闭"))
+            self._finish_force_stopped_item(item)
         if pending:
             logger.info("routing queue force stop released dispatch pending count=%s", len(pending))
+
+    @staticmethod
+    def _finish_force_stopped_item(item: QueueItem) -> None:
+        try:
+            if item.attempt_number > 0 and not item.retry_attempt_logged:
+                item.accounting.settle_released()
+            else:
+                item.accounting.settle_rejected(
+                    error_code="server_shutting_down",
+                    error_message="服务器正在关闭，请稍后重试",
+                    log_level="INFO",
+                    attempt_number=item.attempt_number,
+                )
+        except Exception:
+            logger.exception("failed to settle force stopped dispatch item request_id=%s", item.request_id)
+        finally:
+            if not item.future.done():
+                item.future.set_exception(QueueClosed("服务器正在关闭"))
 
     def has_upstream_target(self, upstream_id: str) -> bool:
         """该上游当前是否是活跃调度目标；禁用/已删除的上游不是。"""
@@ -308,13 +345,17 @@ class RoutingProxyQueue:
             running_loop = None
         if running_loop is not None:
             task = running_loop.create_task(queue.stop(drain=True))
+            self._removed_queues.add(queue)
             self._removed_queue_stop_tasks.add(task)
             task.add_done_callback(self._discard_removed_queue_stop_task)
+            task.add_done_callback(lambda _task: self._removed_queues.discard(queue))
             return
         if self._loop is not None and self._loop.is_running():
             future = asyncio.run_coroutine_threadsafe(queue.stop(drain=True), self._loop)
+            self._removed_queues.add(queue)
             self._removed_queue_stop_futures.add(future)
             future.add_done_callback(self._discard_removed_queue_stop_future)
+            future.add_done_callback(lambda _future: self._removed_queues.discard(queue))
 
     def _discard_removed_queue_stop_task(self, task: asyncio.Task) -> None:
         self._removed_queue_stop_tasks.discard(task)
@@ -532,6 +573,9 @@ class RoutingProxyQueue:
         *,
         last_429_error: APIError | None = None,
     ) -> None:
+        if self._force_stopping:
+            self._finish_force_stopped_item(item)
+            return
         errors = []
         last_429_error = last_429_error or item.last_429_error
         candidates = self._candidate_upstreams(item.allowed_upstreams, advance_round_robin=True)
@@ -618,6 +662,9 @@ class RoutingProxyQueue:
             return
 
         if isinstance(exc, Retry429Error):
+            if self._force_stopping:
+                self._finish_force_stopped_item(item)
+                return
             if item.future.done():
                 item.accounting.settle_released()
                 logger.warning(
@@ -695,6 +742,9 @@ class RoutingProxyQueue:
         decision: RetryDecision,
         retry_error: APIError,
     ) -> None:
+        if self._force_stopping:
+            self._finish_force_stopped_item(item)
+            return
         next_item = dataclasses.replace(
             item,
             priority=decision.priority,

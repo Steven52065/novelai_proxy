@@ -137,9 +137,18 @@ class ProxyQueue:
     def _fail_pending_items_on_force_stop(self) -> None:
         pending = self.extract_pending_items()
         for item in pending:
-            item.accounting.settle_released()
-            if not item.future.done():
-                item.future.set_exception(QueueClosed("服务器正在关闭"))
+            try:
+                item.accounting.settle_rejected(
+                    error_code="server_shutting_down",
+                    error_message="服务器正在关闭，请稍后重试",
+                    log_level="INFO",
+                    attempt_number=item.attempt_number,
+                )
+            except Exception:
+                logger.exception("failed to settle force stopped queue item request_id=%s", item.request_id)
+            finally:
+                if not item.future.done():
+                    item.future.set_exception(QueueClosed("服务器正在关闭"))
         if pending:
             logger.info(
                 "proxy queue force stop released pending items upstream_id=%s count=%s",
@@ -220,10 +229,19 @@ class ProxyQueue:
                 self._notify_change()
                 await self._process_item(item)
             except asyncio.CancelledError:
-                if item.idle_free_small is not None and not item.accounting.settled:
-                    item.accounting.settle_released()
-                if not item.future.done():
-                    item.future.cancel()
+                try:
+                    if not item.accounting.settled:
+                        item.accounting.settle_failure(
+                            queued_ms=int((time.monotonic() - item.enqueued_at) * 1000),
+                            error_code="server_shutting_down" if self._stopping else "worker_cancelled",
+                            error_message="服务器正在关闭" if self._stopping else "上游执行任务已取消",
+                            attempt_number=item.attempt_number,
+                        )
+                except Exception:
+                    logger.exception("failed to settle cancelled worker item request_id=%s", item.request_id)
+                finally:
+                    if not item.future.done():
+                        item.future.cancel()
                 raise
             except Exception as exc:
                 logger.exception(
