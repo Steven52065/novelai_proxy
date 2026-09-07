@@ -752,6 +752,7 @@ class RoutingProxyQueue:
             enqueued_at=time.monotonic(),
             has_retried_429=True,
             attempt_number=decision.next_attempt_number,
+            retry_attempt_logged=False,
             last_429_error=retry_error,
         )
         if decision.immediate:

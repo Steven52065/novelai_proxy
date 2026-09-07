@@ -596,6 +596,65 @@ def test_caller_cancel_after_http_still_confirms_successful_idle_request(tmp_pat
     asyncio.run(run_test())
 
 
+@pytest.mark.parametrize("tier", ["normal", "vip"])
+def test_rerouted_retry_creates_log_for_next_attempt_and_confirms_once(tmp_path: Path, tier):
+    async def run_test():
+        context = _idle_context(tmp_path, min_idle_seconds=0)
+        upstream_a = Retry429OnceUpstream()
+        upstream_b = BlockingUpstream()
+        upstream_c = ImmediateUpstream()
+        target_a = UpstreamQueueTarget(id="opus-a", client_provider=lambda: upstream_a)
+        target_b = UpstreamQueueTarget(id="opus-b", client_provider=lambda: upstream_b)
+        target_c = UpstreamQueueTarget(id="opus-c", client_provider=lambda: upstream_c)
+        queue = RoutingProxyQueue(
+            targets=[target_a, target_b, target_c],
+            quota_manager=context["quota"],
+            usage_logs=context["usage_logs"],
+            max_queue_size=2,
+            upstream_interval_min_seconds=0,
+            upstream_interval_max_seconds=0,
+            upstream_error_extra_delay_seconds=0,
+            tracker=context["tracker"],
+        )
+        queue.start()
+        probe = asyncio.create_task(queue.submit_upstream_probe(
+            upstream_id="opus-b", request_id="blocking-probe", logging_config=LoggingConfig(),
+            handler=lambda upstream: upstream.generate_image_payload_zip({}),
+        ))
+        future = None
+        try:
+            await asyncio.wait_for(upstream_b.started.wait(), timeout=1)
+            future = _enqueue_idle(queue, context, tier=tier)
+            await wait_until_async(lambda: queue._queues["opus-b"].qsize() == 1)
+            waiting_retry = queue._queues["opus-b"].queue.snapshot_items()[0]
+            assert waiting_retry.attempt_number == 1
+            assert waiting_retry.retry_attempt_logged is True
+
+            queue.sync_targets([target_a, target_c])
+            assert await asyncio.wait_for(future, timeout=1) == b"idle-image"
+            assert (upstream_a.calls, upstream_b.calls, upstream_c.calls) == (2, 1, 1)
+            rows = context["db"].query_all(
+                "SELECT attempt_number, status, upstream_id, is_retry_success "
+                "FROM usage_logs WHERE request_id = ? ORDER BY attempt_number", ("idle-success",)
+            )
+            assert [tuple(row) for row in rows] == [
+                (0, "failed", "opus-a", 0),
+                (1, "failed", "opus-a", 0),
+                (2, "success", "opus-c", 1),
+            ]
+            snapshot = context["idle"].get_snapshot(context["user_id"])
+            assert (snapshot.used, snapshot.reserved) == (1, 0)
+        finally:
+            upstream_b.release.set()
+            await asyncio.wait_for(probe, timeout=1)
+            await asyncio.wait_for(queue.stop(), timeout=1)
+            if future is not None:
+                await asyncio.gather(future, return_exceptions=True)
+            context["db"].close()
+
+    asyncio.run(run_test())
+
+
 def _enqueue_idle(queue, context, request_id="idle-success", *, tier="normal"):
     return queue.enqueue(
         request_id=request_id,
