@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.idle_free_small import IdleFreeSmallTracker
 
 
@@ -152,3 +154,60 @@ def test_natural_concurrency_follows_strict_threshold():
     assert threshold_sixty.is_idle() is True
     threshold_sixty.record_started(tokens_sixty[2], "c")
     assert threshold_sixty.is_idle() is False
+
+
+@pytest.mark.parametrize("threshold", [0, 50])
+def test_normal_traffic_bounds_history_without_idle_queries(threshold):
+    tracker, clock = _tracker(threshold=threshold, seconds=30)
+    token = object()
+    tracker.attach("a", token)
+    tracker.start()
+
+    for _ in range(10_000):
+        clock[0] += 1
+        tracker.record_started(token, "a")
+        clock[0] += 1
+        tracker.record_finished(token)
+
+    # 每秒一次状态变化，只应保留窗口内历史及一个边界状态。
+    assert len(tracker.events) <= 32
+    assert tracker.is_idle() is False
+    clock[0] += 30
+    assert tracker.is_idle() is (threshold > 0)
+
+
+def test_recording_prunes_history_without_losing_first_query_for_idle_subset():
+    tracker, clock = _tracker(seconds=30)
+    token_a, token_b = object(), object()
+    tracker.attach("a", token_a)
+    tracker.attach("b", token_b)
+    tracker.start()
+    clock[0] = 10
+    tracker.record_started(token_a, "a")
+    clock[0] = 20
+    tracker.record_finished(token_a)
+    clock[0] = 25
+    tracker.record_started(token_a, "a")
+    clock[0] = 50
+    tracker.record_finished(token_a)
+
+    assert len(tracker.events) == 3
+    assert tracker.is_idle(["b"]) is True
+    assert tracker.is_idle(["a"]) is False
+    clock[0] = 80
+    assert tracker.is_idle(["a"]) is True
+
+
+def test_same_timestamp_busy_transition_still_interrupts_idle_window():
+    tracker, clock = _tracker(seconds=30)
+    token = object()
+    tracker.attach("a", token)
+    tracker.start()
+    clock[0] = 20
+    tracker.record_started(token, "a")
+    tracker.record_finished(token)
+
+    clock[0] = 49.9
+    assert tracker.is_idle() is False
+    clock[0] = 50
+    assert tracker.is_idle() is True

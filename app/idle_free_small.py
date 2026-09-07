@@ -112,11 +112,13 @@ class IdleFreeSmallTracker:
             self.events.popleft()
 
     def _record_state_locked(self) -> None:
+        now_value = self.clock()
         enabled_ids = frozenset(self.active_workers)
         busy_ids = frozenset(self.running_sources.values()) & enabled_ids
-        if self.events and self.events[-1].enabled_ids == enabled_ids and self.events[-1].busy_ids == busy_ids:
-            return
-        self.events.append(PoolState(at=self.clock(), enabled_ids=enabled_ids, busy_ids=busy_ids))
+        if not self.events or self.events[-1].enabled_ids != enabled_ids or self.events[-1].busy_ids != busy_ids:
+            self.events.append(PoolState(at=now_value, enabled_ids=enabled_ids, busy_ids=busy_ids))
+        # 普通流量也会记录占用，不能等到有人申请空闲兜底才回收历史。
+        self._prune_locked(now_value)
 
 
 def _finite_nonnegative(value: object) -> float:
