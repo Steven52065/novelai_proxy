@@ -154,6 +154,12 @@ git diff --stat
 - `*.db-shm`
 - `*.db-wal`
 
+仓库文档范围：
+
+- 仓库已跟踪的文档包括根目录的 `AGENTS.md`、`REQUIREMENTS.md`、`NOVELAI_API_REFERENCE.md`、`logs-html-js-mirror-contract.md` 以及 `anlas_sync/ANALYSIS.md`。
+- 不得提交上述已有文档之外新增的 `.md`/`.txt` 草稿、笔记、方案、说明等文档；本地临时文档应保持未跟踪状态，不要执行 `git add`。
+- 如确实需要把新文档纳入仓库，应先说明用途与存放位置并确认后再提交，且保持提交关注点单一。
+
 提交信息必须使用中文。提交标题简洁说明本次变更，提交正文/description 也使用中文，并较详细地描述修改内容、影响范围和验证方式。例如：
 
 ```powershell
