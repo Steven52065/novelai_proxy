@@ -9,6 +9,13 @@ from ..novelai_enums import Sampler
 
 DIMENSION_STEP = 64
 
+# 临时设置：未找到官方文档明确说明该字符上限。上游实际返回过：
+# 错误 400：
+# Validation error: error validating request: request contains an excessively-long
+# prompt (2438056 chars; max 51200)
+# 为避免类似超大 prompt 进入调度队列并打到上游，这里按“必须小于 51200 字符”拦截。
+MAX_PROMPT_CHARS = 51200
+
 # v4 / v5 家族按真实上游实测结果收窄采样器（512x512 / 10 步 / 参考请求体，
 # v4.5 full 与 curated 结果一致）：接受家族表 6 个 + 下面 3 个遗留采样器，
 # 其余枚举成员（plms / ddim / k_dpm_adaptive / k_dpm_fast / k_dpmpp_3m_sde /
@@ -19,7 +26,12 @@ STRICT_SAMPLER_FAMILIES = frozenset({"v4", "v5"})
 V4_V5_EXTRA_SAMPLERS = frozenset({"k_dpm_2", "k_dpm_2_ancestral", "k_lms"})
 
 
-def validate_generate_parameters(model: Any, action: Any, parameters: Any) -> list[str]:
+def validate_generate_parameters(
+    model: Any,
+    action: Any,
+    parameters: Any,
+    input_text: Any = None,
+) -> list[str]:
     """校验 /ai/generate-image 入口的分辨率 / sampler / noise_schedule，返回中文错误列表。
 
     校验规则：宽高必须是 64 的整数倍；采样器必须在 Sampler 枚举内，且对
@@ -45,6 +57,14 @@ def validate_generate_parameters(model: Any, action: Any, parameters: Any) -> li
         return []
 
     errors: list[str] = []
+
+    # 只拦截，不改写或截断请求内容；同时覆盖顶层 input 和 V4/V5 prompt 结构。
+    for field_path, text_value in _iter_generate_prompt_texts(input_text, parameters):
+        if isinstance(text_value, str) and len(text_value) >= MAX_PROMPT_CHARS:
+            errors.append(
+                f"{field_path} 的 prompt 过长：{len(text_value)} 字符，"
+                f"必须小于 {MAX_PROMPT_CHARS} 字符"
+            )
 
     # 上游要求宽高都是 64 的整数倍，否则直接拒绝生成（例如 786x786）。
     for key in ("width", "height"):
@@ -90,6 +110,43 @@ def validate_generate_parameters(model: Any, action: Any, parameters: Any) -> li
             )
 
     return errors
+
+
+def _iter_generate_prompt_texts(input_text: Any, parameters: dict[str, Any]):
+    """生成需要做长度限制的 prompt 字段及路径，不处理图片等非文本参数。"""
+    yield "input", input_text
+
+    for key in ("prompt", "negative_prompt"):
+        yield f"parameters.{key}", parameters.get(key)
+
+    for key in ("v4_prompt", "v4_negative_prompt"):
+        condition = parameters.get(key)
+        if not isinstance(condition, dict):
+            continue
+        caption = condition.get("caption")
+        if not isinstance(caption, dict):
+            continue
+        yield f"parameters.{key}.caption.base_caption", caption.get("base_caption")
+
+        char_captions = caption.get("char_captions")
+        if not isinstance(char_captions, list):
+            continue
+        for index, item in enumerate(char_captions):
+            if not isinstance(item, dict):
+                continue
+            yield (
+                f"parameters.{key}.caption.char_captions[{index}].char_caption",
+                item.get("char_caption"),
+            )
+
+    character_prompts = parameters.get("characterPrompts")
+    if not isinstance(character_prompts, list):
+        return
+    for index, item in enumerate(character_prompts):
+        if not isinstance(item, dict):
+            continue
+        for key in ("prompt", "uc"):
+            yield f"parameters.characterPrompts[{index}].{key}", item.get(key)
 
 
 def _dimension(value: Any) -> int | None:

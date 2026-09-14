@@ -75,12 +75,13 @@ async def generate_image(
     # 非 dict 载荷直接抛 HTTPException(400)，交给全局处理器。
     request_payload = _normalize_generate_image_payload(payload)
 
-    # 仅文生图 generate 校验 sampler / noise_schedule 的取值合法性；
+    # 仅文生图 generate 校验 prompt 长度、sampler / noise_schedule 的取值合法性；
     # img2img / infill 以及 upscale / augment / encode-vibe 不启用本校验。
     validation_errors = validate_generate_parameters(
         model=request_payload.get("model"),
         action=request_payload.get("action", "generate"),
         parameters=request_payload.get("parameters"),
+        input_text=request_payload.get("input"),
     )
     if validation_errors:
         logger.warning(
