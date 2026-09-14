@@ -56,10 +56,10 @@ class RoutingConfig(BaseModel):
 
 class UpstreamAutoDisableConfig(BaseModel):
     enabled: bool = True
-    # 与 config.example.yaml 保持一致。400 可能由请求参数错误导致，
-    # 是否据此禁用账号由此列表决定，不能把普通 400 同时归类为 AuthError。
-    status_codes: list[int] = Field(default_factory=lambda: [400, 401, 402, 403])
-    # 与渠道测试的 error_type 一致；和 status_codes 任一命中即自动禁用。
+    # 与 config.example.yaml 保持一致。400 可能由请求参数错误导致，默认不据此禁用；
+    # 管理员仍可通过显式配置状态码决定是否按 400 禁用账号。
+    status_codes: list[int] = Field(default_factory=lambda: [401, 402, 403])
+    # 与渠道测试的 error_type 一致，来源独立于 HTTP 状态码；两套规则任一命中即禁用。
     error_types: list[str] = Field(default_factory=lambda: ["AuthError"])
 
     @field_validator("status_codes")

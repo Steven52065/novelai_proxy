@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from curl_cffi.requests import AsyncSession
 
-from .api_errors import APIError, AuthError, DataSerializationError, as_error_text
+from .api_errors import APIError, DataSerializationError, as_error_text
 from .logging_utils import dump_model_payload
 from .novelai_endpoints import (
     AUGMENT_IMAGE_ENDPOINT,
@@ -194,12 +194,11 @@ def _response_error(response) -> dict[str, Any]:
 
 def _raise_response_error(response, request: dict[str, Any]) -> None:
     error = _response_error(response)
-    # 400 是请求参数校验失败，不代表凭据失效；归为 AuthError 会让默认的错误类型
-    # 禁用规则绕过管理员在 status_codes 中对 400 的排除，误禁用正常账号。
-    exc_type = AuthError if response.status_code in {401, 402} else APIError
+    # HTTP 错误统一用 APIError 承载，错误类型由 api_error_type 独立读取上游响应。
+    # 不能根据 401/402 等状态码推断 AuthError，否则两套自动禁用规则会相互影响。
     # 不能用 error.get("message", 默认值)：默认值只在键缺失时生效，上游返回
     # {"message": null} 或非字符串结构时仍会把 None/dict 带进 APIError.message。
-    raise exc_type(
+    raise APIError(
         as_error_text(error.get("message")) or "上游请求失败",
         request=request,
         response=error,

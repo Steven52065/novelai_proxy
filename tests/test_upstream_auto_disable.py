@@ -98,28 +98,37 @@ def test_auto_disable_matches_status_code_or_error_type():
 
 
 @pytest.mark.parametrize(
-    ("status_codes", "error_fields", "should_disable", "expected_error_type"),
+    ("http_status", "status_codes", "error_fields", "should_disable", "expected_error_type"),
     [
-        pytest.param([403], {}, False, "APIError", id="legacy-status-list-excludes-400"),
-        pytest.param([], {}, False, "APIError", id="empty-status-list"),
-        pytest.param([400], {}, True, "APIError", id="explicit-400-rule"),
-        pytest.param([], {"type": "AuthError"}, True, "AuthError", id="upstream-explicit-auth-error"),
+        pytest.param(400, None, {}, False, "APIError", id="default-rules"),
+        pytest.param(400, [403], {}, False, "APIError", id="legacy-status-list-excludes-400"),
+        pytest.param(400, [], {}, False, "APIError", id="empty-status-list"),
+        pytest.param(400, [400], {}, True, "APIError", id="explicit-400-rule"),
+        pytest.param(400, [], {"type": "AuthError"}, True, "AuthError", id="400-type-match-only"),
+        pytest.param(500, [], {"name": "AuthError"}, True, "AuthError", id="500-type-match-only"),
+        pytest.param(401, [], {}, False, "APIError", id="401-without-type-is-not-auth-error"),
+        pytest.param(402, [], {}, False, "APIError", id="402-without-type-is-not-auth-error"),
+        pytest.param(401, [], {"type": "ValidationError"}, False, "ValidationError", id="neither-matches"),
+        pytest.param(401, [401], {"errorType": "ValidationError"}, True, "ValidationError", id="status-match-only"),
+        pytest.param(403, [403], {"type": "AuthError"}, True, "AuthError", id="both-match"),
+        pytest.param(401, None, {}, True, "APIError", id="default-401-status-match"),
     ],
 )
-def test_upstream_400_respects_disable_rules_without_draining_healthy_pool(
-    tmp_path: Path, monkeypatch, status_codes, error_fields, should_disable, expected_error_type
+def test_upstream_status_and_error_type_disable_rules_are_independent(
+    tmp_path: Path, monkeypatch, http_status, status_codes, error_fields, should_disable, expected_error_type
 ):
     config_path = write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])
-    # 模拟升级前的配置：没有 error_types，沿用新增字段的默认 AuthError。
-    with config_path.open("a", encoding="utf-8") as config_file:
-        config_file.write(f"\nupstream_auto_disable:\n  status_codes: {status_codes}\n")
+    # None 使用默认配置；其余模拟升级前未配置 error_types 的状态码规则。
+    if status_codes is not None:
+        with config_path.open("a", encoding="utf-8") as config_file:
+            config_file.write(f"\nupstream_auto_disable:\n  status_codes: {status_codes}\n")
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
     from app.main import app
 
     response = SimpleNamespace(
-        status_code=400,
+        status_code=http_status,
         content=b"",
-        json=lambda: {"message": "Validation error: input must be a string", **error_fields},
+        json=lambda: {"message": "Upstream rejected this request", **error_fields},
     )
 
     class InvalidInputUpstream(FakeUpstream):
@@ -146,7 +155,7 @@ def test_upstream_400_respects_disable_rules_without_draining_healthy_pool(
 
         for _ in range(2):
             failed = client.post("/ai/generate-image", headers=headers, json=invalid_payload)
-            assert failed.status_code == 400
+            assert failed.status_code == http_status
             quota = app.state.quota_manager.get_snapshot(user["user_id"])
             assert quota.used == 0
             assert quota.reserved == 0
@@ -163,7 +172,7 @@ def test_upstream_400_respects_disable_rules_without_draining_healthy_pool(
         notifications = app.state.admin_notifications.pending()
         assert len(notifications) == (2 if should_disable else 0)
         for notification in notifications:
-            assert notification.metadata["status_code"] == 400
+            assert notification.metadata["status_code"] == http_status
             assert notification.metadata["error_type"] == expected_error_type
 
         generated = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)

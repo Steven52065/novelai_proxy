@@ -178,11 +178,11 @@ def test_self_service_account_last_call_days_default_and_validation():
 def test_upstream_auto_disable_defaults():
     """默认按账号不可用的 HTTP 状态码或 AuthError 禁用。"""
     config = UpstreamAutoDisableConfig()
-    assert config.status_codes == [400, 401, 402, 403]
+    assert config.status_codes == [401, 402, 403]
     assert config.error_types == ["AuthError"]
 
     app_config = AppConfig()
-    assert app_config.upstream_auto_disable.status_codes == [400, 401, 402, 403]
+    assert app_config.upstream_auto_disable.status_codes == [401, 402, 403]
     assert app_config.upstream_auto_disable.error_types == ["AuthError"]
 
 

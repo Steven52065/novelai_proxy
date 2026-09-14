@@ -78,7 +78,7 @@ def as_error_text(value: Any) -> str:
 
 
 def api_error_type(exc: APIError) -> str:
-    """Return the error type shown by the admin upstream test."""
+    """读取上游错误类型，缺失时回退异常类名；不根据 HTTP 状态码推断类型。"""
     response = getattr(exc, "response", None)
     if isinstance(response, dict):
         error_type = response.get("type") or response.get("errorType") or response.get("name")

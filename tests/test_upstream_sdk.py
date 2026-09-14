@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from app.api_errors import APIError, AuthError, DataSerializationError
+from app.api_errors import APIError, AuthError, DataSerializationError, api_error_type
 from app.novelai_models import AugmentImageRequest, UpscaleRequest
 from app.upstream import UpstreamClient
 
@@ -297,15 +297,17 @@ def test_upstream_400_is_not_misclassified_as_auth_error(monkeypatch, method, js
 
 
 @pytest.mark.parametrize("status_code", [401, 402])
-def test_upstream_binary_post_maps_auth_status_to_auth_error(monkeypatch, status_code):
+def test_upstream_status_does_not_infer_auth_error(monkeypatch, status_code):
     client, _session = _client_with_response(
         monkeypatch,
         FakeResponse(status_code=status_code, content=b'{"message":"bad token"}', json_body={"message": "bad token"}),
     )
 
-    with pytest.raises(AuthError) as exc_info:
+    with pytest.raises(APIError) as exc_info:
         asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
 
+    assert type(exc_info.value) is APIError
+    assert api_error_type(exc_info.value) == "APIError"
     assert exc_info.value.message == "bad token"
     assert str(exc_info.value.code) == str(status_code)
 
