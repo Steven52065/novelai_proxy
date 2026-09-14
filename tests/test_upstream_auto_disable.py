@@ -40,10 +40,11 @@ class FakeNotifications:
         self.created.append(kwargs)
 
 
-def test_auto_disable_ignores_disabled_config_and_unmatched_status_code():
+def test_auto_disable_ignores_disabled_config_and_unmatched_rules():
     for config in (
         UpstreamAutoDisableConfig(enabled=False, status_codes=[403]),
         UpstreamAutoDisableConfig(enabled=True, status_codes=[500]),
+        UpstreamAutoDisableConfig(enabled=True, status_codes=[], error_types=["OutOfMemory"]),
     ):
         runtime = FakeRuntime()
         notifications = FakeNotifications()
@@ -60,6 +61,37 @@ def test_auto_disable_ignores_disabled_config_and_unmatched_status_code():
 
         assert runtime.disabled == []
         assert notifications.created == []
+
+
+def test_auto_disable_matches_status_code_or_error_type():
+    cases = (
+        (
+            APIError("Server error", request={}, response={"errorType": "OutOfMemory"}, code="503"),
+            UpstreamAutoDisableConfig(status_codes=[], error_types=["OutOfMemory"]),
+            "OutOfMemory",
+        ),
+        (
+            APIError("Forbidden", request={}, response={"type": "Unexpected"}, code="403"),
+            UpstreamAutoDisableConfig(status_codes=[403], error_types=[]),
+            "403",
+        ),
+    )
+
+    for error, config, expected_content in cases:
+        runtime = FakeRuntime()
+        notifications = FakeNotifications()
+        service = UpstreamAutoDisableService(
+            config=config,
+            runtime=runtime,
+            notifications=notifications,
+        )
+
+        service.handle_api_error("opus-a", error)
+
+        assert runtime.disabled == ["opus-a"]
+        assert len(notifications.created) == 1
+        assert expected_content in notifications.created[0]["content"]
+        assert notifications.created[0]["metadata"]["upstream_id"] == "opus-a"
 
 
 def test_upstream_403_auto_disables_channel_and_creates_notification(tmp_path: Path, monkeypatch):

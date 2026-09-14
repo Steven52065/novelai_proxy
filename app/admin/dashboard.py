@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 
-from ..api_errors import APIError, api_error_status_code
+from ..api_errors import APIError, api_error_status_code, api_error_type
 from ..dashboard_stats import ALL_UPSTREAMS, hour_bucket
 from ..database import Database
 from ..logging_utils import logger
@@ -109,7 +109,7 @@ UPSTREAM_TEST_EXCEPTION_RULES = (
         exception_type=APIError,
         status_code=lambda exc: api_error_status_code(exc) if isinstance(exc, APIError) else 502,
         error_code=_api_error_code,
-        error_type=lambda exc: _api_error_type(exc) if isinstance(exc, APIError) else exc.__class__.__name__,
+        error_type=lambda exc: api_error_type(exc) if isinstance(exc, APIError) else exc.__class__.__name__,
         message=_api_error_message,
     ),
 )
@@ -545,15 +545,6 @@ def _elapsed_ms(started_at: float) -> int:
 def _zip_image_preview(payload: bytes) -> tuple[int, dict[str, object] | None]:
     images = zip_images_to_data_urls(payload)
     return len(images), images[0] if images else None
-
-
-def _api_error_type(exc: APIError) -> str:
-    response = getattr(exc, "response", None)
-    if isinstance(response, dict):
-        error_type = response.get("type") or response.get("errorType") or response.get("name")
-        if error_type:
-            return str(error_type)
-    return exc.__class__.__name__
 
 
 def _http_exception_message(exc: HTTPException) -> str:

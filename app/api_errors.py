@@ -77,6 +77,16 @@ def as_error_text(value: Any) -> str:
     return str(value).strip()
 
 
+def api_error_type(exc: APIError) -> str:
+    """Return the error type shown by the admin upstream test."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error_type = response.get("type") or response.get("errorType") or response.get("name")
+        if error_type:
+            return str(error_type)
+    return exc.__class__.__name__
+
+
 def api_error_status_code(exc: APIError) -> int:
     if isinstance(exc, DataSerializationError):
         return 502

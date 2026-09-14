@@ -9,6 +9,7 @@ from app.api_errors import (
     DataSerializationError,
     NovelAIProxyError,
     api_error_status_code,
+    api_error_type,
     as_error_text,
 )
 
@@ -65,3 +66,10 @@ def test_api_error_never_reports_a_non_error_status_code():
 def test_as_error_text_normalizes_any_upstream_message(value, expected):
     assert as_error_text(value) == expected
     assert isinstance(as_error_text(value), str)
+
+
+def test_api_error_type_matches_admin_probe_display_fields():
+    assert api_error_type(APIError("failed", {}, {"type": "OutOfMemory"}, "500")) == "OutOfMemory"
+    assert api_error_type(APIError("failed", {}, {"errorType": "GpuError"}, "500")) == "GpuError"
+    assert api_error_type(APIError("failed", {}, {"name": "AccountSuspended"}, "403")) == "AccountSuspended"
+    assert api_error_type(APIError("failed", {}, {}, "500")) == "APIError"

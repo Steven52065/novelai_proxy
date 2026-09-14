@@ -59,6 +59,8 @@ class UpstreamAutoDisableConfig(BaseModel):
     # 400 validation error / 401 access token incorrect / 402 active subscription required
     # / 403 账号状态异常，四者都表示该上游账号当前不可用，与 config.example.yaml 保持一致。
     status_codes: list[int] = Field(default_factory=lambda: [400, 401, 402, 403])
+    # 与渠道测试的 error_type 一致；和 status_codes 任一命中即自动禁用。
+    error_types: list[str] = Field(default_factory=lambda: ["AuthError"])
 
     @field_validator("status_codes")
     @classmethod
@@ -70,6 +72,18 @@ class UpstreamAutoDisableConfig(BaseModel):
                 raise ValueError("upstream_auto_disable.status_codes must contain HTTP status codes")
             if code not in normalized:
                 normalized.append(code)
+        return normalized
+
+    @field_validator("error_types")
+    @classmethod
+    def validate_error_types(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            error_type = str(item).strip()
+            if not error_type:
+                raise ValueError("upstream_auto_disable.error_types must contain non-empty error type names")
+            if error_type not in normalized:
+                normalized.append(error_type)
         return normalized
 
 

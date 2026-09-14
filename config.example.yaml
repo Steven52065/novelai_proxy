@@ -92,17 +92,21 @@ routing:
 # 开启自助服务后，普通用户也可在 /account 页面自行上传和管理上游 key（见下方 self_service.upstreams）。
 
 # 上游错误自动禁用配置。
-# 当某个 NovelAI 上游账号返回指定 HTTP 状态码时，会自动把该账号设为禁用，
+# 当某个 NovelAI 上游账号返回指定 HTTP 状态码或错误类型时，会自动把该账号设为禁用，
 # 并把该账号队列里尚未开始执行的普通用户请求退回调度队列重新分流。
 upstream_auto_disable:
   # 默认开启。关闭后只记录正常失败，不会自动修改上游账号启用状态。
   enabled: true
-  # 默认 403，通常表示 API Key 或账号状态不可用。
+  # 默认 400、401、402、403，通常表示 API Key 或账号状态不可用。
   status_codes:
     - 400
     - 401
     - 402
     - 403
+  # 默认按 AuthError 禁用；错误类型优先读取 type/errorType/name，缺失时取异常类名。
+  # 状态码与错误类型任一命中即自动禁用；空列表表示不按错误类型禁用。
+  error_types:
+    - AuthError
 
 # SQLite 数据库配置。
 database:

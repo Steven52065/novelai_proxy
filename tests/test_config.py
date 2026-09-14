@@ -175,19 +175,34 @@ def test_self_service_account_last_call_days_default_and_validation():
         AppConfig.model_validate({'self_service': {'account': {'last_call_days': 3651}}})
 
 
-def test_upstream_auto_disable_default_status_codes():
-    """400/401/402/403 都表示该上游账号当前不可用。"""
-    assert UpstreamAutoDisableConfig().status_codes == [400, 401, 402, 403]
-    assert AppConfig().upstream_auto_disable.status_codes == [400, 401, 402, 403]
+def test_upstream_auto_disable_defaults():
+    """默认按账号不可用的 HTTP 状态码或 AuthError 禁用。"""
+    config = UpstreamAutoDisableConfig()
+    assert config.status_codes == [400, 401, 402, 403]
+    assert config.error_types == ["AuthError"]
+
+    app_config = AppConfig()
+    assert app_config.upstream_auto_disable.status_codes == [400, 401, 402, 403]
+    assert app_config.upstream_auto_disable.error_types == ["AuthError"]
+
+
+def test_upstream_auto_disable_error_types_are_normalized():
+    config = UpstreamAutoDisableConfig(error_types=[" OutOfMemory ", "OutOfMemory", "AuthError"])
+    assert config.error_types == ["OutOfMemory", "AuthError"]
+
+    with pytest.raises(ValidationError, match="error_types"):
+        UpstreamAutoDisableConfig(error_types=["OutOfMemory", "  "])
 
 
 def test_config_example_upstream_auto_disable_matches_code_default():
     """模板与代码默认值必须同步。
 
     两者一旦漂移，照模板部署的实例与省略该段的实例行为就不同，而这段控制的是
-    「什么错误码会自动禁用共享上游账号」，静默的不一致代价很高。
+    「什么错误会自动禁用共享上游账号」，静默的不一致代价很高。
     """
     example_path = Path(__file__).resolve().parent.parent / "config.example.yaml"
     example = yaml.safe_load(example_path.read_text(encoding="utf-8"))
+    defaults = UpstreamAutoDisableConfig()
 
-    assert example["upstream_auto_disable"]["status_codes"] == UpstreamAutoDisableConfig().status_codes
+    assert example["upstream_auto_disable"]["status_codes"] == defaults.status_codes
+    assert example["upstream_auto_disable"]["error_types"] == defaults.error_types
