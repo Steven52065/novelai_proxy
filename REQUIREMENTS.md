@@ -158,7 +158,7 @@ Discord 自助注册配置示例见 `config.example.yaml`。配置要点：
 - `default_group_id` 是本地 `user_groups.id`，服务启动时会校验该组存在且启用。
 - `client_secret` 和 `session_secret` 只能写入本地 `config.yaml`，不能提交到 Git。
 - 自助账号页只展示和重置本项目 Proxy API Key；代理 API 不接受 Discord token。
-- 自助账号页显示「最近调用」栏：用户最后一次调用的时间与结果（成功 / 失败 / 已拒绝 / 排队中 / 运行中），失败时给出原因。回看窗口由 `self_service.account.last_call_days` 控制，默认 7 天滚动窗口，设为 0 则隐藏该栏。被代理层在打到上游前拒绝的请求（限频、额度不足等）同样计入；管理员重放产生的日志行不计入。
+- 自助账号页显示「最近调用」栏：用户最后一次调用的时间与结果（成功 / 失败 / 已拒绝 / 排队中 / 运行中），失败时给出原因。回看窗口由 `self_service.account.last_call_days` 控制，默认 7 天滚动窗口，设为 0 则隐藏该栏。限频、额度不足等业务检查拒绝的请求同样计入；基础请求参数校验（如 JSON 格式、prompt 长度、采样器取值）失败时直接拦截，不写入调用日志；管理员重放产生的日志行不计入。
 - 该栏的失败原因**不透传** `usage_logs.error_message` 原文。实测该列会包含上游内网 IP 与端口（`500`）、curl / OpenSSL 报错细节（异常类名码），以及形如 `u{用户ID}-{备注}` 的他人上游 ID（`no_available_upstream`）。仅 `400`、`429` 及本项目自己生成的错误码放行原文，其余一律折叠为通用文案；`401` / `402` 因描述的是公共号池健康状况，也折叠处理。`upstream_id` 与 `output_files` 两列不向用户展示。
 - 系统不持久化 Discord `access_token` 或 `refresh_token`，也不应在日志中输出这些 token。
 
@@ -173,6 +173,7 @@ NovelAI 上游账号（JWT token）统一存在 `novelai_upstreams` 表中，由
 - 管理员可增删改上游 key、更换 token、启用/禁用、测试连通性，并维护全局账号等级（`account_tier`，Opus 计费依据）。
 - 上游 ID 由管理员自定义；`__all__` 是保留字不能作为 ID，`default` 是常用的默认 ID。ID 创建后不可变（`usage_logs`、`dashboard_hourly_stats`、白名单都按字符串引用它）。
 - 调度支持多上游：请求按当前启用的上游集合路由，上游被禁用/删除后会自动从运行态与调度队列移除；命中 `upstream_auto_disable.status_codes`（默认 `400`、`401`、`402`、`403`）或 `upstream_auto_disable.error_types`（默认 `AuthError`）中配置的错误类型时，会自动禁用该上游并通知管理员；两者任一命中即可。
+- 上游普通 HTTP `400` 参数错误归为 `APIError`，避免从 `status_codes` 移除 `400` 后仍被默认 `AuthError` 规则禁用。若 `status_codes` 包含 `400`，或上游在 `type` / `errorType` / `name` 中明确返回了已配置的错误类型，仍按规则禁用；`401` / `402` 的异常分类保持为 `AuthError`。
 - 测试连通性对启用和禁用（含自动禁用）账号都可用：启用账号的探测进入该上游的调度队列，禁用账号没有队列，因此走队列外直连探测。**启用账号的探测与普通请求共用同一条失败处理路径，因此探测返回的错误码或错误类型命中 `upstream_auto_disable.status_codes` / `upstream_auto_disable.error_types` 时同样会自动禁用该账号并通知管理员**——这是预期行为，相当于用一次真实请求确认账号确实不可用。禁用账号的队列外直连探测不接自动禁用逻辑，既不改变启用状态，也不会因此回到调度；同一账号同时只允许一个直连探测在跑，重复触发返回 409 `upstream_test_in_progress`。
 - 删除保护：仍被用户或用户组白名单引用的上游不能删除，管理端返回 409 并列出引用方；可先停用或调整白名单。
 - 若启用 Discord 自助服务（`self_service.discord.enabled`），普通用户可在 `/account` 页面上传和管理自己的上游 key，开关与上限由 `self_service.upstreams` 控制（`enabled`、`max_per_user`）：

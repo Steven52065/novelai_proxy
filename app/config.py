@@ -56,8 +56,8 @@ class RoutingConfig(BaseModel):
 
 class UpstreamAutoDisableConfig(BaseModel):
     enabled: bool = True
-    # 400 validation error / 401 access token incorrect / 402 active subscription required
-    # / 403 账号状态异常，四者都表示该上游账号当前不可用，与 config.example.yaml 保持一致。
+    # 与 config.example.yaml 保持一致。400 可能由请求参数错误导致，
+    # 是否据此禁用账号由此列表决定，不能把普通 400 同时归类为 AuthError。
     status_codes: list[int] = Field(default_factory=lambda: [400, 401, 402, 403])
     # 与渠道测试的 error_type 一致；和 status_codes 任一命中即自动禁用。
     error_types: list[str] = Field(default_factory=lambda: ["AuthError"])

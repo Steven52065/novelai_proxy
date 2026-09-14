@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from app.api_errors import APIError
 
 from app.config import UpstreamAutoDisableConfig
+from app.upstream import _raise_response_error
 from app.upstream_auto_disable import UpstreamAutoDisableService
 from helpers import PAYLOAD, FakeUpstream, write_test_config, write_test_config_with_upstreams
 
@@ -92,6 +95,79 @@ def test_auto_disable_matches_status_code_or_error_type():
         assert len(notifications.created) == 1
         assert expected_content in notifications.created[0]["content"]
         assert notifications.created[0]["metadata"]["upstream_id"] == "opus-a"
+
+
+@pytest.mark.parametrize(
+    ("status_codes", "error_fields", "should_disable", "expected_error_type"),
+    [
+        pytest.param([403], {}, False, "APIError", id="legacy-status-list-excludes-400"),
+        pytest.param([], {}, False, "APIError", id="empty-status-list"),
+        pytest.param([400], {}, True, "APIError", id="explicit-400-rule"),
+        pytest.param([], {"type": "AuthError"}, True, "AuthError", id="upstream-explicit-auth-error"),
+    ],
+)
+def test_upstream_400_respects_disable_rules_without_draining_healthy_pool(
+    tmp_path: Path, monkeypatch, status_codes, error_fields, should_disable, expected_error_type
+):
+    config_path = write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])
+    # 模拟升级前的配置：没有 error_types，沿用新增字段的默认 AuthError。
+    with config_path.open("a", encoding="utf-8") as config_file:
+        config_file.write(f"\nupstream_auto_disable:\n  status_codes: {status_codes}\n")
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    response = SimpleNamespace(
+        status_code=400,
+        content=b"",
+        json=lambda: {"message": "Validation error: input must be a string", **error_fields},
+    )
+
+    class InvalidInputUpstream(FakeUpstream):
+        async def generate_image_payload_zip(self, payload):
+            if not isinstance(payload.get("input"), str):
+                # 必须经过真实传输层的错误映射，手工构造 APIError 会漏掉本次回归。
+                _raise_response_error(response, payload)
+            return await super().generate_image_payload_zip(payload)
+
+    with TestClient(app) as client:
+        upstream = InvalidInputUpstream()
+        app.state.upstream = upstream
+        app.state.upstream_clients["opus-b"] = upstream
+        user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-error-user", "tier": "normal", "anlas_total": 100},
+        ).json()
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+        invalid_payload = PAYLOAD | {
+            "input": 123,
+            "parameters": PAYLOAD["parameters"] | {"steps": 30},
+        }
+
+        for _ in range(2):
+            failed = client.post("/ai/generate-image", headers=headers, json=invalid_payload)
+            assert failed.status_code == 400
+            quota = app.state.quota_manager.get_snapshot(user["user_id"])
+            assert quota.used == 0
+            assert quota.reserved == 0
+
+        failures = app.state.db.query_all(
+            "SELECT status, estimated_anlas_cost FROM usage_logs WHERE user_id = ?",
+            (user["user_id"],),
+        )
+        assert len(failures) == 2
+        assert all(row["status"] == "failed" and row["estimated_anlas_cost"] > 0 for row in failures)
+        expected_enabled = 0 if should_disable else 2
+        assert len(app.state.upstream_clients) == expected_enabled
+        assert len(app.state.upstream_runtime.repository.list(include_disabled=False)) == expected_enabled
+        notifications = app.state.admin_notifications.pending()
+        assert len(notifications) == (2 if should_disable else 0)
+        for notification in notifications:
+            assert notification.metadata["status_code"] == 400
+            assert notification.metadata["error_type"] == expected_error_type
+
+        generated = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        assert generated.status_code == (503 if should_disable else 201)
 
 
 def test_upstream_403_auto_disables_channel_and_creates_notification(tmp_path: Path, monkeypatch):

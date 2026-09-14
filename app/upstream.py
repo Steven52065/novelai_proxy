@@ -194,7 +194,9 @@ def _response_error(response) -> dict[str, Any]:
 
 def _raise_response_error(response, request: dict[str, Any]) -> None:
     error = _response_error(response)
-    exc_type = AuthError if response.status_code in {400, 401, 402} else APIError
+    # 400 是请求参数校验失败，不代表凭据失效；归为 AuthError 会让默认的错误类型
+    # 禁用规则绕过管理员在 status_codes 中对 400 的排除，误禁用正常账号。
+    exc_type = AuthError if response.status_code in {401, 402} else APIError
     # 不能用 error.get("message", 默认值)：默认值只在键缺失时生效，上游返回
     # {"message": null} 或非字符串结构时仍会把 None/dict 带进 APIError.message。
     raise exc_type(

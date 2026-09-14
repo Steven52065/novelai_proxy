@@ -272,17 +272,42 @@ def test_upstream_suggest_tags_500_is_not_retried(monkeypatch):
     assert len(session.gets) == 1
 
 
-def test_upstream_binary_post_maps_auth_status_to_auth_error(monkeypatch):
+@pytest.mark.parametrize("method", ["generate", "suggest_tags"])
+@pytest.mark.parametrize("json_body", [None, {"message": "Validation error"}], ids=["text", "json"])
+def test_upstream_400_is_not_misclassified_as_auth_error(monkeypatch, method, json_body):
     client, _session = _client_with_response(
         monkeypatch,
-        FakeResponse(status_code=401, content=b'{"message":"bad token"}', json_body={"message": "bad token"}),
+        FakeResponse(
+            status_code=400,
+            content=b"Validation error",
+            content_type="text/plain" if json_body is None else "application/json",
+            json_body=json_body,
+        ),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        if method == "generate":
+            asyncio.run(client.generate_image_payload_zip({"input": "1girl"}))
+        else:
+            asyncio.run(client.suggest_tags("nai-diffusion-3", "1girl"))
+
+    assert not isinstance(exc_info.value, AuthError)
+    assert exc_info.value.message == "Validation error"
+    assert str(exc_info.value.code) == "400"
+
+
+@pytest.mark.parametrize("status_code", [401, 402])
+def test_upstream_binary_post_maps_auth_status_to_auth_error(monkeypatch, status_code):
+    client, _session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=status_code, content=b'{"message":"bad token"}', json_body={"message": "bad token"}),
     )
 
     with pytest.raises(AuthError) as exc_info:
         asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
 
     assert exc_info.value.message == "bad token"
-    assert str(exc_info.value.code) == "401"
+    assert str(exc_info.value.code) == str(status_code)
 
 
 def test_upstream_binary_post_maps_429_to_api_error_without_requiring_json(monkeypatch):
