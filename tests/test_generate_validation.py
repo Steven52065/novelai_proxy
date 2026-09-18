@@ -5,6 +5,7 @@ import pytest
 from anlas_sync import anlas_pricing
 from app.novelai_enums import Sampler
 from app.policies.generate_validation import (
+    MAX_PROMPT_CHARS,
     STRICT_SAMPLER_FAMILIES,
     V4_V5_EXTRA_SAMPLERS,
     validate_generate_parameters,
@@ -292,3 +293,76 @@ def test_unknown_model_skips_validation():
 def test_non_dict_parameters_skipped():
     assert validate_generate_parameters("nai-diffusion-3", "generate", None) == []
     assert validate_generate_parameters("nai-diffusion-3", "generate", "not-a-dict") == []
+
+
+def test_ascii_prompt_at_byte_limit_is_rejected():
+    """纯英文 1 码点 = 1 字节，边界与上游一致：51200 必须拦，51199 放行。"""
+    over = "a" * MAX_PROMPT_CHARS
+    under = "a" * (MAX_PROMPT_CHARS - 1)
+
+    over_errors = validate_generate_parameters("nai-diffusion-3", "generate", _params(), over)
+    under_errors = validate_generate_parameters("nai-diffusion-3", "generate", _params(), under)
+
+    assert len(over_errors) == 1
+    assert "input" in over_errors[0]
+    assert f"{MAX_PROMPT_CHARS} 字节" in over_errors[0]
+    assert under_errors == []
+
+
+def test_cjk_prompt_under_codepoint_limit_but_over_utf8_limit_is_rejected():
+    """回归：请求参考.txt 的真实口径。
+
+    上游报 64689 chars / max 51200，但该请求 Unicode 码点只有 28950；
+    64689 正好是 UTF-8 字节数。用 Python len() 会漏拦。
+    """
+    # “汉” 每字 3 字节：17067 字 = 51201 字节，码点远小于 51200。
+    text = "汉" * 17067
+    assert len(text) < MAX_PROMPT_CHARS
+    assert len(text.encode("utf-8")) == 51201
+
+    errors = validate_generate_parameters(
+        "nai-diffusion-4-5-full",
+        "generate",
+        _params(),
+        text,
+    )
+
+    assert len(errors) == 1
+    assert "input" in errors[0]
+    assert "51201 字节" in errors[0]
+    assert f"必须小于 {MAX_PROMPT_CHARS} 字节" in errors[0]
+
+
+def test_cjk_prompt_just_under_utf8_limit_passes():
+    text = "汉" * 17066  # 51198 字节
+    assert len(text.encode("utf-8")) < MAX_PROMPT_CHARS
+    assert validate_generate_parameters("nai-diffusion-3", "generate", _params(), text) == []
+
+
+def test_v4_base_caption_utf8_over_limit_is_rejected():
+    """V4/V5 的 base_caption 与顶层 input 一样按 UTF-8 字节拦截。"""
+    text = "汉" * 17067
+    errors = validate_generate_parameters(
+        "nai-diffusion-4-5-full",
+        "generate",
+        _params(v4_prompt={"caption": {"base_caption": text, "char_captions": []}}),
+    )
+
+    assert len(errors) == 1
+    assert "parameters.v4_prompt.caption.base_caption" in errors[0]
+    assert "51201 字节" in errors[0]
+
+
+def test_duplicate_long_input_and_v4_caption_are_both_reported():
+    """请求参考.txt 里 input 与 v4 base_caption 是同一段超长文本的两份拷贝。"""
+    text = "汉" * 17067
+    errors = validate_generate_parameters(
+        "nai-diffusion-4-5-full",
+        "generate",
+        _params(v4_prompt={"caption": {"base_caption": text, "char_captions": []}}),
+        text,
+    )
+
+    assert len(errors) == 2
+    assert "input" in errors[0]
+    assert "parameters.v4_prompt.caption.base_caption" in errors[1]

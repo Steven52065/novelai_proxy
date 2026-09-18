@@ -550,6 +550,41 @@ def test_generate_rejects_dimension_not_multiple_of_64(tmp_path: Path, monkeypat
         assert app.state.upstream.last_generate_payload is None
 
 
+def test_generate_rejects_cjk_prompt_over_utf8_byte_limit(tmp_path: Path, monkeypatch):
+    """上游按 UTF-8 字节计 prompt 上限。中文码点未满 51200 也必须提前 400，不能打到上游。"""
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))
+    from app.main import app
+
+    with TestClient(app) as client:
+        app.state.upstream = FakeUpstream()
+        create_resp = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "validation-prompt-utf8", "tier": "normal", "anlas_total": 100},
+        )
+        api_key = create_resp.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        # “汉” × 17067 = 51201 字节 / 17067 码点，复现请求参考.txt 的漏拦口径。
+        long_prompt = "汉" * 17067
+        payload = PAYLOAD | {
+            "model": "nai-diffusion-4-5-full",
+            "input": long_prompt,
+            "parameters": PAYLOAD["parameters"] | {
+                "sampler": "k_euler",
+                "v4_prompt": {"caption": {"base_caption": long_prompt, "char_captions": []}},
+            },
+        }
+        resp = client.post("/ai/generate-image", headers=headers, json=payload)
+
+        assert resp.status_code == 400
+        message = resp.json()["message"]
+        assert "input" in message
+        assert "51201 字节" in message
+        assert "51200" in message
+        assert app.state.upstream.last_generate_payload is None
+
+
 def test_generate_dimension_check_not_applied_to_img2img(tmp_path: Path, monkeypatch):
     """分辨率校验与 sampler 校验同一层，img2img / infill 同样不启用。"""
     monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(write_test_config(tmp_path)))

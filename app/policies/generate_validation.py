@@ -9,11 +9,14 @@ from ..novelai_enums import Sampler
 
 DIMENSION_STEP = 64
 
-# 临时设置：未找到官方文档明确说明该字符上限。上游实际返回过：
+# 临时设置：未找到官方文档明确说明该上限。上游实际返回过：
 # 错误 400：
 # Validation error: error validating request: request contains an excessively-long
 # prompt (2438056 chars; max 51200)
-# 为避免类似超大 prompt 进入调度队列并打到上游，这里按“必须小于 51200 字符”拦截。
+# 以及：prompt (64689 chars; max 51200)——该请求 Unicode 码点只有 28950，
+# 64689 正好等于 UTF-8 字节数。上游文案写 chars，实际按 UTF-8 字节计
+# （纯英文 1 码点 = 1 字节看不出来；中文会漏拦）。
+# 为避免超大 prompt 进入调度队列并打到上游，这里按 UTF-8 字节必须小于 51200 拦截。
 MAX_PROMPT_CHARS = 51200
 
 # v4 / v5 家族按真实上游实测结果收窄采样器（512x512 / 10 步 / 参考请求体，
@@ -59,11 +62,15 @@ def validate_generate_parameters(
     errors: list[str] = []
 
     # 只拦截，不改写或截断请求内容；同时覆盖顶层 input 和 V4/V5 prompt 结构。
+    # 长度按 UTF-8 字节计，与上游 “chars” 口径一致，不能用 Python len()（码点数）。
     for field_path, text_value in _iter_generate_prompt_texts(input_text, parameters):
-        if isinstance(text_value, str) and len(text_value) >= MAX_PROMPT_CHARS:
+        if not isinstance(text_value, str):
+            continue
+        byte_len = _utf8_len(text_value)
+        if byte_len >= MAX_PROMPT_CHARS:
             errors.append(
-                f"{field_path} 的 prompt 过长：{len(text_value)} 字符，"
-                f"必须小于 {MAX_PROMPT_CHARS} 字符"
+                f"{field_path} 的 prompt 过长：{byte_len} 字节，"
+                f"必须小于 {MAX_PROMPT_CHARS} 字节"
             )
 
     # 上游要求宽高都是 64 的整数倍，否则直接拒绝生成（例如 786x786）。
@@ -110,6 +117,11 @@ def validate_generate_parameters(
             )
 
     return errors
+
+
+def _utf8_len(text: str) -> int:
+    """上游报错里的 chars 实际是 UTF-8 字节数，不是 Unicode 码点数。"""
+    return len(text.encode("utf-8"))
 
 
 def _iter_generate_prompt_texts(input_text: Any, parameters: dict[str, Any]):
