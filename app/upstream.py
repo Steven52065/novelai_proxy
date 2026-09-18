@@ -189,7 +189,12 @@ def _response_error(response) -> dict[str, Any]:
     # 改为保留开头片段并标注截断长度。
     if len(text) > _MAX_ERROR_BODY_CHARS:
         text = f"{text[:_MAX_ERROR_BODY_CHARS]}...[truncated, {len(text)} chars total]"
-    return {"statusCode": response.status_code, "message": text or "上游请求失败"}
+    error: dict[str, Any] = {"statusCode": response.status_code}
+    # 空 body 不写入假 message。APIError.message 仍由 _raise_response_error 填
+    # 「上游请求失败」，但自动禁用匹配读的是响应 dict 原文，不能把默认值写进去。
+    if text:
+        error["message"] = text
+    return error
 
 
 def _raise_response_error(response, request: dict[str, Any]) -> None:

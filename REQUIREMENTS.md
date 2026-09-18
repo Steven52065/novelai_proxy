@@ -172,10 +172,10 @@ NovelAI 上游账号（JWT token）统一存在 `novelai_upstreams` 表中，由
 
 - 管理员可增删改上游 key、更换 token、启用/禁用、测试连通性，并维护全局账号等级（`account_tier`，Opus 计费依据）。
 - 上游 ID 由管理员自定义；`__all__` 是保留字不能作为 ID，`default` 是常用的默认 ID。ID 创建后不可变（`usage_logs`、`dashboard_hourly_stats`、白名单都按字符串引用它）。
-- 调度支持多上游：请求按当前启用的上游集合路由，上游被禁用/删除后会自动从运行态与调度队列移除；命中 `upstream_auto_disable.status_codes`（默认 `401`、`402`、`403`）或 `upstream_auto_disable.error_types`（默认 `AuthError`）中配置的错误类型时，会自动禁用该上游并通知管理员；两者任一命中即可。
-- 上游 HTTP 错误统一用 `APIError` 承载。`status_codes` 匹配实际 HTTP 状态码；`error_types` 优先读取上游响应的 `type` / `errorType` / `name`，缺失时使用异常类名（普通 HTTP 错误为 `APIError`）。不根据 `401` / `402` 等状态码推断 `AuthError`，两套规则独立匹配，任一命中即禁用，都不命中则不禁用。
-- 普通 HTTP `400` 参数错误默认不会触发自动禁用。若 `status_codes` 显式包含 `400`，或上游明确返回了已配置的错误类型，仍按规则禁用。升级时旧 `config.yaml` 中显式配置的 `400` 需要手动移除。
-- 测试连通性对启用和禁用（含自动禁用）账号都可用：启用账号的探测进入该上游的调度队列，禁用账号没有队列，因此走队列外直连探测。**启用账号的探测与普通请求共用同一条失败处理路径，因此探测返回的错误码或错误类型命中 `upstream_auto_disable.status_codes` / `upstream_auto_disable.error_types` 时同样会自动禁用该账号并通知管理员**——这是预期行为，相当于用一次真实请求确认账号确实不可用。禁用账号的队列外直连探测不接自动禁用逻辑，既不改变启用状态，也不会因此回到调度；同一账号同时只允许一个直连探测在跑，重复触发返回 409 `upstream_test_in_progress`。
+- 调度支持多上游：请求按当前启用的上游集合路由，上游被禁用/删除后会自动从运行态与调度队列移除；命中 `upstream_auto_disable.status_codes`（默认 `401`、`402`、`403`）、`upstream_auto_disable.error_types`（默认 `AuthError`）、`upstream_auto_disable.error_message_keywords`（默认空）或 `upstream_auto_disable.error_message_exact`（默认空）中任一规则时，会自动禁用该上游并通知管理员。
+- 上游 HTTP 错误统一用 `APIError` 承载。`status_codes` 匹配实际 HTTP 状态码；`error_types` 优先读取上游响应的 `type` / `errorType` / `name`，缺失时使用异常类名（普通 HTTP 错误为 `APIError`），不根据 `401` / `402` 等状态码推断 `AuthError`。错误消息与管理后台「上游渠道测试」的「错误消息」同一来源，读取上游响应 `message` 原文：`error_message_keywords` 为包含匹配，`error_message_exact` 为全文完全一致。上游未返回消息（缺字段、null、空白）时不填默认值，因此不会按消息规则命中。四套规则独立匹配，任一命中即禁用，都不命中则不禁用。
+- 普通 HTTP `400` 参数错误默认不会触发自动禁用。若 `status_codes` 显式包含 `400`，或上游明确返回了已配置的错误类型 / 错误消息，仍按规则禁用。升级时旧 `config.yaml` 中显式配置的 `400` 需要手动移除。
+- 测试连通性对启用和禁用（含自动禁用）账号都可用：启用账号的探测进入该上游的调度队列，禁用账号没有队列，因此走队列外直连探测。**启用账号的探测与普通请求共用同一条失败处理路径，因此探测返回的错误码、错误类型或错误消息命中 `upstream_auto_disable` 对应规则时同样会自动禁用该账号并通知管理员**——这是预期行为，相当于用一次真实请求确认账号确实不可用。禁用账号的队列外直连探测不接自动禁用逻辑，既不改变启用状态，也不会因此回到调度；同一账号同时只允许一个直连探测在跑，重复触发返回 409 `upstream_test_in_progress`。
 - 删除保护：仍被用户或用户组白名单引用的上游不能删除，管理端返回 409 并列出引用方；可先停用或调整白名单。
 - 若启用 Discord 自助服务（`self_service.discord.enabled`），普通用户可在 `/account` 页面上传和管理自己的上游 key，开关与上限由 `self_service.upstreams` 控制（`enabled`、`max_per_user`）：
   - 上传的 key 进入**公共池**，所有用户都能用它跑图；上传者只拥有管理权。

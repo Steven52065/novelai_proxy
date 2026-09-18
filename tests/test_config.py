@@ -176,14 +176,18 @@ def test_self_service_account_last_call_days_default_and_validation():
 
 
 def test_upstream_auto_disable_defaults():
-    """默认按账号不可用的 HTTP 状态码或 AuthError 禁用。"""
+    """默认按账号不可用的 HTTP 状态码或 AuthError 禁用；消息规则默认空。"""
     config = UpstreamAutoDisableConfig()
     assert config.status_codes == [401, 402, 403]
     assert config.error_types == ["AuthError"]
+    assert config.error_message_keywords == []
+    assert config.error_message_exact == []
 
     app_config = AppConfig()
     assert app_config.upstream_auto_disable.status_codes == [401, 402, 403]
     assert app_config.upstream_auto_disable.error_types == ["AuthError"]
+    assert app_config.upstream_auto_disable.error_message_keywords == []
+    assert app_config.upstream_auto_disable.error_message_exact == []
 
 
 def test_upstream_auto_disable_error_types_are_normalized():
@@ -192,6 +196,20 @@ def test_upstream_auto_disable_error_types_are_normalized():
 
     with pytest.raises(ValidationError, match="error_types"):
         UpstreamAutoDisableConfig(error_types=["OutOfMemory", "  "])
+
+
+def test_upstream_auto_disable_error_message_rules_are_normalized():
+    config = UpstreamAutoDisableConfig(
+        error_message_keywords=[" subscription ", "subscription", "expired"],
+        error_message_exact=[" Account suspended ", "Account suspended"],
+    )
+    assert config.error_message_keywords == ["subscription", "expired"]
+    assert config.error_message_exact == ["Account suspended"]
+
+    with pytest.raises(ValidationError, match="error_message_keywords"):
+        UpstreamAutoDisableConfig(error_message_keywords=["ok", "  "])
+    with pytest.raises(ValidationError, match="error_message_exact"):
+        UpstreamAutoDisableConfig(error_message_exact=["ok", ""])
 
 
 def test_config_example_upstream_auto_disable_matches_code_default():
@@ -206,3 +224,5 @@ def test_config_example_upstream_auto_disable_matches_code_default():
 
     assert example["upstream_auto_disable"]["status_codes"] == defaults.status_codes
     assert example["upstream_auto_disable"]["error_types"] == defaults.error_types
+    assert example["upstream_auto_disable"]["error_message_keywords"] == defaults.error_message_keywords
+    assert example["upstream_auto_disable"]["error_message_exact"] == defaults.error_message_exact

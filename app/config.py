@@ -10,6 +10,17 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 RESERVED_UPSTREAM_IDS = {"__all__"}
 
 
+def _normalize_nonempty_strings(value: list[str], field_name: str, item_label: str) -> list[str]:
+    normalized: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if not text:
+            raise ValueError(f"upstream_auto_disable.{field_name} must contain non-empty {item_label}")
+        if text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
 class AdminConfig(BaseModel):
     username: str = "admin"
     password: str = "admin123"
@@ -61,6 +72,10 @@ class UpstreamAutoDisableConfig(BaseModel):
     status_codes: list[int] = Field(default_factory=lambda: [401, 402, 403])
     # 与渠道测试的 error_type 一致，来源独立于 HTTP 状态码；两套规则任一命中即禁用。
     error_types: list[str] = Field(default_factory=lambda: ["AuthError"])
+    # 与渠道测试的「错误消息」一致，读上游响应 message 原文；缺消息不填默认值。
+    # 关键词为包含匹配，对照为全文完全一致；空列表表示不按该项禁用。
+    error_message_keywords: list[str] = Field(default_factory=list)
+    error_message_exact: list[str] = Field(default_factory=list)
 
     @field_validator("status_codes")
     @classmethod
@@ -77,14 +92,17 @@ class UpstreamAutoDisableConfig(BaseModel):
     @field_validator("error_types")
     @classmethod
     def validate_error_types(cls, value: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for item in value:
-            error_type = str(item).strip()
-            if not error_type:
-                raise ValueError("upstream_auto_disable.error_types must contain non-empty error type names")
-            if error_type not in normalized:
-                normalized.append(error_type)
-        return normalized
+        return _normalize_nonempty_strings(value, "error_types", "error type names")
+
+    @field_validator("error_message_keywords")
+    @classmethod
+    def validate_error_message_keywords(cls, value: list[str]) -> list[str]:
+        return _normalize_nonempty_strings(value, "error_message_keywords", "error message keywords")
+
+    @field_validator("error_message_exact")
+    @classmethod
+    def validate_error_message_exact(cls, value: list[str]) -> list[str]:
+        return _normalize_nonempty_strings(value, "error_message_exact", "error message exact matches")
 
 
 class PayloadArchiveConfig(BaseModel):

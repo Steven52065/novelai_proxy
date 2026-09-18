@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from app.api_errors import APIError, AuthError, DataSerializationError, api_error_type
+from app.api_errors import APIError, AuthError, DataSerializationError, api_error_message, api_error_type
 from app.novelai_models import AugmentImageRequest, UpscaleRequest
 from app.upstream import UpstreamClient
 
@@ -359,6 +359,22 @@ def test_upstream_short_non_json_error_body_is_kept_verbatim(monkeypatch):
         asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
 
     assert exc_info.value.message == "upstream exploded"
+
+
+def test_upstream_empty_non_json_error_body_does_not_invent_response_message(monkeypatch):
+    """空 body 时 APIError.message 仍可展示默认文案，但响应 dict 不能写入假 message。"""
+    client, _session = _client_with_response(
+        monkeypatch,
+        FakeResponse(status_code=500, content=b"   ", content_type="text/plain"),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        asyncio.run(client._post_binary("https://image.novelai.net/ai/generate-image", {"input": "1girl"}))
+
+    assert exc_info.value.message == "上游请求失败"
+    assert isinstance(exc_info.value.response, dict)
+    assert "message" not in exc_info.value.response
+    assert api_error_message(exc_info.value) is None
 
 
 @pytest.mark.parametrize(

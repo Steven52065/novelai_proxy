@@ -48,6 +48,12 @@ def test_auto_disable_ignores_disabled_config_and_unmatched_rules():
         UpstreamAutoDisableConfig(enabled=False, status_codes=[403]),
         UpstreamAutoDisableConfig(enabled=True, status_codes=[500]),
         UpstreamAutoDisableConfig(enabled=True, status_codes=[], error_types=["OutOfMemory"]),
+        UpstreamAutoDisableConfig(
+            enabled=True, status_codes=[], error_types=[], error_message_keywords=["subscription"]
+        ),
+        UpstreamAutoDisableConfig(
+            enabled=True, status_codes=[], error_types=[], error_message_exact=["Forbidden!"]
+        ),
     ):
         runtime = FakeRuntime()
         notifications = FakeNotifications()
@@ -95,6 +101,93 @@ def test_auto_disable_matches_status_code_or_error_type():
         assert len(notifications.created) == 1
         assert expected_content in notifications.created[0]["content"]
         assert notifications.created[0]["metadata"]["upstream_id"] == "opus-a"
+
+
+def test_auto_disable_matches_error_message_keyword_or_exact():
+    cases = (
+        (
+            APIError(
+                "Active subscription required",
+                request={},
+                response={"message": "Active subscription required"},
+                code="402",
+            ),
+            UpstreamAutoDisableConfig(
+                status_codes=[], error_types=[], error_message_keywords=["subscription required"]
+            ),
+            "subscription required",
+            "Active subscription required",
+        ),
+        (
+            APIError("Account suspended", request={}, response={"message": "Account suspended"}, code="403"),
+            UpstreamAutoDisableConfig(
+                status_codes=[], error_types=[], error_message_exact=["Account suspended"]
+            ),
+            "Account suspended",
+            "Account suspended",
+        ),
+    )
+
+    for error, config, expected_content, expected_message in cases:
+        runtime = FakeRuntime()
+        notifications = FakeNotifications()
+        service = UpstreamAutoDisableService(
+            config=config,
+            runtime=runtime,
+            notifications=notifications,
+        )
+
+        service.handle_api_error("opus-a", error)
+
+        assert runtime.disabled == ["opus-a"]
+        assert len(notifications.created) == 1
+        assert expected_content in notifications.created[0]["content"]
+        assert notifications.created[0]["metadata"]["upstream_id"] == "opus-a"
+        assert notifications.created[0]["metadata"]["error_message"] == expected_message
+
+
+def test_auto_disable_does_not_match_missing_or_non_exact_error_message():
+    for error, config in (
+        (
+            APIError("上游请求失败", request={}, response={}, code="500"),
+            UpstreamAutoDisableConfig(
+                status_codes=[],
+                error_types=[],
+                error_message_keywords=["上游请求失败"],
+                error_message_exact=["上游请求失败"],
+            ),
+        ),
+        (
+            APIError("上游请求失败", request={}, response={"message": None}, code="500"),
+            UpstreamAutoDisableConfig(
+                status_codes=[], error_types=[], error_message_exact=["上游请求失败"]
+            ),
+        ),
+        (
+            APIError("Account suspended!", request={}, response={"message": "Account suspended!"}, code="403"),
+            UpstreamAutoDisableConfig(
+                status_codes=[], error_types=[], error_message_exact=["Account suspended"]
+            ),
+        ),
+        (
+            APIError("Subscription required", request={}, response={"message": "Subscription required"}, code="402"),
+            UpstreamAutoDisableConfig(
+                status_codes=[], error_types=[], error_message_keywords=["subscription required"]
+            ),
+        ),
+    ):
+        runtime = FakeRuntime()
+        notifications = FakeNotifications()
+        service = UpstreamAutoDisableService(
+            config=config,
+            runtime=runtime,
+            notifications=notifications,
+        )
+
+        service.handle_api_error("opus-a", error)
+
+        assert runtime.disabled == []
+        assert notifications.created == []
 
 
 @pytest.mark.parametrize(
@@ -174,6 +267,87 @@ def test_upstream_status_and_error_type_disable_rules_are_independent(
         for notification in notifications:
             assert notification.metadata["status_code"] == http_status
             assert notification.metadata["error_type"] == expected_error_type
+
+        generated = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
+        assert generated.status_code == (503 if should_disable else 201)
+
+
+@pytest.mark.parametrize(
+    ("json_body", "auto_disable_yaml", "should_disable", "expected_content"),
+    [
+        pytest.param(
+            {"message": "Active subscription required"},
+            "  status_codes: []\n  error_types: []\n  error_message_keywords:\n    - subscription required\n",
+            True,
+            "subscription required",
+            id="keyword-match",
+        ),
+        pytest.param(
+            {"message": "Account suspended"},
+            "  status_codes: []\n  error_types: []\n  error_message_exact:\n    - Account suspended\n",
+            True,
+            "Account suspended",
+            id="exact-match",
+        ),
+        pytest.param(
+            {"message": None},
+            "  status_codes: []\n  error_types: []\n  error_message_keywords:\n    - 上游请求失败\n  error_message_exact:\n    - 上游请求失败\n",
+            False,
+            None,
+            id="missing-message-does-not-use-default",
+        ),
+        pytest.param(
+            {},
+            "  status_codes: []\n  error_types: []\n  error_message_exact:\n    - 上游请求失败\n",
+            False,
+            None,
+            id="absent-message-key-does-not-use-default",
+        ),
+    ],
+)
+def test_upstream_error_message_disable_rules_use_upstream_text(
+    tmp_path: Path, monkeypatch, json_body, auto_disable_yaml, should_disable, expected_content
+):
+    config_path = write_test_config_with_upstreams(tmp_path, ["opus-a", "opus-b"])
+    with config_path.open("a", encoding="utf-8") as config_file:
+        config_file.write(f"\nupstream_auto_disable:\n{auto_disable_yaml}")
+    monkeypatch.setenv("NOVELAI_PROXY_CONFIG", str(config_path))
+    from app.main import app
+
+    response = SimpleNamespace(
+        status_code=500,
+        content=b"",
+        json=lambda: json_body,
+    )
+
+    class MessageErrorUpstream(FakeUpstream):
+        async def generate_image_payload_zip(self, payload):
+            if not isinstance(payload.get("input"), str):
+                _raise_response_error(response, payload)
+            return await super().generate_image_payload_zip(payload)
+
+    with TestClient(app) as client:
+        upstream = MessageErrorUpstream()
+        app.state.upstream = upstream
+        app.state.upstream_clients["opus-b"] = upstream
+        user = client.post(
+            "/admin/api/users",
+            auth=("admin", "admin123"),
+            json={"name": "message-rule-user", "tier": "normal", "anlas_total": 100},
+        ).json()
+        headers = {"Authorization": f"Bearer {user['api_key']}"}
+        invalid_payload = PAYLOAD | {"input": 123}
+
+        for _ in range(2):
+            failed = client.post("/ai/generate-image", headers=headers, json=invalid_payload)
+            assert failed.status_code == 500
+        expected_enabled = 0 if should_disable else 2
+        assert len(app.state.upstream_clients) == expected_enabled
+        notifications = app.state.admin_notifications.pending()
+        assert len(notifications) == (2 if should_disable else 0)
+        if should_disable:
+            assert expected_content in notifications[0].content
+            assert notifications[0].metadata["error_message"] == json_body["message"]
 
         generated = client.post("/ai/generate-image", headers=headers, json=PAYLOAD)
         assert generated.status_code == (503 if should_disable else 201)

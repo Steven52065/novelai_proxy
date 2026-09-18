@@ -8,6 +8,7 @@ from app.api_errors import (
     ConcurrentGenerationError,
     DataSerializationError,
     NovelAIProxyError,
+    api_error_message,
     api_error_status_code,
     api_error_type,
     as_error_text,
@@ -73,3 +74,15 @@ def test_api_error_type_matches_admin_probe_display_fields():
     assert api_error_type(APIError("failed", {}, {"errorType": "GpuError"}, "500")) == "GpuError"
     assert api_error_type(APIError("failed", {}, {"name": "AccountSuspended"}, "403")) == "AccountSuspended"
     assert api_error_type(APIError("failed", {}, {}, "500")) == "APIError"
+
+
+def test_api_error_message_reads_upstream_response_without_defaulting():
+    """自动禁用匹配必须读上游原文；缺消息不能回退到「上游请求失败」。"""
+    assert api_error_message(APIError("failed", {}, {"message": "bad token"}, "401")) == "bad token"
+    assert api_error_message(APIError("上游请求失败", {}, {"message": "  padded  "}, "500")) == "padded"
+    assert api_error_message(APIError("上游请求失败", {}, {"message": {"nested": 1}}, "500")) == "{'nested': 1}"
+    assert api_error_message(APIError("上游请求失败", {}, {"message": None}, "500")) is None
+    assert api_error_message(APIError("上游请求失败", {}, {"message": ""}, "500")) is None
+    assert api_error_message(APIError("上游请求失败", {}, {"message": "   "}, "500")) is None
+    assert api_error_message(APIError("上游请求失败", {}, {}, "500")) is None
+    assert api_error_message(APIError("上游请求失败", {}, "not-a-dict", "500")) is None

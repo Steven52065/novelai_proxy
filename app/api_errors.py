@@ -87,6 +87,19 @@ def api_error_type(exc: APIError) -> str:
     return exc.__class__.__name__
 
 
+def api_error_message(exc: APIError) -> str | None:
+    """读取上游错误消息原文；缺失、null 或空白时返回 None，不填默认值。
+
+    渠道测试页展示用 APIError.message（缺消息会落成「上游请求失败」），
+    自动禁用匹配必须避开这个默认值，否则配置了该文案会把无消息的失败也禁掉。
+    """
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict) or "message" not in response:
+        return None
+    message = as_error_text(response.get("message"))
+    return message or None
+
+
 def api_error_status_code(exc: APIError) -> int:
     if isinstance(exc, DataSerializationError):
         return 502
